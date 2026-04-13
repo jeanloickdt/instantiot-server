@@ -1,0 +1,47 @@
+package com.jeanloickdt.auth
+
+import com.auth0.jwt.JWT
+import com.auth0.jwt.algorithms.Algorithm
+import com.auth0.jwt.interfaces.JWTVerifier
+import java.io.File
+import java.util.Date
+import java.util.UUID
+
+object JwtConfig {
+
+    private const val EXPIRY_MS = 30L * 24 * 60 * 60 * 1000
+
+    val secret: String by lazy {
+        val configFile = File("${System.getProperty("user.home")}/.instantiot/secret.key")
+        if (configFile.exists()) {
+            configFile.readText().trim()
+        } else {
+            val generated = UUID.randomUUID().toString() + UUID.randomUUID().toString()
+            configFile.parentFile.mkdirs()
+            configFile.writeText(generated)
+            generated
+        }
+    }
+
+    private lateinit var issuer: String
+    private lateinit var audience: String
+
+    fun init(issuer: String, audience: String) {
+        this.issuer   = issuer
+        this.audience = audience
+    }
+
+    val verifier: JWTVerifier
+        get() = JWT
+            .require(Algorithm.HMAC256(secret))
+            .withIssuer(issuer)
+            .withAudience(audience)
+            .build()
+
+    fun generateToken(userId: String): String = JWT.create()
+        .withSubject(userId)
+        .withIssuer(issuer)
+        .withAudience(audience)
+        .withExpiresAt(Date(System.currentTimeMillis() + EXPIRY_MS))
+        .sign(Algorithm.HMAC256(secret))
+}
