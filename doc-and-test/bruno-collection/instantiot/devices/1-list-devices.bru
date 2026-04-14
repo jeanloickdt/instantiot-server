@@ -1,0 +1,15 @@
+meta {
+  name: 1. List Devices
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/devices
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

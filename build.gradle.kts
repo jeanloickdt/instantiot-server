@@ -8,7 +8,7 @@ group = "com.jeanloickdt"
 version = "0.0.1"
 
 application {
-    mainClass = "io.ktor.server.netty.EngineMain"
+    mainClass = "com.jeanloickdt.ApplicationKt"
 }
 
 ktor{

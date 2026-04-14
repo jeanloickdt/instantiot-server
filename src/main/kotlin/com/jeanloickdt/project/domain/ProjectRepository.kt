@@ -20,4 +20,7 @@ interface ProjectRepository {
 
     // Supprimer un projet
     fun delete(id: String): Boolean
+
+    // Nombre total de projets
+    fun count(): Long
 }

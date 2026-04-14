@@ -5,5 +5,6 @@ data class UserRow(
     val username: String,
     val pwdHash: String,
     val role: String,
+    val passwordChanged: Boolean,
     val createdAt: Long
 )

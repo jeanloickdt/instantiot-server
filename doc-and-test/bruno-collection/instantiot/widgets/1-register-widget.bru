@@ -1,0 +1,28 @@
+meta {
+  name: 1. Register Widget
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/projects/{{projectId}}/widgets
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "id": "widget-temp-001",
+    "type": "display"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("widgetId", res.body.id);
+  }
+}

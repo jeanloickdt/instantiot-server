@@ -88,6 +88,15 @@ class SqliteProjectRepository : ProjectRepository {
     }
 
     // ============================================================
+    // Nombre total de projets
+    // ============================================================
+    override fun count(): Long {
+        return transaction {
+            ProjectTable.selectAll().count()
+        }
+    }
+
+    // ============================================================
     // Mapper ResultRow → ProjectRow
     // ============================================================
     private fun ResultRow.toProjectRow() = ProjectRow(

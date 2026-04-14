@@ -1,0 +1,21 @@
+meta {
+  name: 4. Renew Token
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/renew-token
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("deviceToken", res.body.token);
+  }
+}

@@ -32,6 +32,7 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
 import io.ktor.server.http.content.*
+import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
@@ -47,7 +48,47 @@ import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
-fun main(args: Array<String>) = EngineMain.main(args)
+fun main(args: Array<String>) {
+    val startupLogger = LoggerFactory.getLogger("InstantIoT")
+
+    // charger la config AVANT de démarrer le serveur
+    com.jeanloickdt.common.ServerConfig.load()
+
+    val httpPort = com.jeanloickdt.common.ServerConfig.httpPort
+    val tcpPort = com.jeanloickdt.common.ServerConfig.tcpPort
+
+    startupLogger.info("Starting InstantIoT Server v${com.jeanloickdt.common.ServerConfig.version}")
+    startupLogger.info("HTTP port: $httpPort | TCP port: $tcpPort")
+
+    try {
+        embeddedServer(
+            Netty,
+            port = httpPort,
+            module = Application::module
+        ).start(wait = true)
+    } catch (e: Exception) {
+        when {
+            e.message?.contains("Address already in use") == true ||
+            e.cause?.message?.contains("Address already in use") == true -> {
+                startupLogger.error("========================================")
+                startupLogger.error("FAILED TO START — Port $httpPort is already in use")
+                startupLogger.error("")
+                startupLogger.error("To fix, edit the port in:")
+                startupLogger.error("  ~/.instantiot/server.properties")
+                startupLogger.error("")
+                startupLogger.error("  http.port=8081    (or any free port)")
+                startupLogger.error("  tcp.port=$tcpPort")
+                startupLogger.error("")
+                startupLogger.error("Then restart the server.")
+                startupLogger.error("========================================")
+            }
+            else -> {
+                startupLogger.error("FAILED TO START", e)
+            }
+        }
+        System.exit(1)
+    }
+}
 
 // ============================================================
 // Dépendances globales — instanciées une seule fois au démarrage
@@ -72,6 +113,7 @@ fun Application.module() {
             call.respondText("500: Internal Server Error", status = HttpStatusCode.InternalServerError)
         }
     }
+
     install(CORS) {
         anyHost()  // permissif pour la beta — le client restreint via reverse proxy
         allowHeader(HttpHeaders.ContentType)
@@ -79,6 +121,7 @@ fun Application.module() {
         allowMethod(HttpMethod.Patch)
         allowMethod(HttpMethod.Delete)
     }
+
     install(RateLimit) {
         register(RateLimitName("auth")) {
             rateLimiter(limit = 10, refillPeriod = 1.minutes)
@@ -135,7 +178,7 @@ fun Application.module() {
     // Relay devices — TCP port 9001
     // Chaque connexion ESP dans sa propre coroutine IO
     // ============================================================
-    startDeviceRelay(deviceRepository, widgetRepository, tcpPort = 9001)
+    startDeviceRelay(deviceRepository, widgetRepository, tcpPort = com.jeanloickdt.common.ServerConfig.tcpPort)
 
     // ============================================================
     // Flush history buffer → SQLite WAL batch toutes les 5s
@@ -177,7 +220,7 @@ fun Application.module() {
             ))
         }
 
-        authRoutes(userRepository)
+        authRoutes(userRepository, projectRepository, deviceRepository)
         projectRoutes(projectRepository, deviceRepository, widgetRepository, widgetHistoryRepository)
         deviceRoutes(deviceRepository)
         widgetRoutes(widgetRepository, widgetHistoryRepository)

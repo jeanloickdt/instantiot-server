@@ -46,6 +46,12 @@ class SqliteDeviceRepository : DeviceRepository {
         }
     }
 
+    override fun findAll(): List<DeviceRow> {
+        return transaction {
+            DeviceTable.selectAll().map { it.toDeviceRow() }
+        }
+    }
+
     override fun findAllByOwner(ownerId: String): List<DeviceRow> {
         return transaction {
             DeviceTable
@@ -97,6 +103,18 @@ class SqliteDeviceRepository : DeviceRepository {
             DeviceTable.update({ DeviceTable.id eq id }) {
                 it[DeviceTable.tokenHash] = newTokenHash
             }
+        }
+    }
+
+    override fun count(): Long {
+        return transaction {
+            DeviceTable.selectAll().count()
+        }
+    }
+
+    override fun countOnline(): Long {
+        return transaction {
+            DeviceTable.selectAll().where { DeviceTable.isOnline eq true }.count()
         }
     }
 

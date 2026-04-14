@@ -1,0 +1,27 @@
+meta {
+  name: 2. Create Project
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/projects
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Mon Projet IoT"
+  }
+}
+
+script:post-response {
+  if (res.status === 201) {
+    bru.setVar("projectId", res.body.id);
+  }
+}

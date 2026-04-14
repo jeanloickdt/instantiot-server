@@ -46,6 +46,7 @@ class SqliteUserRepository : UserRepository {
         transaction {
             UserTable.update({ UserTable.id eq id }) {
                 it[pwdHash] = newHash
+                it[passwordChanged] = true
             }
         }
     }
@@ -57,10 +58,11 @@ class SqliteUserRepository : UserRepository {
     }
 
     private fun ResultRow.toUserRow() = UserRow(
-        id        = this[UserTable.id],
-        username  = this[UserTable.username],
-        pwdHash   = this[UserTable.pwdHash],
-        role      = this[UserTable.role],
-        createdAt = this[UserTable.createdAt]
+        id              = this[UserTable.id],
+        username        = this[UserTable.username],
+        pwdHash         = this[UserTable.pwdHash],
+        role            = this[UserTable.role],
+        passwordChanged = this[UserTable.passwordChanged],
+        createdAt       = this[UserTable.createdAt]
     )
 }

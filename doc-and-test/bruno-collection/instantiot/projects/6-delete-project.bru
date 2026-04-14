@@ -1,0 +1,15 @@
+meta {
+  name: 6. Delete Project
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/api/projects/{{projectId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

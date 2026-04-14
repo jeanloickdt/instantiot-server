@@ -1,7 +1,249 @@
-<html>
- <head>
- </head>
- <body>
-   <h1>Hello Ktor!</h1>
- </body>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>InstantIoT Server — Admin</title>
+<link rel="stylesheet" href="style.css">
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script src="i18n.js"></script>
+</head>
+<body x-data="app" x-init="init()" x-cloak>
+
+<!-- ============================================================ -->
+<!-- LOGIN                                                        -->
+<!-- ============================================================ -->
+<div class="view view-center" x-show="view === 'login'">
+  <div class="card login-card">
+    <div class="logo">InstantIoT</div>
+    <p class="subtitle" x-text="t('login.subtitle')"></p>
+    <form @submit.prevent="login()">
+      <input type="text" x-model="loginForm.username" :placeholder="t('login.username')" autocomplete="username" required>
+      <input type="password" x-model="loginForm.password" :placeholder="t('login.password')" autocomplete="current-password" required>
+      <button type="submit" x-text="t('login.submit')"></button>
+      <p class="error" x-text="loginForm.error"></p>
+    </form>
+    <div class="lang-switch">
+      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- CHANGE PASSWORD                                              -->
+<!-- ============================================================ -->
+<div class="view view-center" x-show="view === 'setup'">
+  <div class="card login-card">
+    <div class="logo">InstantIoT</div>
+    <p class="subtitle" x-text="t('setup.subtitle')"></p>
+    <form @submit.prevent="changePassword()">
+      <input type="password" x-model="setupForm.current" :placeholder="t('setup.current')" required>
+      <input type="password" x-model="setupForm.newPwd" :placeholder="t('setup.new')" required>
+      <input type="password" x-model="setupForm.confirm" :placeholder="t('setup.confirm')" required>
+      <button type="submit" x-text="t('setup.submit')"></button>
+      <p class="error" x-text="setupForm.error"></p>
+    </form>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DASHBOARD                                                    -->
+<!-- ============================================================ -->
+<div class="view" x-show="view === 'dashboard'">
+  <template x-ref="navDashboard">
+    <nav>
+      <div class="nav-left">
+        <span class="nav-logo">InstantIoT</span>
+        <a href="#" class="nav-link active" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
+        <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+      </div>
+      <div class="nav-right">
+        <span class="nav-user">admin</span>
+        <div class="lang-switch-nav">
+          <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+          <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+        </div>
+        <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
+        <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
+      </div>
+    </nav>
+  </template>
+
+  <nav>
+    <div class="nav-left">
+      <span class="nav-logo">InstantIoT</span>
+      <a href="#" class="nav-link active" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
+      <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+    </div>
+    <div class="nav-right">
+      <span class="nav-user">admin</span>
+      <div class="lang-switch-nav">
+        <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+        <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+      </div>
+      <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
+      <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h1 x-text="t('dashboard.title')"></h1>
+
+    <div class="dashboard-grid">
+      <div class="col-main">
+
+        <!-- STATS -->
+        <div class="section">
+          <h2 class="section-title" x-text="t('dashboard.serverStatus')"></h2>
+          <div class="stats-grid">
+            <div class="stat-card"><div class="stat-value" x-text="stats.users"></div><div class="stat-label" x-text="t('stats.accounts')"></div></div>
+            <div class="stat-card"><div class="stat-value" x-text="stats.projects"></div><div class="stat-label" x-text="t('stats.projects')"></div></div>
+            <div class="stat-card"><div class="stat-value" x-text="stats.devicesTotal"></div><div class="stat-label" x-text="t('stats.devices')"></div></div>
+            <div class="stat-card accent"><div class="stat-value" x-text="stats.devicesOnline"></div><div class="stat-label" x-text="t('stats.online')"></div></div>
+            <div class="stat-card"><div class="stat-value" x-text="stats.appSessionsActive"></div><div class="stat-label" x-text="t('stats.appSessions')"></div></div>
+            <div class="stat-card"><div class="stat-value" x-text="stats.deviceSessionsActive"></div><div class="stat-label" x-text="t('stats.tcpConnections')"></div></div>
+          </div>
+        </div>
+
+        <!-- CONFIG PORTS -->
+        <div class="section">
+          <h2 class="section-title" x-text="t('config.title')"></h2>
+          <form class="config-form" @submit.prevent="saveConfig()">
+            <div class="config-row">
+              <label x-text="t('config.httpPort')"></label>
+              <input type="number" x-model.number="configForm.httpPort" min="1" max="65535" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('config.tcpPort')"></label>
+              <input type="number" x-model.number="configForm.tcpPort" min="1" max="65535" required>
+            </div>
+            <div class="config-actions">
+              <button type="submit" x-text="t('config.save')"></button>
+              <button type="button" class="btn-restart" @click="restartServer()" x-text="t('config.restart')"></button>
+              <p class="config-msg" :class="configForm.msgType" x-text="configForm.msg"></p>
+            </div>
+          </form>
+          <p class="config-note" x-text="t('config.restartNote')"></p>
+        </div>
+
+      </div>
+
+      <div class="col-side">
+
+        <!-- SERVER INFO -->
+        <div class="section">
+          <h2 class="section-title" x-text="t('info.title')"></h2>
+          <div class="info-list">
+            <div class="info-item">
+              <span class="info-label" x-text="t('info.localIp')"></span>
+              <span class="info-value" x-text="serverInfo.localIp" x-ref="ipValue"></span>
+              <button class="copy-btn" @click="copyText(serverInfo.localIp, $el)">&#128203;</button>
+            </div>
+            <div class="info-item">
+              <span class="info-label">HTTP</span>
+              <span class="info-value" x-text="serverInfo.httpPort"></span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">TCP</span>
+              <span class="info-value" x-text="serverInfo.tcpPort"></span>
+            </div>
+            <div class="info-item">
+              <span class="info-label" x-text="t('info.uptime')"></span>
+              <span class="info-value" x-text="formatUptime(serverInfo.uptimeMs)"></span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Version</span>
+              <span class="info-value" x-text="'v' + serverInfo.version"></span>
+            </div>
+            <div class="info-item">
+              <span class="info-label" x-text="t('info.database')"></span>
+              <span class="info-value" x-text="formatBytes(serverInfo.dbSizeBytes)"></span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">Java</span>
+              <span class="info-value" x-text="serverInfo.javaVersion"></span>
+            </div>
+            <div class="info-item">
+              <span class="info-label">OS</span>
+              <span class="info-value" x-text="serverInfo.osName"></span>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <p class="refresh-info" x-text="t('dashboard.autoRefresh')"></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- DEVICES                                                      -->
+<!-- ============================================================ -->
+<div class="view" x-show="view === 'devices'">
+  <nav>
+    <div class="nav-left">
+      <span class="nav-logo">InstantIoT</span>
+      <a href="#" class="nav-link" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
+      <a href="#" class="nav-link active" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+    </div>
+    <div class="nav-right">
+      <span class="nav-user">admin</span>
+      <div class="lang-switch-nav">
+        <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+        <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+      </div>
+      <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
+      <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h1 x-text="t('devices.title')"></h1>
+
+    <template x-if="devices.length > 0">
+      <table>
+        <thead><tr>
+          <th x-text="t('devices.name')"></th>
+          <th x-text="t('devices.projectId')"></th>
+          <th x-text="t('devices.status')"></th>
+          <th x-text="t('devices.lastSeen')"></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="d in devices" :key="d.id">
+            <tr>
+              <td x-text="d.name"></td>
+              <td><code x-text="d.projectId.substring(0, 8) + '...'"></code></td>
+              <td>
+                <span x-show="d.isOnline" class="badge-online" x-text="t('devices.online')"></span>
+                <span x-show="!d.isOnline" class="badge-offline" x-text="t('devices.offline')"></span>
+              </td>
+              <td x-text="formatDate(d.lastSeen)"></td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </template>
+
+    <p class="empty-msg" x-show="devices.length === 0" x-text="t('devices.empty')"></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- RESTART CONFIRM MODAL                                        -->
+<!-- ============================================================ -->
+<div class="modal-overlay" x-show="showRestartModal" x-transition.opacity @click.self="showRestartModal = false">
+  <div class="modal-card">
+    <h3 x-text="t('restart.title')"></h3>
+    <p x-text="t('restart.message')"></p>
+    <div class="modal-actions">
+      <button class="btn-cancel" @click="showRestartModal = false" x-text="t('restart.cancel')"></button>
+      <button class="btn-danger" @click="confirmRestart()" x-text="t('restart.confirm')"></button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
 </html>

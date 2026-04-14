@@ -5,16 +5,20 @@ import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
 
-fun Application.configureAuth(userRepository: UserRepository) {
-    val jwtAudience = environment.config.property("jwt.audience").getString()
-    val jwtIssuer   = environment.config.property("jwt.issuer").getString()
-    val jwtRealm    = environment.config.property("jwt.realm").getString()
+// ============================================================
+// JWT config — valeurs fixes, pas besoin de YAML
+// ============================================================
+private const val JWT_ISSUER   = "instantiot-server"
+private const val JWT_AUDIENCE = "instantiot-app"
+private const val JWT_REALM    = "instantiot"
 
-    JwtConfig.init(jwtIssuer, jwtAudience)
+fun Application.configureAuth(userRepository: UserRepository) {
+
+    JwtConfig.init(JWT_ISSUER, JWT_AUDIENCE)
 
     authentication {
         jwt("jwt") {
-            realm = jwtRealm
+            realm = JWT_REALM
             verifier(JwtConfig.verifier)
             validate { credential ->
                 val userId = credential.payload.subject ?: return@validate null
