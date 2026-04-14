@@ -11,6 +11,7 @@ interface DeviceRepository {
     fun updateOnlineStatus(id: String, isOnline: Boolean)
     fun updateLastSeen(id: String, timestamp: Long)
     fun delete(id: String): Boolean
+    fun deleteAllByProject(projectId: String)
     fun renewToken(id: String, newTokenHash: String)
 
 }

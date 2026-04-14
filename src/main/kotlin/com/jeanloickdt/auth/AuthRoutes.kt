@@ -1,6 +1,7 @@
 package com.jeanloickdt.auth
 
 import com.jeanloickdt.auth.domain.AuthResponse
+import com.jeanloickdt.auth.LicenceValidator
 import com.jeanloickdt.auth.domain.LoginRequest
 import com.jeanloickdt.auth.domain.RegisterRequest
 import com.jeanloickdt.auth.domain.UserRepository
@@ -44,6 +45,12 @@ fun Route.loginRoute(userRepository: UserRepository) {
 // ============================================================
 fun Route.registerRoute(userRepository: UserRepository) {
     post("/api/register") {
+        // licence requise pour créer un compte
+        if (!LicenceValidator.isActivated()) {
+            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Licence required"))
+            return@post
+        }
+
         val body = call.receive<RegisterRequest>()
 
         // validation username — 3-32 caractères alphanumériques + underscore

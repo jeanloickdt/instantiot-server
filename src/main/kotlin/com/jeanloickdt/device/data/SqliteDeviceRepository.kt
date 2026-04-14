@@ -86,6 +86,12 @@ class SqliteDeviceRepository : DeviceRepository {
         }
     }
 
+    override fun deleteAllByProject(projectId: String) {
+        transaction {
+            DeviceTable.deleteWhere { DeviceTable.projectId eq projectId }
+        }
+    }
+
     override fun renewToken(id: String, newTokenHash: String) {
         transaction {
             DeviceTable.update({ DeviceTable.id eq id }) {

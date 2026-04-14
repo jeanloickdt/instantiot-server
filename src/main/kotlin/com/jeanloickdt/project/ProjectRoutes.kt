@@ -1,11 +1,14 @@
 // project/ProjectRoutes.kt
 package com.jeanloickdt.project
 
+import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.project.domain.CreateProjectRequest
 import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.domain.ProjectResponse
 import com.jeanloickdt.project.domain.UpdateProjectLayoutRequest
 import com.jeanloickdt.project.domain.UpdateProjectNameRequest
+import com.jeanloickdt.widget.domain.WidgetHistoryRepository
+import com.jeanloickdt.widget.domain.WidgetRepository
 import io.ktor.http.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
@@ -13,7 +16,12 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 
-fun Route.projectRoutes(projectRepository: ProjectRepository) {
+fun Route.projectRoutes(
+    projectRepository: ProjectRepository,
+    deviceRepository: DeviceRepository,
+    widgetRepository: WidgetRepository,
+    widgetHistoryRepository: WidgetHistoryRepository
+) {
 
     authenticate("jwt") {
 
@@ -158,7 +166,12 @@ fun Route.projectRoutes(projectRepository: ProjectRepository) {
                 return@delete
             }
 
+            // cascade delete — ordre : history → widgets → devices → projet
+            widgetHistoryRepository.deleteAllByProject(projectId)
+            widgetRepository.deleteAllByProject(projectId)
+            deviceRepository.deleteAllByProject(projectId)
             projectRepository.delete(projectId)
+
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Project deleted",
                 "id"      to projectId

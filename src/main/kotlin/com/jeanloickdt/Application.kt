@@ -34,6 +34,7 @@ import io.ktor.server.application.*
 import io.ktor.server.http.content.*
 import io.ktor.server.netty.*
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.plugins.ratelimit.*
 import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.response.*
@@ -70,6 +71,13 @@ fun Application.module() {
             logger.error("Unhandled exception on ${call.request.local.uri}", cause)
             call.respondText("500: Internal Server Error", status = HttpStatusCode.InternalServerError)
         }
+    }
+    install(CORS) {
+        anyHost()  // permissif pour la beta — le client restreint via reverse proxy
+        allowHeader(HttpHeaders.ContentType)
+        allowHeader(HttpHeaders.Authorization)
+        allowMethod(HttpMethod.Patch)
+        allowMethod(HttpMethod.Delete)
     }
     install(RateLimit) {
         register(RateLimitName("auth")) {
@@ -170,7 +178,7 @@ fun Application.module() {
         }
 
         authRoutes(userRepository)
-        projectRoutes(projectRepository)
+        projectRoutes(projectRepository, deviceRepository, widgetRepository, widgetHistoryRepository)
         deviceRoutes(deviceRepository)
         widgetRoutes(widgetRepository, widgetHistoryRepository)
 

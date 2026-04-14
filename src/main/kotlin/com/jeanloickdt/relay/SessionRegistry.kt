@@ -6,13 +6,14 @@ import io.ktor.websocket.*
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArrayList
 
 // Type aliases pour clarifier les clés des maps
 typealias UserId   = String
 typealias DeviceId = String
 typealias WidgetId = String
 
-// Session app — une session WebSocket par app connectée
+// Session app — une session WebSocket par connexion app
 data class AppSession(
     val userId: UserId,
     val session: WebSocketSession,
@@ -36,8 +37,8 @@ data class HistoryEntry(
 
 object SessionRegistry {
 
-    // userId → session app WebSocket
-    val appSessions = ConcurrentHashMap<UserId, AppSession>()
+    // userId → liste de sessions app WebSocket (multi-device : téléphone + tablette)
+    val appSessions = ConcurrentHashMap<UserId, CopyOnWriteArrayList<AppSession>>()
 
     // deviceId → session device TCP
     val deviceSessions = ConcurrentHashMap<DeviceId, DeviceSession>()
@@ -48,24 +49,32 @@ object SessionRegistry {
     // buffer history — flush toutes les 5s vers SQLite WAL batch
     val historyBuffer = ConcurrentLinkedQueue<HistoryEntry>()
 
-    // enregistrer une session app
-    fun registerApp(userId: UserId, session: WebSocketSession) {
-        appSessions[userId] = AppSession(userId, session)
+    // enregistrer une session app — supporte plusieurs connexions par user
+    fun registerApp(userId: UserId, session: WebSocketSession): AppSession {
+        val appSession = AppSession(userId, session)
+        appSessions.computeIfAbsent(userId) { CopyOnWriteArrayList() }.add(appSession)
+        return appSession
     }
 
-    // changer le projet actif — quand user ouvre un projet
-    fun setActiveProject(userId: UserId, projectId: String) {
-        appSessions[userId]?.activeProjectId = projectId
+    // changer le projet actif d'une session spécifique
+    fun setActiveProject(appSession: AppSession, projectId: String) {
+        appSession.activeProjectId = projectId
     }
 
-    // retirer une session app — déconnexion
-    fun unregisterApp(userId: UserId) {
-        appSessions.remove(userId)
+    // retirer une session app spécifique — par référence WebSocketSession
+    fun unregisterApp(userId: UserId, session: WebSocketSession) {
+        val sessions = appSessions[userId] ?: return
+        sessions.removeIf { it.session === session }
+        if (sessions.isEmpty()) {
+            appSessions.remove(userId)
+        }
     }
 
-    // toutes les apps qui regardent un projet donné
+    // toutes les apps qui regardent un projet donné — itère toutes les sessions
     fun getAppSessionsForProject(projectId: String): List<AppSession> {
-        return appSessions.values.filter { it.activeProjectId == projectId }
+        return appSessions.values.flatMap { sessions ->
+            sessions.filter { it.activeProjectId == projectId }
+        }
     }
 
     // enregistrer une session device

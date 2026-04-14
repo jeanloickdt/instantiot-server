@@ -34,14 +34,24 @@ object FrameParser {
     // ================================================================
 
     /**
-     * Valide la trame — vérifie sync, version et taille minimale.
-     * Le CRC n'est pas vérifié côté server — TCP garantit l'intégrité au niveau transport.
+     * Valide la trame — vérifie sync, version, taille minimale et CRC8.
+     * Le CRC ajoute une couche de protection applicative en plus de TCP.
      */
     fun isValid(frame: ByteArray): Boolean {
         if (frame.size < MIN_FRAME_SIZE) return false
         if (frame[0].toInt() and 0xFF != SYNC_BYTE) return false
         if (frame[1].toInt() and 0xFF != VERSION_BYTE) return false
-        return true
+
+        // vérifier le CRC8 — calculé sur le body (entre le header fixe et le CRC final)
+        val bodyLength = (frame[2].toInt() and 0xFF) or ((frame[3].toInt() and 0xFF) shl 8)
+        val expectedFrameSize = FIXED_HEADER_SIZE + bodyLength + 1 // +1 pour CRC
+        if (frame.size < expectedFrameSize) return false
+
+        val body = frame.copyOfRange(FIXED_HEADER_SIZE, FIXED_HEADER_SIZE + bodyLength)
+        val computedCrc = computeCrc8(body)
+        val receivedCrc = frame[FIXED_HEADER_SIZE + bodyLength].toInt() and 0xFF
+
+        return computedCrc.toInt() == receivedCrc
     }
 
     // ================================================================

@@ -215,7 +215,7 @@ private suspend fun broadcastToApps(projectId: String, frameBytes: ByteArray) {
             appSession.session.send(Frame.Binary(true, frameBytes))
         } catch (e: Exception) {
             logger.warn("Failed to broadcast to userId=${appSession.userId} — removing session")
-            SessionRegistry.unregisterApp(appSession.userId)
+            SessionRegistry.unregisterApp(appSession.userId, appSession.session)
         }
     }
 }

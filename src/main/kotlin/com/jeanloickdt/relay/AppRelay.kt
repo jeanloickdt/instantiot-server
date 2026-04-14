@@ -67,8 +67,8 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                 }
 
                 // enregistrer la session app avec le projet actif
-                SessionRegistry.registerApp(userId, this)
-                SessionRegistry.setActiveProject(userId, projectId)
+                val appSession = SessionRegistry.registerApp(userId, this)
+                SessionRegistry.setActiveProject(appSession, projectId)
                 logger.info("App connected — userId=$userId projectId=$projectId")
 
                 try {
@@ -90,8 +90,8 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                         }
                     }
                 } finally {
-                    // déconnexion — retirer la session
-                    SessionRegistry.unregisterApp(userId)
+                    // déconnexion — retirer cette session spécifique
+                    SessionRegistry.unregisterApp(userId, this@webSocket)
                     logger.info("App disconnected — userId=$userId")
                 }
             }
