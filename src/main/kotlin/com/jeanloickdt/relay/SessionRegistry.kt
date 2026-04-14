@@ -8,9 +8,9 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 
 // Type aliases pour clarifier les clés des maps
-typealias UserId    = String
-typealias TokenHash = String
-typealias WidgetId  = String
+typealias UserId   = String
+typealias DeviceId = String
+typealias WidgetId = String
 
 // Session app — une session WebSocket par app connectée
 data class AppSession(
@@ -39,8 +39,8 @@ object SessionRegistry {
     // userId → session app WebSocket
     val appSessions = ConcurrentHashMap<UserId, AppSession>()
 
-    // tokenHash → session device TCP
-    val deviceSessions = ConcurrentHashMap<TokenHash, DeviceSession>()
+    // deviceId → session device TCP
+    val deviceSessions = ConcurrentHashMap<DeviceId, DeviceSession>()
 
     // widgetId → dernier payload reçu — accès rapide sans DB
     val lastPayloads = ConcurrentHashMap<WidgetId, String>()
@@ -69,17 +69,17 @@ object SessionRegistry {
     }
 
     // enregistrer une session device
-    fun registerDevice(tokenHash: TokenHash, device: DeviceRow, socket: Socket) {
-        deviceSessions[tokenHash] = DeviceSession(device, socket)
+    fun registerDevice(deviceId: DeviceId, device: DeviceRow, socket: Socket) {
+        deviceSessions[deviceId] = DeviceSession(device, socket)
     }
 
     // retirer une session device — déconnexion
-    fun unregisterDevice(tokenHash: TokenHash) {
-        deviceSessions.remove(tokenHash)
+    fun unregisterDevice(deviceId: DeviceId) {
+        deviceSessions.remove(deviceId)
     }
 
-    // trouver la session d'un device par son token hash
-    fun getDeviceSession(tokenHash: TokenHash): DeviceSession? {
-        return deviceSessions[tokenHash]
+    // trouver la session d'un device par son ID
+    fun getDeviceSession(deviceId: DeviceId): DeviceSession? {
+        return deviceSessions[deviceId]
     }
 }

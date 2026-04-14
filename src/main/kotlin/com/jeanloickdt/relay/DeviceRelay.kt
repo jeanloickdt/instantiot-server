@@ -17,6 +17,9 @@ import java.net.Socket
 
 private val logger = LoggerFactory.getLogger("DeviceRelay")
 
+// Taille max du body d'une trame TCP — protège contre les frames malveillantes
+private const val MAX_FRAME_BODY_SIZE = 1024
+
 /**
  * TCP relay — connexions devices ESP32/ESP8266.
  *
@@ -261,6 +264,9 @@ private fun readFrame(inputStream: InputStream): ByteArray? {
         val lenHigh = inputStream.read()
         if (lenLow == -1 || lenHigh == -1) return null
         val bodyLength = lenLow or (lenHigh shl 8)
+
+        // rejet des frames trop grandes — protection contre les devices malveillants
+        if (bodyLength > MAX_FRAME_BODY_SIZE) return null
 
         // SEQ
         val seqByte = inputStream.read()

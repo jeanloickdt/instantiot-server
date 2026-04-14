@@ -23,6 +23,10 @@ object DatabaseFactory {
 
         transaction {
             SchemaUtils.create(*tables)
+
+            // index pour widget_history — queries rapides par plage de temps
+            exec("CREATE INDEX IF NOT EXISTS idx_history_widget  ON widget_history (widget_id, recorded_at)")
+            exec("CREATE INDEX IF NOT EXISTS idx_history_project ON widget_history (project_id, recorded_at)")
         }
     }
 }

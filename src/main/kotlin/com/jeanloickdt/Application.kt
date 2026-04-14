@@ -34,6 +34,7 @@ import io.ktor.server.application.*
 import io.ktor.server.http.content.*
 import io.ktor.server.netty.*
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.ratelimit.*
 import io.ktor.server.plugins.statuspages.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
@@ -42,6 +43,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 fun main(args: Array<String>) = EngineMain.main(args)
 
@@ -54,6 +57,8 @@ val deviceRepository: DeviceRepository           = SqliteDeviceRepository()
 val widgetRepository: WidgetRepository           = SqliteWidgetRepository()
 val widgetHistoryRepository: WidgetHistoryRepository = SqliteWidgetHistoryRepository()
 
+private val logger = LoggerFactory.getLogger("Application")
+
 fun Application.module() {
 
     // ============================================================
@@ -62,7 +67,16 @@ fun Application.module() {
     install(ContentNegotiation) { json() }
     install(StatusPages) {
         exception<Throwable> { call, cause ->
-            call.respondText("500: $cause", status = HttpStatusCode.InternalServerError)
+            logger.error("Unhandled exception on ${call.request.local.uri}", cause)
+            call.respondText("500: Internal Server Error", status = HttpStatusCode.InternalServerError)
+        }
+    }
+    install(RateLimit) {
+        register(RateLimitName("auth")) {
+            rateLimiter(limit = 10, refillPeriod = 1.minutes)
+            requestKey { call ->
+                call.request.local.remoteAddress
+            }
         }
     }
 
@@ -126,10 +140,19 @@ fun Application.module() {
         }
     }
 
+    // cleanup history > 24h — toutes les heures
+    launch(Dispatchers.IO) {
+        while (true) {
+            delay(1.hours)
+            val cutoff = System.currentTimeMillis() - 24.hours.inWholeMilliseconds
+            widgetHistoryRepository.deleteOlderThan(cutoff)
+        }
+    }
+
     // ============================================================
     // Relay app — WebSocket /ws/app
     // ============================================================
-    configureAppRelay()
+    configureAppRelay(projectRepository)
 
     // ============================================================
     // Routes REST
@@ -156,11 +179,13 @@ fun Application.module() {
 }
 
 // ============================================================
-// Génération password admin — 12 caractères alphanumériques
+// Génération password admin — 16 caractères alphanumériques
+// SecureRandom pour génération cryptographiquement sûre
 // ============================================================
 private fun generateAdminPassword(): String {
     val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    return (1..12).map { chars.random() }.joinToString("")
+    val random = java.security.SecureRandom()
+    return (1..16).map { chars[random.nextInt(chars.length)] }.joinToString("")
 }
 
 // ============================================================

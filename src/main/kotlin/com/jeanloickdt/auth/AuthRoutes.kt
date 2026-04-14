@@ -8,10 +8,18 @@ import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
+import io.ktor.server.plugins.ratelimit.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.mindrot.jbcrypt.BCrypt
+
+// ============================================================
+// Validation — contraintes username et password
+// ============================================================
+private val USERNAME_REGEX = Regex("^[a-zA-Z0-9_]{3,32}$")
+private const val PASSWORD_MIN_LENGTH = 8
+private const val PASSWORD_MAX_LENGTH = 128
 
 // ============================================================
 // 🔓 LOGIN — toujours accessible, même sans licence
@@ -38,6 +46,22 @@ fun Route.registerRoute(userRepository: UserRepository) {
     post("/api/register") {
         val body = call.receive<RegisterRequest>()
 
+        // validation username — 3-32 caractères alphanumériques + underscore
+        if (!USERNAME_REGEX.matches(body.username)) {
+            call.respond(HttpStatusCode.BadRequest, mapOf(
+                "error" to "Username must be 3-32 characters, alphanumeric and underscores only"
+            ))
+            return@post
+        }
+
+        // validation password — 8-128 caractères
+        if (body.password.length < PASSWORD_MIN_LENGTH || body.password.length > PASSWORD_MAX_LENGTH) {
+            call.respond(HttpStatusCode.BadRequest, mapOf(
+                "error" to "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
+            ))
+            return@post
+        }
+
         if (userRepository.findByUsername(body.username) != null) {
             call.respond(HttpStatusCode.Conflict, "Username already exists")
             return@post
@@ -53,9 +77,11 @@ fun Route.registerRoute(userRepository: UserRepository) {
 
 // ============================================================
 // 🔐 AUTH ROUTES COMPLÈTES — login + register
-// Utilisé quand licence valide
+// Rate limited par IP — 10 requêtes / minute
 // ============================================================
 fun Route.authRoutes(userRepository: UserRepository) {
-    loginRoute(userRepository)
-    registerRoute(userRepository)
+    rateLimit(RateLimitName("auth")) {
+        loginRoute(userRepository)
+        registerRoute(userRepository)
+    }
 }

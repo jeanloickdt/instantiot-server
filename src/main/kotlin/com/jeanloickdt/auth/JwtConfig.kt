@@ -4,6 +4,8 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.auth0.jwt.interfaces.JWTVerifier
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.Date
 import java.util.UUID
 
@@ -19,6 +21,15 @@ object JwtConfig {
             val generated = UUID.randomUUID().toString() + UUID.randomUUID().toString()
             configFile.parentFile.mkdirs()
             configFile.writeText(generated)
+            // permissions owner-only — protège contre les autres utilisateurs du système
+            try {
+                Files.setPosixFilePermissions(
+                    configFile.toPath(),
+                    PosixFilePermissions.fromString("rw-------")
+                )
+            } catch (_: UnsupportedOperationException) {
+                // Windows — POSIX permissions non supportées
+            }
             generated
         }
     }
