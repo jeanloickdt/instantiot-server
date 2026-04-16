@@ -57,7 +57,7 @@
 <div class="container">
 
 <h1>InstantIoT Server</h1>
-<p style="color: var(--muted); font-size: 1.1em; margin-bottom: 32px;">Documentation technique v2 — Kotlin / Ktor / SQLite / Alpine.js</p>
+<p style="color: var(--muted); font-size: 1.1em; margin-bottom: 32px;">Documentation technique v3 — Kotlin / Ktor / SQLite / Alpine.js</p>
 
 <div class="toc">
 <strong>Sommaire</strong>
@@ -76,7 +76,9 @@
   <li><a href="#admin">Dashboard admin (frontend)</a></li>
   <li><a href="#security-summary">Recapitulatif securite</a></li>
   <li><a href="#data-models">Data models complets</a></li>
-  <li><a href="#deploy">Deploiement</a></li>
+  <li><a href="#licence">Systeme de licence</a></li>
+  <li><a href="#tray">System tray</a></li>
+  <li><a href="#deploy">Deploiement et packaging</a></li>
   <li><a href="#testing">Tests</a></li>
   <li><a href="#todo">TODO et evolutions</a></li>
 </ol>
@@ -446,6 +448,8 @@ if (resource == null || resource.ownerId != userId) {
 <table>
   <tr><th>Methode</th><th>Path</th><th>Description</th></tr>
   <tr><td><span class="method method-get">GET</span></td><td><code>/api/status</code></td><td><code>{status, setup_required, licence_required}</code></td></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/licence</code></td><td>Etat de la licence courante</td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/licence</code></td><td>Activer une licence (JWT signe)</td></tr>
   <tr><td><span class="method method-get">GET</span></td><td><code>/</code></td><td>Dashboard admin (static files)</td></tr>
 </table>
 
@@ -717,6 +721,7 @@ flushHistoryBuffer()                     &lt;- Zero perte
   <tr><td>CORS</td><td>anyHost (beta), restrict via reverse proxy</td><td><code>Application.kt</code></td></tr>
   <tr><td>Port check</td><td>Verifie disponibilite avant save (bind test)</td><td><code>AuthRoutes.kt</code></td></tr>
   <tr><td>Startup graceful</td><td>Message clair si port occupe, exit(1)</td><td><code>Application.kt</code></td></tr>
+  <tr><td>Licence JWT RS256</td><td>Cle publique embarquee, signature inforgeable sans cle privee, 100% offline</td><td><code>LicenceValidator.kt</code></td></tr>
 </table>
 
 <!-- ============================================================ -->
@@ -742,10 +747,12 @@ UpdateProjectLayoutRequest(layoutJson)
 CreateDeviceRequest(name, projectId)
 RegisterWidgetRequest(id, type)
 UpdateConfigRequest(httpPort?, tcpPort?)
+LicenceRequest(key)
 </code></pre>
 
 <h3>Responses (Serializable)</h3>
 <pre><code>AuthResponse(token, role, passwordChanged)
+LicenceResponse(id, plan, expiresAt)
 StatusResponse(status, setup_required, licence_required)
 ProjectResponse(id, name, layoutJson, createdAt, updatedAt)
 DeviceResponse(id, name, projectId, isOnline, lastSeen)
@@ -807,43 +814,182 @@ WidgetHistoryRepository:
 </code></pre>
 
 <!-- ============================================================ -->
-<!-- 15. DEPLOIEMENT -->
+<!-- 15. SYSTEME DE LICENCE -->
 <!-- ============================================================ -->
-<h2 id="deploy">15. Deploiement</h2>
+<h2 id="licence">15. Systeme de licence</h2>
 
-<h3>Build</h3>
-<pre><code>./gradlew shadowJar
-# -> build/libs/instantiot-server-0.0.1-all.jar</code></pre>
+<h3>Principe</h3>
+<p>Chaque licence est un <strong>JWT signe avec RSA-256</strong>. La cle privee reste chez InstantIoT (pour generer les licences). La cle publique est embarquee dans le JAR (pour verifier). Impossible a forger sans la cle privee.</p>
 
-<h3>Lancement</h3>
-<pre><code>java -jar instantiot-server-0.0.1-all.jar</code></pre>
+<h3>Contenu du JWT licence</h3>
+<pre><code>{
+  "sub": "INST-A7K2-M9X1-P3B8",   // identifiant licence unique
+  "plan": "beta",                   // plan: beta, pro, enterprise
+  "iss": "instantiot.io",           // issuer verifie
+  "iat": 1713150000,                // date de creation
+  "exp": 1798761600                 // date d'expiration
+}</code></pre>
 
-<h3>Premier lancement</h3>
+<h3>Flow</h3>
 <ol>
-  <li>Le serveur cree <code>~/.instantiot/server.properties</code> (ports par defaut)</li>
-  <li>Le serveur cree <code>~/.instantiot/secret.key</code> (JWT secret, chmod 600)</li>
-  <li>La DB SQLite est creee avec toutes les tables + index</li>
-  <li>Un compte <strong>admin</strong> est genere (password affiche une seule fois dans les logs)</li>
-  <li>L'admin ouvre <code>http://localhost:8080</code> -> login -> force changement password</li>
+  <li>Le client achete une licence → recoit un JWT signe par email</li>
+  <li>Premier lancement du serveur → le dashboard affiche "Enter your licence key"</li>
+  <li>Le client colle le JWT → le serveur verifie la signature RSA avec la cle publique</li>
+  <li>Si valide → stocke dans <code>~/.instantiot/licence.key</code></li>
+  <li>Aux prochains demarrages → lit le fichier, re-verifie signature + expiration</li>
+  <li>Si invalide/expire → redemande la licence</li>
 </ol>
+
+<div class="security"><strong>Securite</strong> : aucun appel reseau necessaire. Tout se fait en local. Meme si le client decompile le JAR, il ne peut que lire la cle publique — pas forger de licence. La verification fonctionne 100% offline.</div>
+
+<h3>Fichiers</h3>
+<table>
+  <tr><th>Fichier</th><th>Role</th></tr>
+  <tr><td><code>auth/LicenceValidator.kt</code></td><td>Verification JWT RS256, stockage, cache memoire</td></tr>
+  <tr><td><code>resources/licence-public.pem</code></td><td>Cle publique RSA embarquee dans le JAR</td></tr>
+  <tr><td><code>~/.instantiot/licence.key</code></td><td>JWT licence stocke apres activation</td></tr>
+  <tr><td><code>doc-and-test/generate-licence.py</code></td><td>Script pour generer des licences (cle privee, NE PAS distribuer)</td></tr>
+  <tr><td><code>doc-and-test/licence-keys/</code></td><td>Paire de cles RSA (privee + publique)</td></tr>
+</table>
+
+<h3>Generer une licence</h3>
+<pre><code># Prerequis (une seule fois)
+pip install PyJWT cryptography
+
+# Generer la paire de cles (premiere fois)
+python3 doc-and-test/generate-licence.py --generate-keys
+
+# Generer une licence pour un client
+python3 doc-and-test/generate-licence.py --plan beta --expires 2027-01-01
+
+# Avec ID custom
+python3 doc-and-test/generate-licence.py --plan pro --expires 2027-06-01 --id CLIENT-001</code></pre>
+
+<h3>LicenceValidator — API interne</h3>
+<pre><code>LicenceValidator:
+  load()                        // lire fichier + verifier JWT (appele au demarrage)
+  isActivated(): Boolean        // licence valide et non expiree
+  activate(jwt: String): LicenceInfo?  // verifier + stocker
+  getLicenceInfo(): LicenceInfo?       // pour affichage dashboard
+
+LicenceInfo(id, plan, expiresAt)</code></pre>
+
+<h3>Endpoints</h3>
+<table>
+  <tr><th>Methode</th><th>Path</th><th>Auth</th><th>Description</th></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/licence</code></td><td>Non</td><td>200 + info si licence valide, 404 sinon</td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/licence</code></td><td>Non</td><td>Body: <code>{key: "eyJ..."}</code> → 200 si valide, 400 sinon</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<!-- 16. SYSTEM TRAY -->
+<!-- ============================================================ -->
+<h2 id="tray">16. System tray</h2>
+
+<p><strong>Fichier</strong> : <code>common/SystemTrayManager.kt</code></p>
+
+<p>Icone dans la barre des taches (menu bar macOS, taskbar Windows, systray Linux) avec un menu pour controler le serveur. Utilise <code>java.awt.SystemTray</code> — natif Java, zero dependance.</p>
+
+<h3>Menu</h3>
+<ul>
+  <li><strong>InstantIoT Server v1.0.0</strong> (titre, non cliquable)</li>
+  <li><strong>Running on port 8080</strong> (statut, non cliquable)</li>
+  <li>---</li>
+  <li><strong>Open Admin Panel</strong> → ouvre le navigateur sur http://localhost:port</li>
+  <li>---</li>
+  <li><strong>Restart Server</strong> → arret propre (process manager relance)</li>
+  <li><strong>Quit</strong> → arret definitif</li>
+</ul>
+
+<h3>Icone</h3>
+<p>Generee programmatiquement (16x16 pixels) : carre avec gradient violet→teal (brand InstantIoT) et lettre "I" en blanc. Pas de fichier PNG — evite les problemes de resources dans jpackage.</p>
+
+<h3>Compatibilite</h3>
+<table>
+  <tr><th>Plateforme</th><th>Support</th><th>Comportement</th></tr>
+  <tr><td>macOS</td><td>Oui</td><td>Icone dans la menu bar</td></tr>
+  <tr><td>Windows</td><td>Oui</td><td>Icone dans la taskbar</td></tr>
+  <tr><td>Linux (GNOME, KDE)</td><td>Oui</td><td>Icone dans le systray</td></tr>
+  <tr><td>Serveur headless (VPS, Pi sans ecran)</td><td>Non</td><td>Mode console silencieux — fallback automatique</td></tr>
+</table>
+
+<div class="note"><strong>Fallback</strong> : si <code>SystemTray.isSupported()</code> retourne false (serveur headless), le tray est ignore silencieusement. Le serveur tourne en mode console et l'admin accede via <code>http://ip:port</code> depuis un autre appareil.</div>
+
+<!-- ============================================================ -->
+<!-- 17. DEPLOIEMENT ET PACKAGING -->
+<!-- ============================================================ -->
+<h2 id="deploy">17. Deploiement et packaging</h2>
+
+<h3>jpackage — Installeur natif</h3>
+<p>Le serveur est distribue comme un installeur natif avec JRE embarque. Le client n'a <strong>pas besoin d'installer Java</strong>.</p>
+
+<table>
+  <tr><th>Plateforme</th><th>Format</th><th>Taille</th><th>Installation</th></tr>
+  <tr><td>macOS</td><td><code>.dmg</code></td><td>~86 MB</td><td>Glisser dans Applications, double-clic sur launcher</td></tr>
+  <tr><td>Windows</td><td><code>.msi</code></td><td>~85 MB</td><td>Double-clic, suivant, installer</td></tr>
+  <tr><td>Linux</td><td><code>.deb</code> / <code>.rpm</code></td><td>~80 MB</td><td><code>sudo dpkg -i</code> ou <code>rpm -i</code></td></tr>
+  <tr><td>Raspberry Pi</td><td><code>.deb</code> ARM64</td><td>~80 MB</td><td>Builder sur Pi ou container ARM64</td></tr>
+</table>
+
+<h3>Build script</h3>
+<pre><code># Generer l'installeur pour l'OS courant
+./packaging/build-installer.sh
+
+# macOS — .app seulement (sans DMG, pour tester)
+./packaging/build-installer.sh app
+
+# Output dans build/installer/</code></pre>
+
+<div class="warn"><strong>Cross-compilation impossible</strong> : jpackage genere un installeur pour l'OS sur lequel il tourne. Pour builder Windows → lancer sur Windows. Pour Linux → lancer sur Linux. Le meme script <code>build-installer.sh</code> fonctionne partout.</div>
+
+<h3>Contenu du DMG macOS</h3>
+<ul>
+  <li><code>InstantIoT-Server.app</code> — l'application + JRE embarque</li>
+  <li><code>InstantIoT-Server.command</code> — launcher universel (double-clic)</li>
+  <li><code>Applications</code> — lien symbolique pour drag-to-install</li>
+</ul>
+
+<h3>Launcher universel</h3>
+<p><code>InstantIoT-Server.command</code> — detecte l'OS et lance le bon binaire :</p>
+<ul>
+  <li>macOS : <code>InstantIoT-Server.app/Contents/MacOS/InstantIoT-Server</code></li>
+  <li>Linux : <code>InstantIoT-Server/bin/InstantIoT-Server</code></li>
+  <li>Windows (Git Bash) : <code>InstantIoT-Server.exe</code></li>
+</ul>
+<p>Le client n'a qu'un seul fichier a lancer — le launcher detecte tout.</p>
+
+<h3>Premier lancement (flow client)</h3>
+<ol>
+  <li>Le client installe l'app (DMG/MSI/DEB)</li>
+  <li>Double-clic sur le launcher → Terminal s'ouvre, serveur demarre</li>
+  <li>System tray : icone apparait dans la barre des taches</li>
+  <li>Navigateur s'ouvre automatiquement sur <code>http://localhost:8080</code></li>
+  <li>Page licence → coller le JWT recu par email</li>
+  <li>Page login → username <code>admin</code>, password dans les logs du terminal</li>
+  <li>Page change password → securiser le compte admin</li>
+  <li>Dashboard → le serveur est pret</li>
+</ol>
+
+<h3>Fichiers generes chez le client</h3>
+<table>
+  <tr><th>Fichier</th><th>Contenu</th></tr>
+  <tr><td><code>~/.instantiot/server.properties</code></td><td>Ports HTTP et TCP</td></tr>
+  <tr><td><code>~/.instantiot/secret.key</code></td><td>Secret JWT (chmod 600)</td></tr>
+  <tr><td><code>~/.instantiot/licence.key</code></td><td>JWT licence active</td></tr>
+  <tr><td><code>./instantiot.db</code></td><td>Base SQLite</td></tr>
+</table>
 
 <h3>HTTPS (recommande en production)</h3>
 <pre><code># Exemple Caddy (auto-cert Let's Encrypt)
 instantiot.example.com {
     reverse_proxy localhost:8080
 }</code></pre>
-<div class="warn"><strong>Port TCP 9001</strong> : rester en LAN ou derriere un VPN si acces distant. Les ESP8266 ne supportent pas TLS.</div>
-
-<h3>jpackage (futur)</h3>
-<pre><code>Windows  -> InstantIoT-Server.exe (.msi)
-macOS    -> InstantIoT-Server.app (.dmg)
-Linux    -> .deb / .rpm
-Raspberry Pi -> build ARM64 requis</code></pre>
+<div class="warn"><strong>Port TCP</strong> : rester en LAN ou derriere un VPN si acces distant. Les ESP8266 ne supportent pas TLS.</div>
 
 <!-- ============================================================ -->
 <!-- 16. TESTS -->
 <!-- ============================================================ -->
-<h2 id="testing">16. Tests</h2>
+<h2 id="testing">18. Tests</h2>
 
 <h3>Collection Bruno (REST)</h3>
 <p>Dans <code>doc-and-test/bruno-collection/</code> — 17 requetes couvrant tous les endpoints. Variables auto-propagees (token, projectId, deviceId).</p>
@@ -865,15 +1011,15 @@ python3 test-relay.py   # ou .venv/bin/python3 test-relay.py</code></pre>
 <!-- ============================================================ -->
 <!-- 17. TODO -->
 <!-- ============================================================ -->
-<h2 id="todo">17. TODO et evolutions</h2>
+<h2 id="todo">19. TODO et evolutions</h2>
 
 <table>
   <tr><th>Sujet</th><th>Priorite</th><th>Details</th></tr>
-  <tr><td>System tray</td><td><span class="badge badge-red">V1.5</span></td><td>Icone barre des taches : start/stop, change port sans terminal, notification si port occupe. <code>java.awt.SystemTray</code>.</td></tr>
-  <tr><td>jpackage</td><td><span class="badge badge-red">V1.5</span></td><td>Installer natif .exe/.app/.deb. Double-clic pour lancer. JRE embarque.</td></tr>
-  <tr><td>Licence API</td><td><span class="badge badge-orange">V1</span></td><td>Implementer l'appel a <code>instantiot.io/api/licence/validate</code> dans <code>LicenceValidator.kt</code>. Le guard est en place sur register.</td></tr>
+  <tr><td>Apple Developer Certificate</td><td><span class="badge badge-orange">V1</span></td><td>Signer le .app pour que le double-clic fonctionne sans Gatekeeper (99$/an Apple Developer). Le launcher .command est le workaround actuel.</td></tr>
+  <tr><td>CI/CD multi-plateforme</td><td><span class="badge badge-orange">V1</span></td><td>GitHub Actions pour builder .dmg (macOS) + .msi (Windows) + .deb (Linux) automatiquement a chaque release.</td></tr>
   <tr><td>Tests automatises</td><td><span class="badge badge-orange">V1</span></td><td>Couvrir auth, routes CRUD, relay, FrameParser. Le test existant est casse (config JWT).</td></tr>
   <tr><td>Gestion tokens dans le dashboard</td><td><span class="badge badge-blue">V1.5</span></td><td>Generer, revoquer, copier les tokens device depuis le panel admin.</td></tr>
+  <tr><td>Plans licence (limites)</td><td><span class="badge badge-blue">V1.5</span></td><td>Exploiter le champ <code>plan</code> du JWT pour debloquer des features premium (beta/pro/enterprise).</td></tr>
   <tr><td>Audit log</td><td><span class="badge badge-blue">V2</span></td><td>Logger les connexions, tentatives de login, changements de config.</td></tr>
   <tr><td>Roles et permissions</td><td><span class="badge badge-blue">V2</span></td><td>Le champ <code>role</code> existe ("admin"/"user") mais seul "admin" est verifie. Possibilite de roles custom.</td></tr>
   <tr><td>Monitoring</td><td><span class="badge badge-blue">V2</span></td><td>Endpoint /api/metrics, histogrammes, alertes.</td></tr>
@@ -881,7 +1027,7 @@ python3 test-relay.py   # ou .venv/bin/python3 test-relay.py</code></pre>
 
 <hr>
 <p style="color: var(--muted); text-align: center; margin-top: 40px;">
-  InstantIoT Server v0.0.1 — Documentation technique v2 — 15 avril 2026
+  InstantIoT Server v1.0.0 — Documentation technique v3 — 16 avril 2026
 </p>
 
 </div>
