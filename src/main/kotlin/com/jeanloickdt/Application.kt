@@ -61,6 +61,23 @@ fun main(args: Array<String>) {
     startupLogger.info("HTTP port: $httpPort | TCP port: $tcpPort")
 
     try {
+        // ouvrir le navigateur automatiquement apres le demarrage
+        Thread {
+            Thread.sleep(2000) // attendre que le serveur soit pret
+            try {
+                val url = "http://localhost:$httpPort"
+                val os = System.getProperty("os.name").lowercase()
+                when {
+                    os.contains("mac") -> Runtime.getRuntime().exec(arrayOf("open", url))
+                    os.contains("win") -> Runtime.getRuntime().exec(arrayOf("rundll32", "url.dll,FileProtocolHandler", url))
+                    else -> Runtime.getRuntime().exec(arrayOf("xdg-open", url))
+                }
+                startupLogger.info("Browser opened: $url")
+            } catch (_: Exception) {
+                startupLogger.info("Open http://localhost:$httpPort in your browser")
+            }
+        }.start()
+
         embeddedServer(
             Netty,
             port = httpPort,
