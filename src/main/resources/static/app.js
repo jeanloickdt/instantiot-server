@@ -16,6 +16,7 @@ document.addEventListener('alpine:init', () => {
     showRestartModal: false,
 
     // ── Forms ──────────────────────────────────────────────
+    licenceForm: { key: '', error: '' },
     loginForm: { username: '', password: '', error: '' },
     setupForm: { current: '', newPwd: '', confirm: '', error: '' },
     configForm: { httpPort: 8080, tcpPort: 9001, msg: '', msgType: '' },
@@ -57,11 +58,18 @@ document.addEventListener('alpine:init', () => {
     },
 
     // ── Init ───────────────────────────────────────────────
-    init() {
+    async init() {
       if (this.theme) {
         document.documentElement.setAttribute('data-theme', this.theme);
       }
       document.documentElement.lang = this.lang;
+
+      // verifier la licence d'abord
+      const licenceOk = await this.checkLicence();
+      if (!licenceOk) {
+        this.view = 'licence';
+        return;
+      }
 
       if (this.token && this.role === 'admin') {
         if (!this.passwordChanged) {
@@ -81,6 +89,42 @@ document.addEventListener('alpine:init', () => {
       const res = await fetch(path, { ...options, headers });
       if (res.status === 401) { this.logout(); return null; }
       return res;
+    },
+
+    // ── Licence ─────────────────────────────────────────────
+    async checkLicence() {
+      try {
+        const res = await fetch('/api/licence');
+        return res.ok;
+      } catch (_) {
+        return false;
+      }
+    },
+
+    async activateLicence() {
+      this.licenceForm.error = '';
+      const key = this.licenceForm.key.trim();
+      if (!key) {
+        this.licenceForm.error = this.t('licence.empty');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/licence', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key })
+        });
+
+        if (res.ok) {
+          // licence activee — passer au login
+          this.view = 'login';
+        } else {
+          this.licenceForm.error = this.t('licence.invalid');
+        }
+      } catch (_) {
+        this.licenceForm.error = this.t('licence.error');
+      }
     },
 
     // ── Auth ───────────────────────────────────────────────

@@ -60,6 +60,13 @@ const I18N = {
     'devices.online':      'Online',
     'devices.offline':     'Offline',
 
+    'licence.subtitle':    'Enter your licence key to activate this server',
+    'licence.placeholder': 'Paste your licence key here...',
+    'licence.submit':      'Activate',
+    'licence.empty':       'Please enter a licence key',
+    'licence.invalid':     'Invalid licence key',
+    'licence.error':       'Error activating licence',
+
     'restart.title':       'Restart server?',
     'restart.message':     'The server will shut down. If a process manager (systemd, etc.) is configured, it will restart automatically. Otherwise you will need to start it manually.',
     'restart.confirm':     'Restart now',
@@ -123,6 +130,13 @@ const I18N = {
     'devices.empty':       'Aucun device enregistre sur ce serveur',
     'devices.online':      'En ligne',
     'devices.offline':     'Hors ligne',
+
+    'licence.subtitle':    'Entrez votre cle de licence pour activer ce serveur',
+    'licence.placeholder': 'Collez votre cle de licence ici...',
+    'licence.submit':      'Activer',
+    'licence.empty':       'Veuillez entrer une cle de licence',
+    'licence.invalid':     'Cle de licence invalide',
+    'licence.error':       'Erreur lors de l\'activation',
 
     'restart.title':       'Redemarrer le serveur ?',
     'restart.message':     'Le serveur va s\'arreter. Si un gestionnaire de processus (systemd, etc.) est configure, il redemarrera automatiquement. Sinon vous devrez le relancer manuellement.',

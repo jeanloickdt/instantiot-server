@@ -56,6 +56,18 @@ data class UpdateConfigRequest(
 )
 
 @Serializable
+data class LicenceRequest(
+    val key: String
+)
+
+@Serializable
+data class LicenceResponse(
+    val id: String,
+    val plan: String,
+    val expiresAt: Long
+)
+
+@Serializable
 data class UpdateConfigResponse(
     val message: String,
     val httpPort: Int,

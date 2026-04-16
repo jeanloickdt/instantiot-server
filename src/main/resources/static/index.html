@@ -11,6 +11,26 @@
 <body x-data="app" x-init="init()" x-cloak>
 
 <!-- ============================================================ -->
+<!-- LICENCE                                                      -->
+<!-- ============================================================ -->
+<div class="view view-center" x-show="view === 'licence'">
+  <div class="card login-card">
+    <div class="logo">InstantIoT</div>
+    <p class="subtitle" x-text="t('licence.subtitle')"></p>
+    <form @submit.prevent="activateLicence()">
+      <textarea x-model="licenceForm.key" :placeholder="t('licence.placeholder')" rows="4" required
+        style="width:100%; padding:12px; background:var(--input-bg); border:1px solid var(--border); border-radius:10px; color:var(--text); font-family:monospace; font-size:0.8em; resize:vertical; outline:none;"></textarea>
+      <button type="submit" x-text="t('licence.submit')" style="margin-top:12px;"></button>
+      <p class="error" x-text="licenceForm.error"></p>
+    </form>
+    <div class="lang-switch">
+      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
 <!-- LOGIN                                                        -->
 <!-- ============================================================ -->
 <div class="view view-center" x-show="view === 'login'">
