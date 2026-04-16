@@ -39,3 +39,5 @@ out/
 # InstantIoT — fichiers sensibles
 *.db
 .instantiot/
+doc-and-test/licence-keys/licence-private.pem
+.venv/

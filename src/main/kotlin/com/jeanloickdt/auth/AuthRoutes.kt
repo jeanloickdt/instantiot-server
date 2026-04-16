@@ -318,6 +318,42 @@ fun Route.adminRestartRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
+// 🔑 ADMIN LICENCE — activer une licence JWT signée
+// Pas besoin d'être authentifié — la licence est nécessaire AVANT le login
+// ============================================================
+fun Route.licenceRoute() {
+    // GET — état de la licence courante
+    get("/api/licence") {
+        val info = LicenceValidator.getLicenceInfo()
+        if (info != null && LicenceValidator.isActivated()) {
+            call.respond(HttpStatusCode.OK, LicenceResponse(
+                id        = info.id,
+                plan      = info.plan,
+                expiresAt = info.expiresAt
+            ))
+        } else {
+            call.respond(HttpStatusCode.NotFound, mapOf("error" to "No valid licence"))
+        }
+    }
+
+    // POST — activer une licence
+    post("/api/licence") {
+        val body = call.receive<LicenceRequest>()
+
+        val info = LicenceValidator.activate(body.key)
+        if (info != null) {
+            call.respond(HttpStatusCode.OK, LicenceResponse(
+                id        = info.id,
+                plan      = info.plan,
+                expiresAt = info.expiresAt
+            ))
+        } else {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid licence key"))
+        }
+    }
+}
+
+// ============================================================
 // 🔐 AUTH ROUTES COMPLÈTES — login + register
 // Rate limited par IP — 10 requêtes / minute
 // ============================================================
@@ -326,6 +362,8 @@ fun Route.authRoutes(
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository
 ) {
+    licenceRoute()
+
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)
         registerRoute(userRepository)

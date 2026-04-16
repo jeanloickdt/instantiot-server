@@ -151,6 +151,11 @@ fun Application.module() {
     }
 
     // ============================================================
+    // Licence — charger depuis ~/.instantiot/licence.key
+    // ============================================================
+    LicenceValidator.load()
+
+    // ============================================================
     // Premier lancement — création compte admin automatique
     // Password affiché dans les logs une seule fois
     // ============================================================
