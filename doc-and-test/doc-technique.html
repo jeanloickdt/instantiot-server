@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>InstantIoT Server — Documentation Technique</title>
+<title>InstantIoT Server — Documentation Technique v2</title>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
     --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
     --green: #3fb950; --orange: #d29922; --red: #f85149; --purple: #bc8cff;
+    --brand: #6C63FF; --teal: #4ECDC4;
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; }
@@ -35,18 +36,15 @@
   .badge-red { background: #3a1a1a; color: var(--red); }
   .badge-blue { background: #1a2a3a; color: var(--accent); }
   .badge-purple { background: #2a1a3a; color: var(--purple); }
+  .badge-brand { background: #1a1a3a; color: var(--brand); }
   .note { background: #1a2a3a; border-left: 4px solid var(--accent); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
   .warn { background: #3a2a1a; border-left: 4px solid var(--orange); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
   .security { background: #1a3a2a; border-left: 4px solid var(--green); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
+  .danger { background: #3a1a1a; border-left: 4px solid var(--red); padding: 12px 16px; border-radius: 0 8px 8px 0; margin: 12px 0; }
   .toc { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 20px 24px; margin: 24px 0; }
   .toc ol { counter-reset: toc; list-style: none; padding-left: 0; }
   .toc li { counter-increment: toc; margin: 6px 0; }
   .toc li::before { content: counter(toc) ". "; color: var(--accent); font-weight: 600; }
-  .file-tree { font-family: monospace; font-size: 0.85em; }
-  .file-tree .dir { color: var(--accent); }
-  .file-tree .file { color: var(--muted); }
-  .subtitle { color: var(--muted); font-size: 1.1em; margin-bottom: 32px; }
-  .flow-arrow { color: var(--green); font-weight: bold; }
   .method { font-weight: 600; }
   .method-get { color: var(--green); }
   .method-post { color: var(--orange); }
@@ -59,92 +57,96 @@
 <div class="container">
 
 <h1>InstantIoT Server</h1>
-<p class="subtitle">Documentation technique — Kotlin / Ktor / SQLite</p>
+<p style="color: var(--muted); font-size: 1.1em; margin-bottom: 32px;">Documentation technique v2 — Kotlin / Ktor / SQLite / Alpine.js</p>
 
-<!-- ============================================================ -->
-<!-- TABLE DES MATIERES -->
-<!-- ============================================================ -->
 <div class="toc">
 <strong>Sommaire</strong>
 <ol>
-  <li><a href="#overview">Vue d'ensemble</a></li>
-  <li><a href="#stack">Stack technique &amp; outils</a></li>
+  <li><a href="#overview">Vue d'ensemble et architecture</a></li>
+  <li><a href="#stack">Stack technique et outils</a></li>
   <li><a href="#structure">Structure du projet</a></li>
+  <li><a href="#startup">Demarrage et configuration</a></li>
   <li><a href="#database">Base de donnees</a></li>
-  <li><a href="#auth">Authentification &amp; securite</a></li>
-  <li><a href="#routes">API REST — Routes</a></li>
-  <li><a href="#relay">Relay temps reel — TCP &amp; WebSocket</a></li>
+  <li><a href="#auth">Authentification et securite</a></li>
+  <li><a href="#routes">API REST — Routes completes</a></li>
+  <li><a href="#relay">Relay temps reel — TCP et WebSocket</a></li>
   <li><a href="#protocol">Protocole binaire iWidgets v1</a></li>
-  <li><a href="#sessions">Sessions &amp; concurrence</a></li>
-  <li><a href="#history">History buffer &amp; flush</a></li>
+  <li><a href="#sessions">Sessions et concurrence</a></li>
+  <li><a href="#history">History buffer et flush</a></li>
+  <li><a href="#admin">Dashboard admin (frontend)</a></li>
   <li><a href="#security-summary">Recapitulatif securite</a></li>
-  <li><a href="#config">Configuration</a></li>
+  <li><a href="#data-models">Data models complets</a></li>
   <li><a href="#deploy">Deploiement</a></li>
-  <li><a href="#todo">TODO &amp; evolutions</a></li>
+  <li><a href="#testing">Tests</a></li>
+  <li><a href="#todo">TODO et evolutions</a></li>
 </ol>
 </div>
 
 <!-- ============================================================ -->
 <!-- 1. VUE D'ENSEMBLE -->
 <!-- ============================================================ -->
-<h2 id="overview">1. Vue d'ensemble</h2>
+<h2 id="overview">1. Vue d'ensemble et architecture</h2>
 
-<p>Serveur IoT temps reel qui fait le lien entre des <strong>devices ESP32/ESP8266</strong> (capteurs, actionneurs) et une <strong>app Android</strong>. Le serveur est un <em>dumb relay</em> — il route les trames binaires sans interpreter les payloads.</p>
+<p>Serveur IoT temps reel qui fait le lien entre des <strong>devices ESP32/ESP8266</strong> et une <strong>app Android</strong>. Le serveur est un <em>dumb relay</em> — il route les trames binaires sans interpreter les payloads. Inclut un <strong>dashboard admin web</strong> integre pour la gestion du serveur.</p>
 
 <h3>Architecture</h3>
 <pre><code>
   ESP32/ESP8266                   InstantIoT Server                      App Android
-  ┌──────────┐               ┌──────────────────────┐               ┌──────────┐
-  │          │──TCP:9001────▶│  DeviceRelay          │               │          │
-  │  Device  │               │       │               │               │   App    │
-  │          │◀──TCP:9001────│       ▼               │               │          │
-  │          │               │  SessionRegistry      │               │          │
-  └──────────┘               │       │       ▲       │               └──────────┘
-                             │       │       │       │                    │ ▲
-                             │       ▼       │       │                    │ │
-                             │  SQLite (WAL) │       │                    │ │
-                             │               │       │                    │ │
-                             │         AppRelay ◀────┼──── WS:8080 ──────┘ │
-                             │               │       │                      │
-                             │               └───────┼────── WS:8080 ──────┘
-                             │                       │
-                             │    REST API :8080     │
-                             └──────────────────────┘
+  +-----------+               +----------------------+               +----------+
+  |           |--TCP:9001----&gt;|  DeviceRelay         |               |          |
+  |  Device   |               |       |              |               |   App    |
+  |           |&lt;--TCP:9001----|       v              |               |          |
+  |           |               |  SessionRegistry     |               |          |
+  +-----------+               |       |       ^      |               +----------+
+                              |       |       |      |                    | ^
+                              |       v       |      |                    | |
+                              |  SQLite (WAL) |      |                    | |
+                              |               |      |                    | |
+                              |         AppRelay &lt;---+---- WS:8080 ------+ |
+                              |               |      |                      |
+                              |               +------+------ WS:8080 ------+
+                              |                      |
+                              |  REST API :8080      |
+                              |  Admin Panel :8080   |
+                              +----------------------+
 </code></pre>
 
 <h3>Flux de donnees</h3>
 <ul>
-  <li><strong>Device → App</strong> : ESP envoie trame TCP → serveur extrait widgetId + payload → met a jour RAM + history buffer → broadcast WebSocket aux apps qui regardent ce projet</li>
-  <li><strong>App → Device</strong> : App envoie trame WebSocket → serveur extrait deviceIds cibles → verifie ownership → trim header → relay TCP vers les devices</li>
+  <li><strong>Device -> App</strong> : ESP envoie trame TCP -> serveur extrait widgetId + payload -> RAM + history buffer -> broadcast WebSocket</li>
+  <li><strong>App -> Device</strong> : App envoie trame WebSocket -> serveur verifie ownership -> trim header -> relay TCP vers devices</li>
+  <li><strong>App reconnexion</strong> : Login -> GET layout -> GET states -> WebSocket handshake -> temps reel</li>
 </ul>
 
 <!-- ============================================================ -->
 <!-- 2. STACK TECHNIQUE -->
 <!-- ============================================================ -->
-<h2 id="stack">2. Stack technique &amp; outils</h2>
+<h2 id="stack">2. Stack technique et outils</h2>
 
 <table>
-  <tr><th>Composant</th><th>Technologie</th><th>Pourquoi</th></tr>
-  <tr><td>Langage</td><td>Kotlin 2.3.0 / JVM 22</td><td>Typage fort, coroutines natives, interop Java</td></tr>
-  <tr><td>Framework HTTP</td><td>Ktor 3.4.2 (Netty)</td><td>Leger, non-bloquant, coroutines-first, plugins modulaires</td></tr>
-  <tr><td>Base de donnees</td><td>SQLite 3.47 + WAL</td><td>Zero config, embarque, performant en lecture, ideal self-hosted</td></tr>
-  <tr><td>ORM</td><td>Exposed 0.61</td><td>ORM Kotlin-native, DSL typesafe, leger</td></tr>
-  <tr><td>Auth</td><td>JWT (HMAC256) + BCrypt</td><td>Stateless, standard, pas de session serveur</td></tr>
-  <tr><td>Serialisation</td><td>kotlinx.serialization</td><td>Compile-time, pas de reflection, performant</td></tr>
-  <tr><td>Hashing password</td><td>jBCrypt 0.4</td><td>Standard industrie, salt automatique</td></tr>
-  <tr><td>Logging</td><td>Logback 1.4.14 + SLF4J</td><td>Standard JVM, configurable</td></tr>
-  <tr><td>Build</td><td>Gradle 9.3 + Shadow JAR</td><td>Fat JAR pour deploiement simple</td></tr>
+  <tr><th>Composant</th><th>Technologie</th><th>Version</th><th>Pourquoi</th></tr>
+  <tr><td>Langage</td><td>Kotlin</td><td>2.3.0</td><td>Typage fort, coroutines natives, interop Java</td></tr>
+  <tr><td>JVM</td><td>Java</td><td>22</td><td>LTS, performances, jpackage natif</td></tr>
+  <tr><td>Framework HTTP</td><td>Ktor (Netty)</td><td>3.4.2</td><td>Leger, non-bloquant, coroutines-first</td></tr>
+  <tr><td>Base de donnees</td><td>SQLite + WAL</td><td>3.47.1</td><td>Zero config, embarque, ideal self-hosted</td></tr>
+  <tr><td>ORM</td><td>Exposed</td><td>0.61.0</td><td>Kotlin-native, DSL typesafe</td></tr>
+  <tr><td>Auth</td><td>JWT (HMAC256)</td><td>-</td><td>Stateless, standard</td></tr>
+  <tr><td>Hashing</td><td>jBCrypt</td><td>0.4</td><td>BCrypt avec salt automatique</td></tr>
+  <tr><td>Serialisation</td><td>kotlinx.serialization</td><td>-</td><td>Compile-time, pas de reflection</td></tr>
+  <tr><td>Frontend admin</td><td>Alpine.js</td><td>3.x (CDN)</td><td>14kb, zero build, reactive</td></tr>
+  <tr><td>Logging</td><td>Logback + SLF4J</td><td>1.4.14</td><td>Standard JVM</td></tr>
+  <tr><td>Build</td><td>Gradle + Shadow JAR</td><td>9.3</td><td>Fat JAR pour deploiement simple</td></tr>
 </table>
 
 <h3>Plugins Ktor installes</h3>
 <table>
   <tr><th>Plugin</th><th>Role</th></tr>
-  <tr><td><code>ContentNegotiation</code></td><td>Serialisation/deserialisation JSON automatique</td></tr>
-  <tr><td><code>StatusPages</code></td><td>Gestion d'erreurs centralisee (500 sans stacktrace)</td></tr>
-  <tr><td><code>CORS</code></td><td>Headers cross-origin pour clients web futurs</td></tr>
-  <tr><td><code>RateLimit</code></td><td>Anti brute-force sur login/register (10 req/min/IP)</td></tr>
-  <tr><td><code>Authentication (JWT)</code></td><td>Verification JWT sur toutes les routes protegees</td></tr>
-  <tr><td><code>WebSockets</code></td><td>Relay temps reel app ↔ serveur</td></tr>
+  <tr><td><code>ContentNegotiation</code></td><td>Serialisation JSON automatique</td></tr>
+  <tr><td><code>StatusPages</code></td><td>Gestion d'erreurs (500 sans stacktrace)</td></tr>
+  <tr><td><code>CORS</code></td><td>Headers cross-origin (anyHost pour beta)</td></tr>
+  <tr><td><code>RateLimit</code></td><td>Anti brute-force sur auth (10 req/min/IP)</td></tr>
+  <tr><td><code>Authentication (JWT)</code></td><td>Verification JWT sur routes protegees</td></tr>
+  <tr><td><code>WebSockets</code></td><td>Relay app temps reel</td></tr>
 </table>
 
 <!-- ============================================================ -->
@@ -152,89 +154,174 @@
 <!-- ============================================================ -->
 <h2 id="structure">3. Structure du projet</h2>
 
-<pre><code class="file-tree"><span class="dir">src/main/kotlin/com/jeanloickdt/</span>
-├── <span class="file">Application.kt</span>              ← Point d'entree, plugins, DI, background tasks
-│
-├── <span class="dir">auth/</span>                         ← Authentification &amp; autorisation
-│   ├── <span class="file">AuthRoutes.kt</span>             ← POST /api/login, POST /api/register
-│   ├── <span class="file">JwtConfig.kt</span>              ← Generation/verification tokens JWT
-│   ├── <span class="file">configureAuth.kt</span>          ← Installation plugin JWT Ktor
-│   ├── <span class="file">LicenceValidator.kt</span>       ← Stub licence (TODO: appel API)
-│   ├── <span class="dir">domain/</span>
-│   │   ├── <span class="file">AuthModels.kt</span>         ← LoginRequest, RegisterRequest, AuthResponse
-│   │   ├── <span class="file">UserRepository.kt</span>     ← Interface repository
-│   │   └── <span class="file">UserRow.kt</span>            ← Data class domain
-│   └── <span class="dir">data/</span>
-│       ├── <span class="file">UserTable.kt</span>          ← Schema Exposed (table "users")
-│       └── <span class="file">SqliteUserRepository.kt</span> ← Implementation SQLite
-│
-├── <span class="dir">project/</span>                      ← Gestion des projets IoT
-│   ├── <span class="file">ProjectRoutes.kt</span>          ← CRUD projets + cascade delete
-│   ├── <span class="dir">domain/</span>
-│   │   ├── <span class="file">ProjectModels.kt</span>      ← Requests/Responses serialisables
-│   │   ├── <span class="file">ProjectRepository.kt</span>  ← Interface repository
-│   │   └── <span class="file">ProjectRow.kt</span>         ← Data class domain
-│   └── <span class="dir">data/</span>
-│       ├── <span class="file">ProjectTable.kt</span>       ← Schema Exposed (table "projects")
-│       └── <span class="file">SqliteProjectRepository.kt</span>
-│
-├── <span class="dir">device/</span>                       ← Gestion des devices ESP
-│   ├── <span class="file">DeviceRoutes.kt</span>           ← CRUD devices + token management
-│   ├── <span class="dir">domain/</span>
-│   │   ├── <span class="file">DeviceModels.kt</span>       ← Requests/Responses
-│   │   ├── <span class="file">DeviceRowRepository.kt</span> ← Interface repository
-│   │   └── <span class="file">DeviceRow.kt</span>          ← Data class domain
-│   └── <span class="dir">data/</span>
-│       ├── <span class="file">DeviceTable.kt</span>        ← Schema Exposed (table "devices")
-│       └── <span class="file">SqliteDeviceRepository.kt</span>
-│
-├── <span class="dir">widget/</span>                       ← Widgets (display/command) + historique
-│   ├── <span class="file">WidgetRoutes.kt</span>           ← Register, delete, states, history
-│   ├── <span class="dir">domain/</span>
-│   │   ├── <span class="file">WidgetModels.kt</span>       ← Requests/Responses
-│   │   ├── <span class="file">WidgetRepository.kt</span>   ← Interface repository
-│   │   ├── <span class="file">WidgetRow.kt</span>          ← Data class domain
-│   │   ├── <span class="file">WidgetHistoryRepository.kt</span> ← Interface history
-│   │   └── <span class="file">WidgetHistoryRow.kt</span>   ← Data class history
-│   └── <span class="dir">data/</span>
-│       ├── <span class="file">WidgetTable.kt</span>        ← Schema (table "widgets")
-│       ├── <span class="file">WidgetHistoryTable.kt</span> ← Schema (table "widget_history")
-│       ├── <span class="file">SqliteWidgetRepository.kt</span>
-│       └── <span class="file">SqliteWidgetHistoryRepository.kt</span>
-│
-├── <span class="dir">relay/</span>                        ← Relay temps reel TCP + WebSocket
-│   ├── <span class="file">DeviceRelay.kt</span>            ← TCP :9001 — connexions ESP
-│   ├── <span class="file">AppRelay.kt</span>               ← WebSocket /ws/app — connexions app
-│   ├── <span class="file">SessionRegistry.kt</span>        ← Registre in-memory sessions + payloads
-│   └── <span class="file">FrameParser.kt</span>            ← Parser trames binaires iWidgets v1
-│
-├── <span class="dir">common/</span>
-│   └── <span class="file">StatusResponse.kt</span>         ← DTO endpoint /api/status
-│
-└── <span class="dir">database/</span>
-    └── <span class="file">DatabaseFactory.kt</span>        ← Init SQLite + WAL + creation tables
+<pre><code>src/main/kotlin/com/jeanloickdt/
+|-- Application.kt              &lt;- Point d'entree, main(), plugins, DI, background tasks
+|
+|-- auth/                        &lt;- Authentification, autorisation, admin
+|   |-- AuthRoutes.kt            &lt;- login, register, change password, admin endpoints
+|   |-- JwtConfig.kt             &lt;- Generation/verification JWT (HMAC256)
+|   |-- configureAuth.kt         &lt;- Installation plugin JWT Ktor
+|   |-- LicenceValidator.kt      &lt;- Stub licence (TODO: appel API)
+|   |-- domain/
+|   |   |-- AuthModels.kt        &lt;- Request/Response DTOs (login, register, admin stats, config)
+|   |   |-- UserRepository.kt    &lt;- Interface repository
+|   |   |-- UserRow.kt           &lt;- Data class domain
+|   |-- data/
+|       |-- UserTable.kt         &lt;- Schema Exposed (table "users")
+|       |-- SqliteUserRepository.kt
+|
+|-- project/                     &lt;- Gestion des projets IoT
+|   |-- ProjectRoutes.kt         &lt;- CRUD projets + cascade delete
+|   |-- domain/
+|   |   |-- ProjectModels.kt     &lt;- Requests/Responses
+|   |   |-- ProjectRepository.kt &lt;- Interface (+ count())
+|   |   |-- ProjectRow.kt
+|   |-- data/
+|       |-- ProjectTable.kt
+|       |-- SqliteProjectRepository.kt
+|
+|-- device/                      &lt;- Gestion des devices ESP
+|   |-- DeviceRoutes.kt          &lt;- CRUD devices + token management
+|   |-- domain/
+|   |   |-- DeviceModels.kt
+|   |   |-- DeviceRowRepository.kt &lt;- Interface (+ findAll, count, countOnline, deleteAllByProject)
+|   |   |-- DeviceRow.kt
+|   |-- data/
+|       |-- DeviceTable.kt
+|       |-- SqliteDeviceRepository.kt
+|
+|-- widget/                      &lt;- Widgets + historique temps-serie
+|   |-- WidgetRoutes.kt
+|   |-- domain/
+|   |   |-- WidgetModels.kt
+|   |   |-- WidgetRepository.kt  &lt;- Interface (+ deleteAllByProject)
+|   |   |-- WidgetRow.kt
+|   |   |-- WidgetHistoryRepository.kt &lt;- Interface (+ insertBatch, deleteAllByProject)
+|   |   |-- WidgetHistoryRow.kt
+|   |-- data/
+|       |-- WidgetTable.kt
+|       |-- WidgetHistoryTable.kt
+|       |-- SqliteWidgetRepository.kt
+|       |-- SqliteWidgetHistoryRepository.kt
+|
+|-- relay/                       &lt;- Relay temps reel TCP + WebSocket
+|   |-- DeviceRelay.kt           &lt;- TCP :configurable (defaut 9001)
+|   |-- AppRelay.kt              &lt;- WebSocket /ws/app
+|   |-- SessionRegistry.kt       &lt;- Registre in-memory (multi-session)
+|   |-- FrameParser.kt           &lt;- Parser binaire iWidgets v1 + CRC8
+|
+|-- common/
+|   |-- ServerConfig.kt          &lt;- Ports, version, uptime, IP locale
+|   |-- StatusResponse.kt        &lt;- DTO endpoint /api/status
+|
+|-- database/
+    |-- DatabaseFactory.kt       &lt;- Init SQLite + WAL + creation tables + index
+
+src/main/resources/
+|-- application.yaml             &lt;- Config Ktor (plus utilise pour les ports)
+|-- logback.xml                  &lt;- Config logging
+|-- static/
+    |-- index.html               &lt;- SPA admin dashboard (Alpine.js)
+    |-- app.js                   &lt;- Logique Alpine.js
+    |-- i18n.js                  &lt;- Traductions EN/FR
+    |-- style.css                &lt;- Theme InstantIoT (dark/light)
+
+doc-and-test/
+|-- doc-technique.html           &lt;- Cette documentation
+|-- test-relay.py                &lt;- Script test E2E TCP + WebSocket
+|-- bruno-collection/            &lt;- Collection Bruno (tous les endpoints REST)
 </code></pre>
 
-<h3>Pattern architectural</h3>
-<p>Chaque module (auth, project, device, widget) suit le meme pattern :</p>
+<h3>Pattern architectural par module</h3>
 <ul>
-  <li><code>domain/</code> — Interfaces, data classes, models serialisables (aucune dependance framework)</li>
-  <li><code>data/</code> — Implementation SQLite (Exposed), tables, mappers</li>
+  <li><code>domain/</code> — Interfaces, data classes, DTOs (zero dependance framework)</li>
+  <li><code>data/</code> — Implementation SQLite via Exposed, tables, mappers</li>
   <li><code>*Routes.kt</code> — Routes Ktor, validation, orchestration</li>
 </ul>
-<div class="note">Ce decoupage suit le principe <strong>Dependency Inversion</strong> (SOLID) : les routes dependent des interfaces, pas des implementations SQLite.</div>
+<div class="note"><strong>SOLID — Dependency Inversion</strong> : les routes dependent des interfaces (<code>ProjectRepository</code>), pas des implementations (<code>SqliteProjectRepository</code>). Les repositories sont instancies une seule fois dans <code>Application.kt</code> comme globals.</div>
 
 <!-- ============================================================ -->
-<!-- 4. BASE DE DONNEES -->
+<!-- 4. DEMARRAGE ET CONFIGURATION -->
 <!-- ============================================================ -->
-<h2 id="database">4. Base de donnees</h2>
+<h2 id="startup">4. Demarrage et configuration</h2>
+
+<h3>Point d'entree</h3>
+<p>Le serveur utilise un <code>embeddedServer</code> custom (pas <code>EngineMain</code>) pour lire les ports depuis <code>ServerConfig</code> :</p>
+<pre><code>fun main(args: Array&lt;String&gt;) {
+    ServerConfig.load()                    // ~/.instantiot/server.properties
+    embeddedServer(
+        Netty,
+        port = ServerConfig.httpPort,      // configurable via dashboard admin
+        module = Application::module
+    ).start(wait = true)
+}
+</code></pre>
+
+<h3>Fichier de configuration — <code>~/.instantiot/server.properties</code></h3>
+<pre><code>#InstantIoT Server Configuration
+http.port=8080
+tcp.port=9001
+</code></pre>
+<ul>
+  <li>Cree automatiquement au premier lancement avec les valeurs par defaut</li>
+  <li>Modifiable depuis le dashboard admin (section "Network ports")</li>
+  <li>Les changements de ports necessitent un redemarrage</li>
+</ul>
+
+<h3>ServerConfig (objet singleton)</h3>
+<table>
+  <tr><th>Propriete</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>httpPort</code></td><td>Int</td><td>Port HTTP + WebSocket (defaut 8080)</td></tr>
+  <tr><td><code>tcpPort</code></td><td>Int</td><td>Port TCP devices (defaut 9001)</td></tr>
+  <tr><td><code>runningHttpPort</code></td><td>Int</td><td>Port HTTP au demarrage (ne change pas apres save)</td></tr>
+  <tr><td><code>runningTcpPort</code></td><td>Int</td><td>Port TCP au demarrage (ne change pas apres save)</td></tr>
+  <tr><td><code>version</code></td><td>String</td><td>"0.0.1"</td></tr>
+  <tr><td><code>uptimeMs</code></td><td>Long</td><td>Temps depuis le demarrage</td></tr>
+  <tr><td><code>localIp</code></td><td>String</td><td>Premiere IPv4 non-loopback (NetworkInterface)</td></tr>
+  <tr><td><code>dbSizeBytes</code></td><td>Long</td><td>Taille du fichier ./instantiot.db</td></tr>
+</table>
+
+<h3>Sequence de demarrage</h3>
+<pre><code>1. ServerConfig.load()              &lt;- Lire ports depuis properties
+2. embeddedServer(port=httpPort)     &lt;- Demarrer Ktor/Netty
+3. install(ContentNegotiation, StatusPages, CORS, RateLimit)
+4. DatabaseFactory.init()            &lt;- SQLite WAL + tables + index
+5. Compte admin auto-genere si count==0 (password 16 chars SecureRandom)
+6. configureAuth()                   &lt;- JWT HMAC256
+7. startDeviceRelay(tcpPort)         &lt;- TCP relay dans coroutine IO
+8. configureAppRelay()               &lt;- WebSocket /ws/app
+9. launch: flush history buffer (5s)
+10. launch: cleanup history &gt;24h (1h)
+11. routing: staticResources + API + admin
+</code></pre>
+
+<h3>Gestion port occupe au demarrage</h3>
+<div class="danger">Si le port est deja utilise, le serveur affiche un message clair et s'arrete proprement :
+<pre><code>FAILED TO START — Port 8080 is already in use
+To fix, edit the port in: ~/.instantiot/server.properties
+  http.port=8081    (or any free port)
+Then restart the server.
+</code></pre></div>
+
+<h3>Fichiers generes automatiquement</h3>
+<table>
+  <tr><th>Fichier</th><th>Contenu</th><th>Permissions</th></tr>
+  <tr><td><code>~/.instantiot/secret.key</code></td><td>Secret JWT (2x UUID concatenes)</td><td><code>rw-------</code> (POSIX 600)</td></tr>
+  <tr><td><code>~/.instantiot/server.properties</code></td><td>Ports HTTP et TCP</td><td>Default</td></tr>
+  <tr><td><code>./instantiot.db</code></td><td>Base SQLite</td><td>Default</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<!-- 5. BASE DE DONNEES -->
+<!-- ============================================================ -->
+<h2 id="database">5. Base de donnees</h2>
 
 <h3>Configuration SQLite</h3>
 <pre><code>Fichier : ./instantiot.db
-PRAGMA journal_mode = WAL          ← Write-Ahead Logging (lectures non-bloquantes)
-PRAGMA synchronous  = NORMAL       ← Bon compromis performance/durabilite
-PRAGMA cache_size   = -32000       ← 32 MB de cache en memoire
-PRAGMA temp_store   = MEMORY       ← Tables temporaires en RAM
+PRAGMA journal_mode = WAL          &lt;- Lectures non-bloquantes pendant les ecritures
+PRAGMA synchronous  = NORMAL       &lt;- Compromis performance/durabilite
+PRAGMA cache_size   = -32000       &lt;- 32 MB de cache en memoire
+PRAGMA temp_store   = MEMORY       &lt;- Tables temporaires en RAM
 </code></pre>
 
 <h3>Schema des tables</h3>
@@ -246,6 +333,7 @@ PRAGMA temp_store   = MEMORY       ← Tables temporaires en RAM
   <tr><td><code>username</code></td><td>TEXT</td><td>UNIQUE INDEX</td><td>3-32 chars, alphanumerique + underscore</td></tr>
   <tr><td><code>pwd_hash</code></td><td>TEXT</td><td></td><td>BCrypt hash (salt inclus)</td></tr>
   <tr><td><code>role</code></td><td>TEXT</td><td>DEFAULT "user"</td><td>"admin" ou "user"</td></tr>
+  <tr><td><code>password_changed</code></td><td>BOOL</td><td>DEFAULT false</td><td>Force changement au premier login admin</td></tr>
   <tr><td><code>created_at</code></td><td>LONG</td><td></td><td>Timestamp ms</td></tr>
 </table>
 
@@ -253,9 +341,9 @@ PRAGMA temp_store   = MEMORY       ← Tables temporaires en RAM
 <table>
   <tr><th>Colonne</th><th>Type</th><th>Contrainte</th><th>Description</th></tr>
   <tr><td><code>id</code></td><td>TEXT</td><td>PK</td><td>UUID v4</td></tr>
-  <tr><td><code>owner_id</code></td><td>TEXT</td><td>FK → users.id</td><td>Proprietaire du projet</td></tr>
+  <tr><td><code>owner_id</code></td><td>TEXT</td><td>FK -> users.id</td><td>Proprietaire</td></tr>
   <tr><td><code>name</code></td><td>TEXT</td><td></td><td>Nom du projet</td></tr>
-  <tr><td><code>layout_json</code></td><td>TEXT</td><td>DEFAULT "{}"</td><td>Layout complet — blob opaque (le serveur ne l'interprete jamais)</td></tr>
+  <tr><td><code>layout_json</code></td><td>TEXT</td><td>DEFAULT "{}"</td><td>Blob opaque — le serveur ne l'interprete jamais</td></tr>
   <tr><td><code>created_at</code></td><td>LONG</td><td></td><td>Timestamp ms</td></tr>
   <tr><td><code>updated_at</code></td><td>LONG</td><td></td><td>Timestamp ms</td></tr>
 </table>
@@ -263,21 +351,21 @@ PRAGMA temp_store   = MEMORY       ← Tables temporaires en RAM
 <h4>devices</h4>
 <table>
   <tr><th>Colonne</th><th>Type</th><th>Contrainte</th><th>Description</th></tr>
-  <tr><td><code>id</code></td><td>TEXT</td><td>PK</td><td>UUID v4</td></tr>
-  <tr><td><code>project_id</code></td><td>TEXT</td><td>FK → projects.id</td><td>Projet parent</td></tr>
-  <tr><td><code>owner_id</code></td><td>TEXT</td><td>FK → users.id</td><td>Proprietaire</td></tr>
+  <tr><td><code>id</code></td><td>TEXT</td><td>PK</td><td>UUID v4 (identifiant public)</td></tr>
+  <tr><td><code>project_id</code></td><td>TEXT</td><td>FK -> projects.id</td><td>Projet parent</td></tr>
+  <tr><td><code>owner_id</code></td><td>TEXT</td><td>FK -> users.id</td><td>Proprietaire</td></tr>
   <tr><td><code>name</code></td><td>TEXT</td><td></td><td>Nom du device</td></tr>
-  <tr><td><code>token_hash</code></td><td>TEXT</td><td></td><td>SHA-256 du token (jamais en clair)</td></tr>
-  <tr><td><code>last_seen</code></td><td>LONG?</td><td>NULLABLE</td><td>Derniere connexion</td></tr>
-  <tr><td><code>is_online</code></td><td>BOOL</td><td>DEFAULT false</td><td>Statut actuel</td></tr>
+  <tr><td><code>token_hash</code></td><td>TEXT</td><td></td><td>SHA-256 du token (jamais en clair en DB)</td></tr>
+  <tr><td><code>last_seen</code></td><td>LONG?</td><td>NULLABLE</td><td>Derniere connexion TCP</td></tr>
+  <tr><td><code>is_online</code></td><td>BOOL</td><td>DEFAULT false</td><td>Statut temps reel</td></tr>
 </table>
 
 <h4>widgets</h4>
 <table>
   <tr><th>Colonne</th><th>Type</th><th>Contrainte</th><th>Description</th></tr>
-  <tr><td><code>id</code></td><td>TEXT</td><td>PK</td><td>UUID genere par l'app</td></tr>
-  <tr><td><code>project_id</code></td><td>TEXT</td><td>FK → projects.id</td><td>Projet parent</td></tr>
-  <tr><td><code>owner_id</code></td><td>TEXT</td><td>FK → users.id</td><td>Proprietaire</td></tr>
+  <tr><td><code>id</code></td><td>TEXT</td><td>PK</td><td>UUID genere par l'app Android</td></tr>
+  <tr><td><code>project_id</code></td><td>TEXT</td><td>FK -> projects.id</td><td>Projet parent</td></tr>
+  <tr><td><code>owner_id</code></td><td>TEXT</td><td>FK -> users.id</td><td>Proprietaire</td></tr>
   <tr><td><code>type</code></td><td>TEXT</td><td></td><td>"display" ou "command"</td></tr>
   <tr><td><code>last_payload</code></td><td>TEXT?</td><td>NULLABLE</td><td>Dernier payload base64 (ecrit par relay)</td></tr>
   <tr><td><code>last_seen_at</code></td><td>LONG?</td><td>NULLABLE</td><td>Timestamp derniere trame</td></tr>
@@ -287,91 +375,91 @@ PRAGMA temp_store   = MEMORY       ← Tables temporaires en RAM
 <table>
   <tr><th>Colonne</th><th>Type</th><th>Contrainte</th><th>Description</th></tr>
   <tr><td><code>id</code></td><td>INTEGER</td><td>PK AUTO_INCREMENT</td><td>ID interne</td></tr>
-  <tr><td><code>widget_id</code></td><td>TEXT</td><td>FK → widgets.id</td><td>Widget source</td></tr>
-  <tr><td><code>project_id</code></td><td>TEXT</td><td></td><td>Pour queries rapides sans JOIN</td></tr>
+  <tr><td><code>widget_id</code></td><td>TEXT</td><td>FK -> widgets.id</td><td>Widget source</td></tr>
+  <tr><td><code>project_id</code></td><td>TEXT</td><td></td><td>Denormalise pour queries sans JOIN</td></tr>
   <tr><td><code>owner_id</code></td><td>TEXT</td><td></td><td>Isolation sans JOIN</td></tr>
-  <tr><td><code>payload</code></td><td>TEXT</td><td></td><td>Payload base64</td></tr>
+  <tr><td><code>payload</code></td><td>TEXT</td><td></td><td>Payload base64 opaque</td></tr>
   <tr><td><code>recorded_at</code></td><td>LONG</td><td></td><td>Timestamp ms</td></tr>
 </table>
 
 <h4>Index</h4>
 <pre><code>CREATE INDEX idx_history_widget  ON widget_history (widget_id, recorded_at)
-CREATE INDEX idx_history_project ON widget_history (project_id, recorded_at)
-</code></pre>
-<div class="note">Ces index couvrent les queries de plage temporelle sur l'historique — essentiels pour les graphiques dans l'app.</div>
+CREATE INDEX idx_history_project ON widget_history (project_id, recorded_at)</code></pre>
 
 <!-- ============================================================ -->
-<!-- 5. AUTHENTIFICATION & SECURITE -->
+<!-- 6. AUTH & SECURITE -->
 <!-- ============================================================ -->
-<h2 id="auth">5. Authentification &amp; securite</h2>
+<h2 id="auth">6. Authentification et securite</h2>
 
 <h3>JWT</h3>
 <table>
   <tr><th>Parametre</th><th>Valeur</th></tr>
   <tr><td>Algorithme</td><td>HMAC256</td></tr>
   <tr><td>Expiration</td><td>30 jours</td></tr>
-  <tr><td>Issuer</td><td><code>instantiot-server</code> (configurable dans application.yaml)</td></tr>
+  <tr><td>Issuer</td><td><code>instantiot-server</code> (hardcode dans configureAuth.kt)</td></tr>
   <tr><td>Audience</td><td><code>instantiot-app</code></td></tr>
   <tr><td>Subject</td><td>userId (UUID)</td></tr>
-  <tr><td>Secret</td><td>2x UUID concatenes, stocke dans <code>~/.instantiot/secret.key</code> (chmod 600)</td></tr>
+  <tr><td>Secret</td><td><code>~/.instantiot/secret.key</code> (chmod 600)</td></tr>
 </table>
 
-<div class="security">
-<strong>Securite JWT</strong> : A chaque requete authentifiee, le serveur verifie que le user existe encore en DB via <code>userRepository.findById()</code>. Un user supprime ne peut plus utiliser son token.
-</div>
+<div class="security"><strong>Validation JWT</strong> : a chaque requete, le serveur verifie que le user existe encore en DB via <code>userRepository.findById(userId)</code>. Un user supprime ne peut plus utiliser son token.</div>
 
 <h3>Passwords</h3>
 <ul>
-  <li><strong>Hashing</strong> : BCrypt avec salt automatique (<code>BCrypt.gensalt()</code>)</li>
-  <li><strong>Validation register</strong> : username 3-32 chars alphanumerique, password 8-128 chars</li>
-  <li><strong>Admin auto-genere</strong> : 16 chars alphanumeriques via <code>SecureRandom</code>, affiche une seule fois dans les logs</li>
+  <li><strong>Hashing</strong> : BCrypt avec salt automatique</li>
+  <li><strong>Validation</strong> : username 3-32 chars <code>[a-zA-Z0-9_]</code>, password 8-128 chars</li>
+  <li><strong>Admin</strong> : 16 chars via <code>java.security.SecureRandom</code>, affiche une seule fois dans les logs</li>
+  <li><strong>Premier login</strong> : <code>password_changed=false</code> -> le dashboard force le changement</li>
 </ul>
 
 <h3>Tokens device</h3>
 <ul>
-  <li>UUID v4 genere a la creation du device</li>
+  <li>UUID v4 genere a la creation</li>
   <li>Retourne en clair <strong>une seule fois</strong> dans la reponse POST</li>
-  <li>Seul le <strong>SHA-256</strong> est stocke en DB — le token en clair n'est jamais persiste</li>
-  <li>Verification a la connexion TCP : <code>SHA-256(token_recu) == token_hash_db</code></li>
+  <li>Seul le <strong>SHA-256</strong> est stocke en DB</li>
+  <li>Verification TCP : <code>SHA-256(token_recu) == token_hash_db</code></li>
 </ul>
 
 <h3>Rate limiting</h3>
 <table>
   <tr><th>Scope</th><th>Limite</th><th>Cle</th><th>Routes</th></tr>
-  <tr><td><code>auth</code></td><td>10 requetes / minute</td><td>IP distante</td><td><code>/api/login</code>, <code>/api/register</code></td></tr>
+  <tr><td><code>auth</code></td><td>10 req / minute</td><td>IP distante</td><td><code>/api/login</code>, <code>/api/register</code></td></tr>
 </table>
 
 <h3>Ownership isolation</h3>
-<p>Chaque ressource (projet, device, widget) a un <code>owner_id</code>. Toutes les operations verifient :</p>
+<p>Pattern applique partout :</p>
 <pre><code>val resource = repository.findById(id)
 if (resource == null || resource.ownerId != userId) {
-    respond(404, "Not found")  // ne revele pas l'existence
-}
-</code></pre>
-<p>Ce pattern est applique sur :</p>
-<ul>
-  <li>Toutes les routes REST (GET, PATCH, DELETE)</li>
-  <li>Le handshake WebSocket (verification ownership projet)</li>
-  <li>Le relay per-frame (verification ownership device — in-memory, zero DB)</li>
-</ul>
+    respond(404)  // ne revele pas l'existence
+}</code></pre>
+<p>Applique sur : toutes les routes REST, handshake WebSocket, relay per-frame (in-memory).</p>
+
+<h3>Verification port disponible</h3>
+<p>Avant de sauvegarder un nouveau port, le serveur tente un <code>ServerSocket.bind()</code> avec <code>reuseAddress=false</code> sur <code>0.0.0.0</code> et <code>127.0.0.1</code>. Si le port est occupe -> 409 Conflict.</p>
 
 <!-- ============================================================ -->
-<!-- 6. API REST -->
+<!-- 7. API REST -->
 <!-- ============================================================ -->
-<h2 id="routes">6. API REST — Routes</h2>
+<h2 id="routes">7. API REST — Routes completes</h2>
 
 <h3>Publiques (sans auth)</h3>
 <table>
-  <tr><th>Methode</th><th>Path</th><th>Description</th><th>Reponse</th></tr>
-  <tr><td><span class="method method-get">GET</span></td><td><code>/api/status</code></td><td>Etat du serveur</td><td><code>{status, setup_required, licence_required}</code></td></tr>
-  <tr><td><span class="method method-get">GET</span></td><td><code>/</code></td><td>Static files</td><td>Fichiers depuis <code>resources/static/</code></td></tr>
+  <tr><th>Methode</th><th>Path</th><th>Description</th></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/status</code></td><td><code>{status, setup_required, licence_required}</code></td></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/</code></td><td>Dashboard admin (static files)</td></tr>
 </table>
 
-<h3>Auth <span class="badge badge-orange">Rate limited 10/min</span></h3>
+<h3>Auth <span class="badge badge-orange">Rate limited 10/min/IP</span></h3>
 <table>
-  <tr><th>Methode</th><th>Path</th><th>Description</th><th>Body / Reponse</th></tr>
-  <tr><td><span class="method method-post">POST</span></td><td><code>/api/login</code></td><td>Connexion</td><td><code>{username, password}</code> → <code>{token}</code></td></tr>
-  <tr><td><span class="method method-post">POST</span></td><td><code>/api/register</code></td><td>Inscription (licence requise)</td><td><code>{username, password}</code> → <code>{token}</code> (201)</td></tr>
+  <tr><th>Methode</th><th>Path</th><th>Body</th><th>Reponse</th></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/login</code></td><td><code>{username, password}</code></td><td><code>{token, role, passwordChanged}</code></td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/register</code></td><td><code>{username, password}</code></td><td><code>{token, role, passwordChanged}</code> (201)</td></tr>
+</table>
+
+<h3>User <span class="badge badge-blue">JWT requis</span></h3>
+<table>
+  <tr><th>Methode</th><th>Path</th><th>Body</th><th>Description</th></tr>
+  <tr><td><span class="method method-patch">PATCH</span></td><td><code>/api/users/me/password</code></td><td><code>{currentPassword, newPassword}</code></td><td>Changer son password (tout user)</td></tr>
 </table>
 
 <h3>Projets <span class="badge badge-blue">JWT requis</span></h3>
@@ -379,20 +467,20 @@ if (resource == null || resource.ownerId != userId) {
   <tr><th>Methode</th><th>Path</th><th>Description</th></tr>
   <tr><td><span class="method method-get">GET</span></td><td><code>/api/projects</code></td><td>Lister les projets du user</td></tr>
   <tr><td><span class="method method-post">POST</span></td><td><code>/api/projects</code></td><td>Creer un projet</td></tr>
-  <tr><td><span class="method method-get">GET</span></td><td><code>/api/projects/{id}</code></td><td>Details projet + layoutJson</td></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/projects/{id}</code></td><td>Details + layoutJson</td></tr>
   <tr><td><span class="method method-patch">PATCH</span></td><td><code>/api/projects/{id}/name</code></td><td>Renommer</td></tr>
-  <tr><td><span class="method method-patch">PATCH</span></td><td><code>/api/projects/{id}/layout</code></td><td>Sync layout complet (debounce app)</td></tr>
-  <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/projects/{id}</code></td><td>Supprimer + cascade (history → widgets → devices → projet)</td></tr>
+  <tr><td><span class="method method-patch">PATCH</span></td><td><code>/api/projects/{id}/layout</code></td><td>Sync layout complet</td></tr>
+  <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/projects/{id}</code></td><td>Cascade : history -> widgets -> devices -> projet</td></tr>
 </table>
 
 <h3>Devices <span class="badge badge-blue">JWT requis</span></h3>
 <table>
   <tr><th>Methode</th><th>Path</th><th>Description</th></tr>
-  <tr><td><span class="method method-get">GET</span></td><td><code>/api/devices</code></td><td>Lister tous les devices du user</td></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/devices</code></td><td>Tous les devices du user</td></tr>
   <tr><td><span class="method method-get">GET</span></td><td><code>/api/projects/{projectId}/devices</code></td><td>Devices d'un projet</td></tr>
-  <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices</code></td><td>Enregistrer device → retourne token (une seule fois)</td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices</code></td><td>Creer device (retourne token une seule fois)</td></tr>
   <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/devices/{id}</code></td><td>Supprimer + revoquer token</td></tr>
-  <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices/{id}/renew-token</code></td><td>Regenerer token (ancien revoque)</td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices/{id}/renew-token</code></td><td>Nouveau token (ancien revoque)</td></tr>
 </table>
 
 <h3>Widgets <span class="badge badge-blue">JWT requis</span></h3>
@@ -404,264 +492,396 @@ if (resource == null || resource.ownerId != userId) {
   <tr><td><span class="method method-get">GET</span></td><td><code>/api/widgets/{id}/history?from=&amp;to=</code></td><td>Historique par plage temporelle (ms)</td></tr>
 </table>
 
-<!-- ============================================================ -->
-<!-- 7. RELAY TEMPS REEL -->
-<!-- ============================================================ -->
-<h2 id="relay">7. Relay temps reel — TCP &amp; WebSocket</h2>
+<h3>Admin <span class="badge badge-red">JWT + role=admin</span></h3>
+<table>
+  <tr><th>Methode</th><th>Path</th><th>Description</th></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/admin/stats</code></td><td>Comptes, projets, devices, sessions actives</td></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/admin/devices</code></td><td>TOUS les devices de TOUS les users</td></tr>
+  <tr><td><span class="method method-get">GET</span></td><td><code>/api/admin/server-info</code></td><td>Version, ports, uptime, DB size, Java, OS, IP</td></tr>
+  <tr><td><span class="method method-patch">PATCH</span></td><td><code>/api/admin/config</code></td><td>Modifier ports HTTP/TCP (check dispo)</td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/admin/restart</code></td><td>Arret propre du serveur (process manager relance)</td></tr>
+</table>
 
-<h3>DeviceRelay — TCP port 9001</h3>
+<h3>Codes HTTP</h3>
+<table>
+  <tr><th>Code</th><th>Usage</th></tr>
+  <tr><td>200 / 201</td><td>Succes</td></tr>
+  <tr><td>400</td><td>Validation error (input invalide)</td></tr>
+  <tr><td>401</td><td>JWT manquant/invalide</td></tr>
+  <tr><td>403</td><td>Forbidden (non-admin sur route admin, licence requise)</td></tr>
+  <tr><td>404</td><td>Ressource non trouvee OU pas proprietaire</td></tr>
+  <tr><td>409</td><td>Conflit (username duplique, port occupe)</td></tr>
+  <tr><td>429</td><td>Rate limit depasse</td></tr>
+  <tr><td>500</td><td>Erreur interne (message generique, stacktrace dans les logs)</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<!-- 8. RELAY TEMPS REEL -->
+<!-- ============================================================ -->
+<h2 id="relay">8. Relay temps reel — TCP et WebSocket</h2>
+
+<h3>DeviceRelay — TCP (port configurable, defaut 9001)</h3>
 <p><strong>Fichier</strong> : <code>relay/DeviceRelay.kt</code></p>
-
-<h4>Flow de connexion</h4>
-<pre><code>1. ESP ouvre connexion TCP → port 9001
-2. Handshake : ESP envoie [TOKEN_LEN(1B) | TOKEN_BYTES]
-3. Server calcule SHA-256(token) → lookup dans DeviceTable
-4. Si valide → session enregistree dans SessionRegistry, device marque online
-5. ESP envoie trames binaires iWidgets v1 en continu
-6. Pour chaque trame :
-   a. Extraire widgetId + payload
-   b. Mettre a jour lastPayloads en RAM (sub-milliseconde)
-   c. Ajouter au historyBuffer (flush toutes les 5s)
-   d. Update last_payload en DB (async, non-bloquant)
-   e. Broadcast trame intacte aux apps qui regardent ce projet
-7. Deconnexion → device marque offline, session retiree
+<pre><code>1. ESP ouvre connexion TCP
+2. Handshake : [TOKEN_LEN(1B) | TOKEN_BYTES]
+3. Server SHA-256(token) -> lookup DeviceTable
+4. Authentifie -> session dans SessionRegistry, device online
+5. Boucle : trame binaire iWidgets v1
+   a. extractWidgetId + extractPayload
+   b. lastPayloads[widgetId] = payload (RAM, sub-ms)
+   c. historyBuffer.add(entry) (flush 5s)
+   d. widgetRepository.updateLastPayload (async IO)
+   e. broadcast trame aux apps du projet (WebSocket)
+6. Deconnexion -> device offline, session retiree
 </code></pre>
 
-<div class="security">
-<strong>Protections TCP</strong> :
-<ul>
-  <li>Keepalive TCP active — OS detecte si le device disparait</li>
-  <li>Timeout 90 secondes — si rien recu, device considere offline</li>
-  <li>Body max 1024 bytes — frames plus grandes rejetees</li>
-  <li>CRC8 verifie sur chaque trame entrante</li>
-</ul>
-</div>
+<div class="security"><strong>Protections TCP</strong> : keepalive, timeout 90s, body max 1024 bytes, CRC8 verifie.</div>
 
-<h3>AppRelay — WebSocket /ws/app</h3>
+<h3>AppRelay — WebSocket <code>/ws/app</code></h3>
 <p><strong>Fichier</strong> : <code>relay/AppRelay.kt</code></p>
-
-<h4>Flow de connexion</h4>
-<pre><code>1. App se connecte a /ws/app avec JWT dans le header Authorization
-2. JWT verifie par Ktor → userId extrait
-3. Handshake : premier message texte = projectId
-4. Server verifie ownership : projectRepository.findById(projectId).ownerId == userId
-5. Session enregistree dans SessionRegistry avec activeProjectId
-6. App envoie trames binaires (commandes vers devices)
-7. Pour chaque trame :
-   a. Extraire deviceIds cibles
-   b. Verifier ownership de chaque device (in-memory)
-   c. Trim header device de la trame
-   d. Relay TCP vers les devices cibles
-8. Deconnexion → session specifique retiree (multi-session supporte)
+<pre><code>1. JWT verifie dans le header Authorization
+2. Handshake : premier message texte = projectId
+3. Ownership verifie : projectRepository.findById(projectId).ownerId == userId
+4. Session enregistree (multi-session supporte)
+5. Boucle : trames binaires (commandes)
+   a. extractDeviceIds(frame) -> IDs cibles
+   b. Ownership per-frame : deviceSession.device.ownerId == userId (in-memory)
+   c. trimDeviceHeader(frame) -> DEV_COUNT=0
+   d. relay TCP vers devices cibles
+6. Deconnexion -> session specifique retiree
 </code></pre>
 
-<div class="security">
-<strong>Protections WebSocket</strong> :
-<ul>
-  <li>JWT requis a la connexion</li>
-  <li>Ownership projet verifie au handshake (DB call, une seule fois)</li>
-  <li>Ownership device verifie per-frame (in-memory, zero overhead DB)</li>
-  <li>maxFrameSize = 8 KB — frames plus grandes rejetees par Ktor</li>
-  <li>Ping/pong automatique (15s) + timeout (30s)</li>
-</ul>
-</div>
+<div class="security"><strong>Protections WebSocket</strong> : JWT, ownership projet (DB), ownership device per-frame (in-memory), maxFrameSize 8 KB, ping/pong 15s, timeout 30s.</div>
 
 <!-- ============================================================ -->
-<!-- 8. PROTOCOLE BINAIRE -->
+<!-- 9. PROTOCOLE BINAIRE -->
 <!-- ============================================================ -->
-<h2 id="protocol">8. Protocole binaire iWidgets v1</h2>
+<h2 id="protocol">9. Protocole binaire iWidgets v1</h2>
 
 <p><strong>Fichier</strong> : <code>relay/FrameParser.kt</code></p>
 
 <h3>Format de trame</h3>
-<pre><code>┌──────┬─────┬──────────┬─────┬───────────┬─────────────────────┬─────────────────────────────────┬──────┐
-│ 0xAA │ VER │ LEN (2B) │ SEQ │ DEV_COUNT │ [DEV_LEN|DEV_ID]×N │ WID_LEN│WID│TYPE│EVENT│PAYLOAD… │ CRC8 │
-│  1B  │ 1B  │  LE      │ 1B  │    1B     │    variable         │           variable              │  1B  │
-└──────┴─────┴──────────┴─────┴───────────┴─────────────────────┴─────────────────────────────────┴──────┘
+<pre><code>+------+-----+----------+-----+-----------+---------------------+---------------------------------+------+
+| 0xAA | VER | LEN (2B) | SEQ | DEV_COUNT | [DEV_LEN|DEV_ID]*N | WID_LEN|WID|TYPE|EVENT|PAYLOAD  | CRC8 |
+|  1B  | 1B  |  LE      | 1B  |    1B     |    variable         |           variable              |  1B  |
++------+-----+----------+-----+-----------+---------------------+---------------------------------+------+
 </code></pre>
 
 <table>
   <tr><th>Champ</th><th>Taille</th><th>Description</th></tr>
-  <tr><td><code>0xAA</code></td><td>1 byte</td><td>Sync byte — debut de trame</td></tr>
-  <tr><td><code>VER</code></td><td>1 byte</td><td>Version protocole (<code>0x01</code>)</td></tr>
-  <tr><td><code>LEN</code></td><td>2 bytes LE</td><td>Taille du body (tout entre SEQ et CRC)</td></tr>
-  <tr><td><code>SEQ</code></td><td>1 byte</td><td>Numero de sequence</td></tr>
-  <tr><td><code>DEV_COUNT</code></td><td>1 byte</td><td>Nombre de devices cibles (0 = device→app, N = app→devices)</td></tr>
-  <tr><td><code>DEV_LEN|DEV_ID</code></td><td>variable</td><td>UUID device cible (repete DEV_COUNT fois)</td></tr>
-  <tr><td><code>WID_LEN|WID</code></td><td>variable</td><td>UUID du widget</td></tr>
-  <tr><td><code>TYPE</code></td><td>1 byte</td><td>Type widget (le serveur ne l'interprete pas)</td></tr>
-  <tr><td><code>EVENT</code></td><td>1 byte</td><td>Type d'evenement (le serveur ne l'interprete pas)</td></tr>
-  <tr><td><code>PAYLOAD</code></td><td>variable</td><td>Donnees opaques — stockees en base64</td></tr>
-  <tr><td><code>CRC8</code></td><td>1 byte</td><td>CRC-8/SMBUS (polynome 0x07) sur le body</td></tr>
+  <tr><td><code>0xAA</code></td><td>1B</td><td>Sync byte</td></tr>
+  <tr><td><code>VER</code></td><td>1B</td><td><code>0x01</code></td></tr>
+  <tr><td><code>LEN</code></td><td>2B LE</td><td>Taille du body (max 1024)</td></tr>
+  <tr><td><code>SEQ</code></td><td>1B</td><td>Numero de sequence</td></tr>
+  <tr><td><code>DEV_COUNT</code></td><td>1B</td><td>0 = device->app, N = app->devices</td></tr>
+  <tr><td><code>DEV_LEN|DEV_ID</code></td><td>var</td><td>UUID device cible (repete N fois)</td></tr>
+  <tr><td><code>WID_LEN|WID</code></td><td>var</td><td>UUID du widget</td></tr>
+  <tr><td><code>TYPE</code></td><td>1B</td><td>Type (serveur ne l'interprete pas)</td></tr>
+  <tr><td><code>EVENT</code></td><td>1B</td><td>Evenement (serveur ne l'interprete pas)</td></tr>
+  <tr><td><code>PAYLOAD</code></td><td>var</td><td>Donnees opaques (stockees base64)</td></tr>
+  <tr><td><code>CRC8</code></td><td>1B</td><td>CRC-8/SMBUS (poly 0x07) sur le body</td></tr>
 </table>
 
-<h3>Directions</h3>
-<ul>
-  <li><strong>Device → Server → App</strong> : <code>DEV_COUNT = 0</code>. Le serveur extrait widgetId + payload, stocke, broadcast.</li>
-  <li><strong>App → Server → Device</strong> : <code>DEV_COUNT &gt; 0</code> avec les UUIDs cibles. Le serveur trim le header device et relay la trame.</li>
-</ul>
-
-<div class="note">Le serveur est un <strong>dumb relay</strong> — il ne lit jamais TYPE, EVENT ni le contenu du PAYLOAD. Il extrait uniquement ce dont il a besoin pour router et stocker.</div>
-
-<!-- ============================================================ -->
-<!-- 9. SESSIONS & CONCURRENCE -->
-<!-- ============================================================ -->
-<h2 id="sessions">9. Sessions &amp; concurrence</h2>
-
-<p><strong>Fichier</strong> : <code>relay/SessionRegistry.kt</code></p>
-
-<h3>Structures in-memory</h3>
+<h3>Methodes FrameParser</h3>
 <table>
-  <tr><th>Map</th><th>Type</th><th>Usage</th></tr>
-  <tr><td><code>appSessions</code></td><td><code>ConcurrentHashMap&lt;UserId, CopyOnWriteArrayList&lt;AppSession&gt;&gt;</code></td><td>Sessions WebSocket actives (multi-device par user)</td></tr>
-  <tr><td><code>deviceSessions</code></td><td><code>ConcurrentHashMap&lt;DeviceId, DeviceSession&gt;</code></td><td>Sessions TCP actives</td></tr>
-  <tr><td><code>lastPayloads</code></td><td><code>ConcurrentHashMap&lt;WidgetId, String&gt;</code></td><td>Cache dernier payload par widget (acces sub-ms)</td></tr>
-  <tr><td><code>historyBuffer</code></td><td><code>ConcurrentLinkedQueue&lt;HistoryEntry&gt;</code></td><td>Buffer avant flush SQLite (toutes les 5s)</td></tr>
+  <tr><th>Methode</th><th>Direction</th><th>Description</th></tr>
+  <tr><td><code>isValid(frame)</code></td><td>Les deux</td><td>Sync + version + taille + CRC8</td></tr>
+  <tr><td><code>extractWidgetId(frame)</code></td><td>Device->Server</td><td>UUID widget de la trame</td></tr>
+  <tr><td><code>extractPayload(frame)</code></td><td>Device->Server</td><td>Bytes opaques (stockes base64)</td></tr>
+  <tr><td><code>extractDeviceIds(frame)</code></td><td>App->Server</td><td>UUIDs devices cibles</td></tr>
+  <tr><td><code>trimDeviceHeader(frame)</code></td><td>App->Device</td><td>Retire DEV_COUNT, recalcule LEN+CRC</td></tr>
+  <tr><td><code>hashDeviceToken(token)</code></td><td>-</td><td>SHA-256 pour lookup DB</td></tr>
+  <tr><td><code>encodePayloadToBase64(bytes)</code></td><td>-</td><td>Encode pour stockage SQLite</td></tr>
 </table>
 
-<h3>Multi-session</h3>
-<p>Un user peut avoir <strong>plusieurs connexions WebSocket simultanees</strong> (telephone + tablette). Chaque connexion est une <code>AppSession</code> independante dans la liste. Le broadcast envoie a toutes les sessions qui regardent le meme projet.</p>
+<!-- ============================================================ -->
+<!-- 10. SESSIONS -->
+<!-- ============================================================ -->
+<h2 id="sessions">10. Sessions et concurrence</h2>
+
+<p><strong>Fichier</strong> : <code>relay/SessionRegistry.kt</code> — objet singleton, tout en memoire.</p>
+
+<table>
+  <tr><th>Structure</th><th>Type</th><th>Usage</th></tr>
+  <tr><td><code>appSessions</code></td><td><code>ConcurrentHashMap&lt;UserId, CopyOnWriteArrayList&lt;AppSession&gt;&gt;</code></td><td>Multi-session par user (phone + tablet)</td></tr>
+  <tr><td><code>deviceSessions</code></td><td><code>ConcurrentHashMap&lt;DeviceId, DeviceSession&gt;</code></td><td>1 session TCP par device</td></tr>
+  <tr><td><code>lastPayloads</code></td><td><code>ConcurrentHashMap&lt;WidgetId, String&gt;</code></td><td>Cache dernier payload (sub-ms)</td></tr>
+  <tr><td><code>historyBuffer</code></td><td><code>ConcurrentLinkedQueue&lt;HistoryEntry&gt;</code></td><td>Buffer avant flush SQLite</td></tr>
+</table>
 
 <h3>Modele de concurrence</h3>
 <ul>
-  <li>1 coroutine IO par device TCP connecte</li>
-  <li>1 coroutine Ktor par WebSocket app connecte</li>
-  <li>1 coroutine background pour flush history (toutes les 5s)</li>
-  <li>1 coroutine background pour cleanup history &gt; 24h (toutes les heures)</li>
-  <li>Toutes les structures partagees sont thread-safe (<code>ConcurrentHashMap</code>, <code>CopyOnWriteArrayList</code>, <code>ConcurrentLinkedQueue</code>)</li>
+  <li>1 coroutine <code>Dispatchers.IO</code> par device TCP</li>
+  <li>1 coroutine Ktor par WebSocket app</li>
+  <li>1 coroutine background flush history (5s)</li>
+  <li>1 coroutine background cleanup history (1h)</li>
+  <li>Frame parsing sur <code>Dispatchers.Default</code> (CPU-bound)</li>
 </ul>
 
 <!-- ============================================================ -->
-<!-- 10. HISTORY BUFFER & FLUSH -->
+<!-- 11. HISTORY BUFFER -->
 <!-- ============================================================ -->
-<h2 id="history">10. History buffer &amp; flush</h2>
+<h2 id="history">11. History buffer et flush</h2>
 
 <pre><code>Device envoie trame
-       │
-       ▼
-SessionRegistry.lastPayloads[widgetId] = payload    ← RAM, sub-ms
-SessionRegistry.historyBuffer.add(entry)             ← Queue lock-free
-widgetRepository.updateLastPayload(...)              ← Async IO, non-bloquant
-       │
-       │  (toutes les 5 secondes)
-       ▼
+       |
+       v
+lastPayloads[widgetId] = payload        &lt;- RAM, sub-ms
+historyBuffer.add(entry)                 &lt;- Queue lock-free
+widgetRepository.updateLastPayload()     &lt;- Async IO
+       |
+       |  (toutes les 5 secondes)
+       v
 flushHistoryBuffer()
-  → drain historyBuffer
-  → widgetHistoryRepository.insertBatch(rows)        ← 1 transaction SQL pour N rows
-       │
-       │  (toutes les heures)
-       ▼
-widgetHistoryRepository.deleteOlderThan(24h)         ← Cleanup automatique
-       │
-       │  (au shutdown)
-       ▼
-flushHistoryBuffer()                                 ← Flush final, zero perte
+  -> drain buffer -> insertBatch(rows)   &lt;- 1 transaction pour N rows
+       |
+       |  (toutes les heures)
+       v
+deleteOlderThan(24h)                     &lt;- Cleanup auto
+       |
+       |  (au shutdown)
+       v
+flushHistoryBuffer()                     &lt;- Zero perte
 </code></pre>
 
-<div class="note"><strong>Design decision</strong> : La DB n'est jamais dans le chemin critique du relay. Le batch insert toutes les 5s est ~5x plus performant que des inserts individuels. Le cleanup 24h empeche la DB de grossir indefiniment.</div>
+<div class="note"><strong>Design</strong> : la DB n'est jamais dans le chemin critique du relay. Le batch insert est ~5x plus rapide que N inserts individuels.</div>
 
 <!-- ============================================================ -->
-<!-- 11. RECAPITULATIF SECURITE -->
+<!-- 12. DASHBOARD ADMIN -->
 <!-- ============================================================ -->
-<h2 id="security-summary">11. Recapitulatif securite</h2>
+<h2 id="admin">12. Dashboard admin (frontend)</h2>
+
+<h3>Technologie</h3>
+<ul>
+  <li><strong>Alpine.js 3.x</strong> (CDN, 14kb gzip) — reactive, zero build step</li>
+  <li><strong>CSS custom</strong> — theme InstantIoT (Brand Violet #6C63FF + Teal #4ECDC4)</li>
+  <li><strong>i18n</strong> — EN (defaut) / FR, persistance localStorage</li>
+  <li><strong>Theme</strong> — dark/light, suit prefers-color-scheme, toggle manuel</li>
+</ul>
+
+<h3>Fichiers</h3>
+<table>
+  <tr><th>Fichier</th><th>Role</th></tr>
+  <tr><td><code>static/index.html</code></td><td>SPA — 4 vues avec directives Alpine (x-show, x-text, x-model, x-for)</td></tr>
+  <tr><td><code>static/app.js</code></td><td>Alpine.data('app') — state, API calls, navigation, theme</td></tr>
+  <tr><td><code>static/i18n.js</code></td><td>Objet I18N avec toutes les traductions, fonction t(key, lang)</td></tr>
+  <tr><td><code>static/style.css</code></td><td>CSS variables pour dark/light, responsive 4 breakpoints</td></tr>
+</table>
+
+<h3>Vues</h3>
+<ol>
+  <li><strong>Login</strong> — username + password, check role admin, switch langue EN/FR</li>
+  <li><strong>Setup</strong> — force changement password temporaire (premier lancement)</li>
+  <li><strong>Overview</strong> — stats serveur (6 cards), infos systeme (sidebar), config ports, bouton restart</li>
+  <li><strong>Devices</strong> — table de tous les devices enregistres avec statut online/offline</li>
+</ol>
+
+<h3>Fonctionnalites</h3>
+<ul>
+  <li>Auto-refresh stats toutes les 10s</li>
+  <li>Copier IP locale dans le presse-papier</li>
+  <li>Modifier ports HTTP/TCP (check disponibilite avant save)</li>
+  <li>Restart serveur avec modal de confirmation</li>
+  <li>Badges online/offline avec animation pulse</li>
+  <li>Responsive : desktop 2 colonnes, tablette 1 colonne, mobile compact</li>
+</ul>
+
+<h3>Securite frontend</h3>
+<ul>
+  <li>JWT stocke en localStorage — envoye dans header Authorization</li>
+  <li>Si 401 -> logout automatique</li>
+  <li>role != "admin" -> refuse l'acces</li>
+  <li><code>x-cloak</code> evite le flash de contenu non-rendu</li>
+</ul>
+
+<!-- ============================================================ -->
+<!-- 13. RECAPITULATIF SECURITE -->
+<!-- ============================================================ -->
+<h2 id="security-summary">13. Recapitulatif securite</h2>
 
 <table>
-  <tr><th>Mesure</th><th>Implementation</th><th>Fichier</th></tr>
-  <tr><td>Auth stateless</td><td>JWT HMAC256, 30j expiry, verification user en DB a chaque requete</td><td><code>JwtConfig.kt</code>, <code>configureAuth.kt</code></td></tr>
-  <tr><td>Hashing passwords</td><td>BCrypt avec salt automatique</td><td><code>AuthRoutes.kt</code></td></tr>
-  <tr><td>Hashing tokens device</td><td>SHA-256, token en clair jamais stocke</td><td><code>DeviceRoutes.kt</code>, <code>FrameParser.kt</code></td></tr>
-  <tr><td>Secret key protege</td><td>Fichier chmod 600 owner-only</td><td><code>JwtConfig.kt</code></td></tr>
-  <tr><td>Admin password</td><td>SecureRandom, 16 chars</td><td><code>Application.kt</code></td></tr>
-  <tr><td>Rate limiting</td><td>10 req/min par IP sur login/register</td><td><code>Application.kt</code>, <code>AuthRoutes.kt</code></td></tr>
-  <tr><td>Input validation</td><td>Username 3-32 alphanum, password 8-128</td><td><code>AuthRoutes.kt</code></td></tr>
-  <tr><td>Ownership isolation</td><td>Verification owner_id sur toutes les routes + WebSocket + relay</td><td>Tous les <code>*Routes.kt</code>, <code>AppRelay.kt</code></td></tr>
-  <tr><td>Erreurs masquees</td><td>Stacktrace loggee serveur, "Internal Server Error" au client</td><td><code>Application.kt</code></td></tr>
-  <tr><td>Frame size caps</td><td>WebSocket: 8 KB, TCP body: 1024 bytes</td><td><code>AppRelay.kt</code>, <code>DeviceRelay.kt</code></td></tr>
-  <tr><td>CRC8 applicatif</td><td>Verification integrite sur chaque trame entrante</td><td><code>FrameParser.kt</code></td></tr>
-  <tr><td>Cascade delete</td><td>history → widgets → devices → projet</td><td><code>ProjectRoutes.kt</code></td></tr>
+  <tr><th>Mesure</th><th>Detail</th><th>Fichier(s)</th></tr>
+  <tr><td>JWT HMAC256</td><td>30j expiry, verification user en DB a chaque requete</td><td><code>JwtConfig.kt</code>, <code>configureAuth.kt</code></td></tr>
+  <tr><td>BCrypt passwords</td><td>Salt automatique, validation 8-128 chars</td><td><code>AuthRoutes.kt</code></td></tr>
+  <tr><td>SHA-256 tokens device</td><td>Token en clair jamais stocke</td><td><code>DeviceRoutes.kt</code>, <code>FrameParser.kt</code></td></tr>
+  <tr><td>Secret key chmod 600</td><td>Owner-only sur POSIX, try/catch Windows</td><td><code>JwtConfig.kt</code></td></tr>
+  <tr><td>Admin SecureRandom</td><td>16 chars cryptographiquement surs</td><td><code>Application.kt</code></td></tr>
+  <tr><td>Rate limit auth</td><td>10 req/min par IP</td><td><code>Application.kt</code>, <code>AuthRoutes.kt</code></td></tr>
+  <tr><td>Input validation</td><td>Username regex + password length</td><td><code>AuthRoutes.kt</code></td></tr>
+  <tr><td>Ownership isolation</td><td>owner_id check sur REST + WebSocket + relay</td><td>Tous les *Routes.kt, AppRelay.kt</td></tr>
+  <tr><td>Erreurs masquees</td><td>Stacktrace loggee, "Internal Server Error" au client</td><td><code>Application.kt</code></td></tr>
+  <tr><td>Frame size caps</td><td>WebSocket 8KB, TCP body 1024B</td><td><code>AppRelay.kt</code>, <code>DeviceRelay.kt</code></td></tr>
+  <tr><td>CRC8 applicatif</td><td>Verification integrite chaque trame</td><td><code>FrameParser.kt</code></td></tr>
+  <tr><td>Cascade delete</td><td>history -> widgets -> devices -> projet</td><td><code>ProjectRoutes.kt</code></td></tr>
   <tr><td>Licence guard</td><td>Register bloque si licence inactive</td><td><code>AuthRoutes.kt</code></td></tr>
-  <tr><td>CORS</td><td>Headers cross-origin (permissif beta)</td><td><code>Application.kt</code></td></tr>
+  <tr><td>CORS</td><td>anyHost (beta), restrict via reverse proxy</td><td><code>Application.kt</code></td></tr>
+  <tr><td>Port check</td><td>Verifie disponibilite avant save (bind test)</td><td><code>AuthRoutes.kt</code></td></tr>
+  <tr><td>Startup graceful</td><td>Message clair si port occupe, exit(1)</td><td><code>Application.kt</code></td></tr>
 </table>
 
 <!-- ============================================================ -->
-<!-- 12. CONFIGURATION -->
+<!-- 14. DATA MODELS -->
 <!-- ============================================================ -->
-<h2 id="config">12. Configuration</h2>
+<h2 id="data-models">14. Data models complets</h2>
 
-<h3>application.yaml</h3>
-<pre><code>ktor:
-  application:
-    modules:
-      - com.jeanloickdt.ApplicationKt.module
-  deployment:
-    port: 8080
-jwt:
-  issuer: "instantiot-server"
-  audience: "instantiot-app"
-  realm: "instantiot"
+<h3>Domain (domain/)</h3>
+<pre><code>UserRow(id, username, pwdHash, role, passwordChanged, createdAt)
+ProjectRow(id, ownerId, name, layoutJson, createdAt, updatedAt)
+DeviceRow(id, projectId, ownerId, name, tokenHash, lastSeen, isOnline)
+WidgetRow(id, projectId, ownerId, type, lastPayload, lastSeenAt)
+WidgetHistoryRow(id, widgetId, projectId, ownerId, payload, recordedAt)
 </code></pre>
 
-<h3>Fichiers generes au premier lancement</h3>
-<table>
-  <tr><th>Fichier</th><th>Contenu</th><th>Permissions</th></tr>
-  <tr><td><code>~/.instantiot/secret.key</code></td><td>Secret JWT (2x UUID)</td><td><code>rw-------</code> (600)</td></tr>
-  <tr><td><code>./instantiot.db</code></td><td>Base SQLite</td><td>Default</td></tr>
-</table>
+<h3>Requests (Serializable)</h3>
+<pre><code>LoginRequest(username, password)
+RegisterRequest(username, password)
+ChangePasswordRequest(currentPassword, newPassword)
+CreateProjectRequest(name)
+UpdateProjectNameRequest(name)
+UpdateProjectLayoutRequest(layoutJson)
+CreateDeviceRequest(name, projectId)
+RegisterWidgetRequest(id, type)
+UpdateConfigRequest(httpPort?, tcpPort?)
+</code></pre>
 
-<h3>Ports reseau</h3>
-<table>
-  <tr><th>Port</th><th>Protocole</th><th>Usage</th></tr>
-  <tr><td>8080</td><td>HTTP + WebSocket</td><td>API REST + relay app</td></tr>
-  <tr><td>9001</td><td>TCP brut</td><td>Relay devices ESP32/ESP8266</td></tr>
-</table>
+<h3>Responses (Serializable)</h3>
+<pre><code>AuthResponse(token, role, passwordChanged)
+StatusResponse(status, setup_required, licence_required)
+ProjectResponse(id, name, layoutJson, createdAt, updatedAt)
+DeviceResponse(id, name, projectId, isOnline, lastSeen)
+CreateDeviceResponse(id, name, projectId, token)
+WidgetStateResponse(widgetId, payload, lastSeenAt)
+WidgetHistoryResponse(payload, recordedAt)
+AdminStatsResponse(users, projects, devicesTotal, devicesOnline, appSessionsActive, deviceSessionsActive)
+ServerInfoResponse(version, httpPort, tcpPort, uptimeMs, dbSizeBytes, javaVersion, osName, localIp)
+UpdateConfigResponse(message, httpPort, tcpPort)
+</code></pre>
+
+<h3>Repository interfaces</h3>
+<pre><code>UserRepository:
+  create(username, pwdHash, role) -> String
+  findByUsername(username) -> UserRow?
+  findById(id) -> UserRow?
+  updatePassword(id, newHash)          // sets passwordChanged=true
+  count() -> Long
+
+ProjectRepository:
+  create(name, ownerId) -> String
+  findById(id) -> ProjectRow?
+  findAllByOwner(ownerId) -> List
+  updateName(id, name) -> Boolean
+  updateLayout(id, layoutJson) -> Boolean
+  delete(id) -> Boolean
+  count() -> Long
+
+DeviceRepository:
+  create(name, projectId, ownerId, tokenHash) -> String
+  findById(id) -> DeviceRow?
+  findByTokenHash(tokenHash) -> DeviceRow?
+  findAll() -> List                    // admin only
+  findAllByOwner(ownerId) -> List
+  findAllByProject(projectId) -> List
+  updateOnlineStatus(id, isOnline)
+  updateLastSeen(id, timestamp)
+  delete(id) -> Boolean
+  deleteAllByProject(projectId)
+  renewToken(id, newTokenHash)
+  count() -> Long
+  countOnline() -> Long
+
+WidgetRepository:
+  register(id, projectId, ownerId, type)
+  findById(id) -> WidgetRow?
+  findAllByProject(projectId) -> List
+  updateLastPayload(id, payload, timestamp)
+  delete(id) -> Boolean
+  deleteAllByProject(projectId)
+
+WidgetHistoryRepository:
+  insert(widgetId, projectId, ownerId, payload)
+  insertBatch(entries: List)
+  findByWidgetAndRange(widgetId, from, to) -> List
+  deleteOlderThan(timestamp)
+  deleteAllByWidget(widgetId)
+  deleteAllByProject(projectId)
+</code></pre>
 
 <!-- ============================================================ -->
-<!-- 13. DEPLOIEMENT -->
+<!-- 15. DEPLOIEMENT -->
 <!-- ============================================================ -->
-<h2 id="deploy">13. Deploiement</h2>
+<h2 id="deploy">15. Deploiement</h2>
 
 <h3>Build</h3>
 <pre><code>./gradlew shadowJar
-# → build/libs/instantiot-server-0.0.1-all.jar
-</code></pre>
+# -> build/libs/instantiot-server-0.0.1-all.jar</code></pre>
 
 <h3>Lancement</h3>
-<pre><code>java -jar instantiot-server-0.0.1-all.jar
-</code></pre>
+<pre><code>java -jar instantiot-server-0.0.1-all.jar</code></pre>
 
 <h3>Premier lancement</h3>
 <ol>
-  <li>Le serveur cree la DB SQLite + les tables</li>
-  <li>Un compte <strong>admin</strong> est genere avec un password aleatoire</li>
-  <li>Le password est affiche dans les logs — <strong>a sauvegarder immediatement</strong></li>
-  <li>Le fichier <code>~/.instantiot/secret.key</code> est genere</li>
+  <li>Le serveur cree <code>~/.instantiot/server.properties</code> (ports par defaut)</li>
+  <li>Le serveur cree <code>~/.instantiot/secret.key</code> (JWT secret, chmod 600)</li>
+  <li>La DB SQLite est creee avec toutes les tables + index</li>
+  <li>Un compte <strong>admin</strong> est genere (password affiche une seule fois dans les logs)</li>
+  <li>L'admin ouvre <code>http://localhost:8080</code> -> login -> force changement password</li>
 </ol>
 
-<h3>HTTPS (recommande)</h3>
-<p>Le serveur ecoute en HTTP. Pour la production, utiliser un <strong>reverse proxy TLS</strong> devant :</p>
+<h3>HTTPS (recommande en production)</h3>
 <pre><code># Exemple Caddy (auto-cert Let's Encrypt)
 instantiot.example.com {
     reverse_proxy localhost:8080
-}
-</code></pre>
-<div class="warn"><strong>Important</strong> : Le port TCP 9001 (devices) reste en clair. Documenter comme "LAN only" ou mettre derriere un tunnel/VPN si acces distant.</div>
+}</code></pre>
+<div class="warn"><strong>Port TCP 9001</strong> : rester en LAN ou derriere un VPN si acces distant. Les ESP8266 ne supportent pas TLS.</div>
+
+<h3>jpackage (futur)</h3>
+<pre><code>Windows  -> InstantIoT-Server.exe (.msi)
+macOS    -> InstantIoT-Server.app (.dmg)
+Linux    -> .deb / .rpm
+Raspberry Pi -> build ARM64 requis</code></pre>
 
 <!-- ============================================================ -->
-<!-- 14. TODO -->
+<!-- 16. TESTS -->
 <!-- ============================================================ -->
-<h2 id="todo">14. TODO &amp; evolutions</h2>
+<h2 id="testing">16. Tests</h2>
+
+<h3>Collection Bruno (REST)</h3>
+<p>Dans <code>doc-and-test/bruno-collection/</code> — 17 requetes couvrant tous les endpoints. Variables auto-propagees (token, projectId, deviceId).</p>
+
+<h3>Script E2E relay (TCP + WebSocket)</h3>
+<p>Dans <code>doc-and-test/test-relay.py</code> — simule un ESP32 + une app Android :</p>
+<ul>
+  <li><strong>Test 1</strong> : Device TCP handshake + envoi 3 trames</li>
+  <li><strong>Test 3</strong> : Device envoie -> serveur relay -> app recoit (WebSocket)</li>
+  <li><strong>Test 4</strong> : App envoie commande -> serveur relay -> device recoit (TCP)</li>
+  <li><strong>Test 5</strong> : Ownership violation (faux projectId rejete)</li>
+</ul>
+<pre><code># Prerequis
+pip install websockets  # ou .venv/bin/pip install websockets
+
+# Remplir les 4 constantes dans le script puis :
+python3 test-relay.py   # ou .venv/bin/python3 test-relay.py</code></pre>
+
+<!-- ============================================================ -->
+<!-- 17. TODO -->
+<!-- ============================================================ -->
+<h2 id="todo">17. TODO et evolutions</h2>
 
 <table>
   <tr><th>Sujet</th><th>Priorite</th><th>Details</th></tr>
-  <tr><td>Licence API</td><td><span class="badge badge-red">Haute</span></td><td>Implementer l'appel a <code>instantiot.io/api/licence/validate</code> dans <code>LicenceValidator.kt</code>. Le guard est deja en place sur <code>/api/register</code>.</td></tr>
-  <tr><td>Tests automatises</td><td><span class="badge badge-orange">Moyenne</span></td><td>Couvrir auth, routes CRUD, relay, FrameParser. Le test existant (<code>ApplicationTest.kt</code>) est casse (config JWT manquante).</td></tr>
-  <tr><td>Monitoring</td><td><span class="badge badge-blue">Basse</span></td><td>Endpoint <code>/api/metrics</code> avec nombre de sessions actives, devices online, taille history buffer.</td></tr>
-  <tr><td>Roles &amp; permissions</td><td><span class="badge badge-blue">Basse</span></td><td>Le champ <code>role</code> existe en DB ("admin"/"user") mais n'est pas exploite dans les routes.</td></tr>
+  <tr><td>System tray</td><td><span class="badge badge-red">V1.5</span></td><td>Icone barre des taches : start/stop, change port sans terminal, notification si port occupe. <code>java.awt.SystemTray</code>.</td></tr>
+  <tr><td>jpackage</td><td><span class="badge badge-red">V1.5</span></td><td>Installer natif .exe/.app/.deb. Double-clic pour lancer. JRE embarque.</td></tr>
+  <tr><td>Licence API</td><td><span class="badge badge-orange">V1</span></td><td>Implementer l'appel a <code>instantiot.io/api/licence/validate</code> dans <code>LicenceValidator.kt</code>. Le guard est en place sur register.</td></tr>
+  <tr><td>Tests automatises</td><td><span class="badge badge-orange">V1</span></td><td>Couvrir auth, routes CRUD, relay, FrameParser. Le test existant est casse (config JWT).</td></tr>
+  <tr><td>Gestion tokens dans le dashboard</td><td><span class="badge badge-blue">V1.5</span></td><td>Generer, revoquer, copier les tokens device depuis le panel admin.</td></tr>
+  <tr><td>Audit log</td><td><span class="badge badge-blue">V2</span></td><td>Logger les connexions, tentatives de login, changements de config.</td></tr>
+  <tr><td>Roles et permissions</td><td><span class="badge badge-blue">V2</span></td><td>Le champ <code>role</code> existe ("admin"/"user") mais seul "admin" est verifie. Possibilite de roles custom.</td></tr>
+  <tr><td>Monitoring</td><td><span class="badge badge-blue">V2</span></td><td>Endpoint /api/metrics, histogrammes, alertes.</td></tr>
 </table>
 
 <hr>
 <p style="color: var(--muted); text-align: center; margin-top: 40px;">
-  InstantIoT Server v0.0.1 — Documentation generee le 14 avril 2026
+  InstantIoT Server v0.0.1 — Documentation technique v2 — 15 avril 2026
 </p>
 
 </div>

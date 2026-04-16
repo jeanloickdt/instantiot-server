@@ -153,11 +153,12 @@ nav {
 }
 .nav-link {
   color: var(--text-tertiary); text-decoration: none; font-size: 0.85em;
-  padding: 6px 12px; border-radius: 8px; transition: all 0.2s; font-weight: 500;
+  padding: 6px 16px; border-radius: 8px; transition: all 0.2s; font-weight: 500;
+  min-width: 160px; text-align: center;
 }
 .nav-link:hover { color: var(--text); background: var(--surface-variant); }
 .nav-link.active { color: var(--primary); background: rgba(108,99,255,0.1); }
-.nav-link.logout { color: var(--error-400); }
+.nav-link.logout { color: var(--error-400); min-width: auto; }
 .nav-link.logout:hover { background: rgba(230,85,85,0.1); }
 .nav-user { color: var(--text-tertiary); font-size: 0.85em; }
 .theme-toggle {
@@ -172,17 +173,18 @@ nav {
 /* ============================================================ */
 .container {
   max-width: 1280px;
+  width: 100%;
   margin: 0 auto;
   padding: 28px 32px;
 }
-h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
+h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; min-height: 40px; }
 
 /* ============================================================ */
 /* DASHBOARD GRID — 2 colonnes sur desktop                      */
 /* ============================================================ */
 .dashboard-grid {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: 1fr 360px;
   gap: 24px;
   align-items: start;
 }
@@ -190,10 +192,12 @@ h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
 /* ============================================================ */
 /* SECTIONS                                                     */
 /* ============================================================ */
-.section { margin-bottom: 24px; }
+.section { margin-bottom: 24px; width: 100%; }
+.col-main, .col-side { width: 100%; min-width: 0; }
 .section-title {
   font-size: 0.75em; text-transform: uppercase; letter-spacing: 1.2px;
   color: var(--text-tertiary); font-weight: 700; margin-bottom: 12px;
+  min-height: 20px;
 }
 
 /* ============================================================ */
@@ -208,6 +212,7 @@ h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
   background: var(--surface); border: 1px solid var(--card-border);
   border-radius: 12px; padding: 20px 16px; text-align: center;
   transition: border-color 0.2s, transform 0.15s;
+  min-height: 100px;
 }
 .stat-card:hover { transform: translateY(-2px); border-color: var(--primary); }
 .stat-card.accent { border-color: var(--accent); background: rgba(78,205,196,0.06); }
@@ -216,6 +221,7 @@ h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
 .stat-label {
   font-size: 0.7em; color: var(--text-tertiary); margin-top: 6px;
   text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;
+  min-height: 28px; display: flex; align-items: center; justify-content: center;
 }
 
 /* ============================================================ */
@@ -226,6 +232,7 @@ h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
   border: 1px solid var(--card-border);
   border-radius: 12px;
   overflow: hidden;
+  width: 100%;
 }
 .info-item {
   display: flex; align-items: center; gap: 8px;
@@ -235,13 +242,14 @@ h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
 .info-item:last-child { border-bottom: none; }
 .info-label {
   font-size: 0.75em; color: var(--text-tertiary);
-  min-width: 70px; flex-shrink: 0; font-weight: 600;
+  min-width: 110px; width: 110px; flex-shrink: 0; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.3px;
 }
 .info-value {
   font-size: 0.85em; font-weight: 600; color: var(--text);
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1;
 }
 .copy-btn {
   background: none; border: 1px solid var(--border); border-radius: 6px;
@@ -255,13 +263,13 @@ h1 { font-size: 1.5em; margin-bottom: 24px; font-weight: 700; }
 /* ============================================================ */
 .config-form {
   background: var(--surface); border: 1px solid var(--card-border);
-  border-radius: 12px; padding: 20px;
+  border-radius: 12px; padding: 20px; width: 100%;
 }
 .config-row {
   display: flex; align-items: center; gap: 16px; margin-bottom: 12px;
 }
 .config-row label {
-  font-size: 0.85em; color: var(--text-secondary); min-width: 180px;
+  font-size: 0.85em; color: var(--text-secondary); min-width: 200px; width: 200px;
 }
 .config-row input {
   width: 120px; padding: 8px 12px; margin-bottom: 0; text-align: center;
@@ -309,6 +317,7 @@ td code {
 .badge-online, .badge-offline {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 12px; border-radius: 20px; font-size: 0.8em; font-weight: 600;
+  min-width: 90px; justify-content: center;
 }
 .badge-online {
   background: rgba(78,205,196,0.12); color: var(--online);
@@ -408,12 +417,13 @@ td code {
   nav { padding: 0 12px; height: auto; flex-wrap: wrap; padding: 8px 12px; gap: 4px; }
   .nav-left, .nav-right { width: 100%; justify-content: center; flex-wrap: wrap; }
   .nav-logo { margin-right: 8px; font-size: 1em; }
-  .nav-link { font-size: 0.8em; padding: 4px 8px; }
+  .nav-link { font-size: 0.8em; padding: 4px 8px; min-width: 140px; }
   .login-card { margin: 16px; padding: 24px; }
   .container { padding: 16px 12px; }
   h1 { font-size: 1.3em; margin-bottom: 16px; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
-  .stat-card { padding: 14px 10px; }
+  .stat-card { padding: 14px 10px; min-height: 95px; }
   .stat-value { font-size: 1.6em; }
+  .stat-label { min-height: 32px; }
   th, td { padding: 8px 10px; font-size: 0.8em; }
 }

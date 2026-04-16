@@ -2,6 +2,7 @@ package com.jeanloickdt.common
 
 import java.io.File
 import java.net.InetAddress
+import java.net.NetworkInterface
 import java.util.Properties
 
 /**
@@ -36,7 +37,12 @@ object ServerConfig {
     val uptimeMs: Long get() = System.currentTimeMillis() - startedAt
 
     val localIp: String get() = try {
-        InetAddress.getLocalHost().hostAddress
+        // chercher la vraie IP LAN (pas 127.0.0.1)
+        NetworkInterface.getNetworkInterfaces().asSequence()
+            .flatMap { it.inetAddresses.asSequence() }
+            .filter { !it.isLoopbackAddress && it is java.net.Inet4Address }
+            .map { it.hostAddress }
+            .firstOrNull() ?: InetAddress.getLocalHost().hostAddress
     } catch (_: Exception) {
         "unknown"
     }
