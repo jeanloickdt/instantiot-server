@@ -41,3 +41,5 @@ out/
 .instantiot/
 doc-and-test/licence-keys/licence-private.pem
 .venv/
+build/installer/
+build/jpackage-input/
