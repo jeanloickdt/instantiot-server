@@ -5,6 +5,9 @@ import com.jeanloickdt.device.domain.CreateDeviceRequest
 import com.jeanloickdt.device.domain.CreateDeviceResponse
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
+import com.jeanloickdt.relay.ControlEventBroadcaster
+import com.jeanloickdt.relay.DeviceOfflineReason
+import com.jeanloickdt.relay.SessionRegistry
 import io.ktor.http.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
@@ -95,6 +98,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 
         // ============================================================
         // DELETE /api/devices/{id} — supprimer device + révoquer token
+        // Broadcast device_offline (reason=deleted) aux apps + ferme la session TCP
         // ============================================================
         delete("/api/devices/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -110,6 +114,25 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 return@delete
             }
 
+            // broadcast device_offline (reason=deleted) AVANT de fermer la session
+            // pour que les apps sachent pourquoi le device part
+            ControlEventBroadcaster.deviceOffline(
+                projectId = device.projectId,
+                deviceId  = deviceId,
+                reason    = DeviceOfflineReason.DELETED
+            )
+
+            // force disconnect de la session TCP existante si le device etait connecte
+            SessionRegistry.getDeviceSession(deviceId)?.let { activeSession ->
+                try {
+                    activeSession.socket.close()
+                } catch (_: Exception) {
+                    // socket deja ferme ou I/O error — peu importe
+                }
+                // le finally du handleDeviceConnection va retirer la session
+                // et broadcaster un device_offline reason=disconnected (accepte)
+            }
+
             deviceRepository.delete(deviceId)
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Device deleted",
@@ -121,6 +144,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
         // POST /api/devices/{id}/renew-token — regénère un nouveau token
         // L'ancien token est révoqué immédiatement
         // Le nouveau token est affiché une seule fois
+        // Broadcast device_offline (reason=token_renewed) + ferme la session TCP
         // ============================================================
         post("/api/devices/{id}/renew-token") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -140,6 +164,27 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             val newTokenHash = sha256(newToken)
 
             deviceRepository.renewToken(deviceId, newTokenHash)
+
+            // broadcast device_offline (reason=token_renewed) AVANT de fermer la session
+            // pour que les apps sachent que ce n'est pas un crash mais un renouvellement
+            ControlEventBroadcaster.deviceOffline(
+                projectId = device.projectId,
+                deviceId  = deviceId,
+                reason    = DeviceOfflineReason.TOKEN_RENEWED
+            )
+
+            // force disconnect de l'ancienne session TCP
+            // le device reconnectera avec son vieux token → serveur le rejette (LED rouge)
+            // jusqu'a reflash avec le nouveau token
+            SessionRegistry.getDeviceSession(deviceId)?.let { activeSession ->
+                try {
+                    activeSession.socket.close()
+                } catch (_: Exception) {
+                    // socket deja ferme ou I/O error
+                }
+                // le finally du handleDeviceConnection va retirer la session
+                // et broadcaster un device_offline reason=disconnected (accepte)
+            }
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Token renewed — save this token, it will not be shown again",

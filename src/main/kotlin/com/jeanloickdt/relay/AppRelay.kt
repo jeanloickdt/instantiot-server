@@ -86,7 +86,7 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
 
                         // relay vers les devices dans une coroutine IO — non-bloquant
                         launch(Dispatchers.IO) {
-                            relayFrameToDevices(userId, frameBytes)
+                            relayFrameToDevices(this@webSocket, userId, frameBytes)
                         }
                     }
                 } finally {
@@ -103,29 +103,55 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
  * Relay une trame binaire de l'app vers les devices ciblés.
  *
  * Flow :
- *   1. Extraire les device UUIDs de la trame
+ *   1. Extraire les device UUIDs + SEQ de la trame
  *   2. Pour chaque UUID → trouver la session TCP dans SessionRegistry
+ *      - Si absente/fermée → envoyer command_failed (reason=device_offline) a l'app
  *   3. Vérifier que le user est propriétaire du device (in-memory, pas de DB)
+ *      - Si non-owner → envoyer command_failed (reason=forbidden) a l'app
  *   4. Trim le header DEV de la trame
  *   5. Envoyer la trame trimée au device via TCP
+ *      - Si exception → envoyer command_failed (reason=relay_error) a l'app
  */
-private fun relayFrameToDevices(userId: String, frameBytes: ByteArray) {
+private suspend fun relayFrameToDevices(
+    session: io.ktor.server.websocket.DefaultWebSocketServerSession,
+    userId: String,
+    frameBytes: ByteArray
+) {
     val targetDeviceIds = FrameParser.extractDeviceIds(frameBytes)
     if (targetDeviceIds.isEmpty()) return
+
+    val seq = FrameParser.extractSeq(frameBytes)
 
     val trimmedFrame = FrameParser.trimDeviceHeader(frameBytes) ?: return
 
     targetDeviceIds.forEach { targetDeviceId ->
         val deviceSession = SessionRegistry.deviceSessions[targetDeviceId]
 
-        if (deviceSession == null || deviceSession.socket.isClosed) return@forEach
-
-        // vérifier que le user est propriétaire du device — check in-memory, pas de DB
-        if (deviceSession.device.ownerId != userId) {
-            logger.warn("Ownership violation — userId=$userId tried to relay to device=$targetDeviceId owned by ${deviceSession.device.ownerId}")
+        // device offline (session absente ou socket ferme)
+        if (deviceSession == null || deviceSession.socket.isClosed) {
+            logger.info("Command to offline device — userId=$userId deviceId=$targetDeviceId seq=$seq")
+            ControlEventBroadcaster.commandFailed(
+                session  = session,
+                deviceId = targetDeviceId,
+                reason   = CommandFailedReason.DEVICE_OFFLINE,
+                seq      = seq
+            )
             return@forEach
         }
 
+        // ownership check — device appartient a un autre user
+        if (deviceSession.device.ownerId != userId) {
+            logger.warn("Ownership violation — userId=$userId tried to relay to device=$targetDeviceId owned by ${deviceSession.device.ownerId}")
+            ControlEventBroadcaster.commandFailed(
+                session  = session,
+                deviceId = targetDeviceId,
+                reason   = CommandFailedReason.FORBIDDEN,
+                seq      = seq
+            )
+            return@forEach
+        }
+
+        // relay TCP vers le device
         try {
             deviceSession.socket.getOutputStream().apply {
                 write(trimmedFrame)
@@ -134,6 +160,12 @@ private fun relayFrameToDevices(userId: String, frameBytes: ByteArray) {
         } catch (e: Exception) {
             logger.warn("Failed to relay to device=$targetDeviceId — removing session")
             SessionRegistry.unregisterDevice(targetDeviceId)
+            ControlEventBroadcaster.commandFailed(
+                session  = session,
+                deviceId = targetDeviceId,
+                reason   = CommandFailedReason.RELAY_ERROR,
+                seq      = seq
+            )
         }
     }
 }
