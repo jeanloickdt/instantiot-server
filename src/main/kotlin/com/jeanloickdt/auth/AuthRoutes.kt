@@ -102,7 +102,14 @@ fun Route.registerRoute(userRepository: UserRepository) {
         }
 
         val hash   = BCrypt.hashpw(body.password, BCrypt.gensalt())
-        val userId = userRepository.create(body.username, hash)
+        // Self-register : the user picked this password, so we mark it as
+        // chosen (passwordChanged=true) to avoid forcing a pointless change
+        // at the next login.
+        val userId = userRepository.create(
+            username = body.username,
+            pwdHash = hash,
+            passwordChanged = true
+        )
         val user   = userRepository.findById(userId)!!
         val token  = JwtConfig.generateToken(userId)
 

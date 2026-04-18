@@ -8,15 +8,21 @@ import java.util.UUID
 
 class SqliteUserRepository : UserRepository {
 
-    override fun create(username: String, pwdHash: String, role: String): String {
+    override fun create(
+        username: String,
+        pwdHash: String,
+        role: String,
+        passwordChanged: Boolean
+    ): String {
         val id = UUID.randomUUID().toString()
         transaction {
             UserTable.insert {
-                it[UserTable.id]        = id
-                it[UserTable.username]  = username
-                it[UserTable.pwdHash]   = pwdHash
-                it[UserTable.role]      = role
-                it[UserTable.createdAt] = System.currentTimeMillis()
+                it[UserTable.id]              = id
+                it[UserTable.username]        = username
+                it[UserTable.pwdHash]         = pwdHash
+                it[UserTable.role]            = role
+                it[UserTable.passwordChanged] = passwordChanged
+                it[UserTable.createdAt]       = System.currentTimeMillis()
             }
         }
         return id
