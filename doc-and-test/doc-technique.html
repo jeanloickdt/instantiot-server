@@ -57,7 +57,7 @@
 <div class="container">
 
 <h1>InstantIoT Server</h1>
-<p style="color: var(--muted); font-size: 1.1em; margin-bottom: 32px;">Documentation technique v3 — Kotlin / Ktor / SQLite / Alpine.js</p>
+<p style="color: var(--muted); font-size: 1.1em; margin-bottom: 32px;">Documentation technique v4 — Kotlin / Ktor / SQLite / Alpine.js</p>
 
 <div class="toc">
 <strong>Sommaire</strong>
@@ -69,7 +69,11 @@
   <li><a href="#database">Base de donnees</a></li>
   <li><a href="#auth">Authentification et securite</a></li>
   <li><a href="#routes">API REST — Routes completes</a></li>
-  <li><a href="#relay">Relay temps reel — TCP et WebSocket</a></li>
+  <li><a href="#relay">Relay temps reel — TCP et WebSocket</a>
+    <ul>
+      <li><a href="#control-events">Control events WebSocket (device_online / device_offline / command_failed)</a></li>
+    </ul>
+  </li>
   <li><a href="#protocol">Protocole binaire iWidgets v1</a></li>
   <li><a href="#sessions">Sessions et concurrence</a></li>
   <li><a href="#history">History buffer et flush</a></li>
@@ -483,9 +487,10 @@ if (resource == null || resource.ownerId != userId) {
   <tr><td><span class="method method-get">GET</span></td><td><code>/api/devices</code></td><td>Tous les devices du user</td></tr>
   <tr><td><span class="method method-get">GET</span></td><td><code>/api/projects/{projectId}/devices</code></td><td>Devices d'un projet</td></tr>
   <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices</code></td><td>Creer device (retourne token une seule fois)</td></tr>
-  <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/devices/{id}</code></td><td>Supprimer + revoquer token</td></tr>
-  <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices/{id}/renew-token</code></td><td>Nouveau token (ancien revoque)</td></tr>
+  <tr><td><span class="method method-delete">DELETE</span></td><td><code>/api/devices/{id}</code></td><td>Supprimer + revoquer token + <strong>force disconnect TCP</strong> + broadcast WS <code>device_offline</code> (reason=<code>deleted</code>)</td></tr>
+  <tr><td><span class="method method-post">POST</span></td><td><code>/api/devices/{id}/renew-token</code></td><td>Nouveau token (ancien revoque) + <strong>force disconnect TCP</strong> + broadcast WS <code>device_offline</code> (reason=<code>token_renewed</code>)</td></tr>
 </table>
+<div class="note"><strong>Note</strong> : les endpoints DELETE et renew-token ferment la session TCP active du device et diffusent un <a href="#control-events">control event</a> aux apps connectees du projet. Le device reconnecte avec l'ancien token → rejete par le handshake (LED rouge jusqu'au reflash).</div>
 
 <h3>Widgets <span class="badge badge-blue">JWT requis</span></h3>
 <table>
@@ -549,13 +554,91 @@ if (resource == null || resource.ownerId != userId) {
 4. Session enregistree (multi-session supporte)
 5. Boucle : trames binaires (commandes)
    a. extractDeviceIds(frame) -> IDs cibles
-   b. Ownership per-frame : deviceSession.device.ownerId == userId (in-memory)
-   c. trimDeviceHeader(frame) -> DEV_COUNT=0
-   d. relay TCP vers devices cibles
+   b. extractSeq(frame) -> byte SEQ pour correlation eventuelle d'un command_failed
+   c. Ownership per-frame : deviceSession.device.ownerId == userId (in-memory)
+   d. trimDeviceHeader(frame) -> DEV_COUNT=0
+   e. relay TCP vers devices cibles
+   f. Si echec (offline / forbidden / I/O error) -> envoi Frame.Text command_failed a la session
 6. Deconnexion -> session specifique retiree
 </code></pre>
 
 <div class="security"><strong>Protections WebSocket</strong> : JWT, ownership projet (DB), ownership device per-frame (in-memory), maxFrameSize 8 KB, ping/pong 15s, timeout 30s.</div>
+
+<!-- ========== Control events (WS) ========== -->
+<h3 id="control-events">Control events WebSocket</h3>
+<p><strong>Fichiers</strong> : <code>relay/ControlEvent.kt</code>, <code>relay/ControlEventBroadcaster.kt</code></p>
+<p>Le WebSocket <code>/ws/app</code> multiplexe <strong>deux couches</strong> apres le handshake :</p>
+<ul>
+  <li><code>Frame.Binary</code> → trames iWidgets v1 (data temps reel, devices ↔ apps)</li>
+  <li><code>Frame.Text</code> → <strong>control events JSON</strong> (etat des devices, erreurs de commande)</li>
+</ul>
+<p>L'app discrimine sur le type de frame pour router vers le parser binaire ou le parser JSON.</p>
+
+<h4>Types d'events</h4>
+<table>
+  <tr><th>type</th><th>Direction</th><th>Payload</th><th>Declencheur</th></tr>
+  <tr>
+    <td><code>device_online</code></td>
+    <td>Server → toutes les apps du projet</td>
+    <td><code>{type, deviceId, deviceName}</code></td>
+    <td>Device ESP authentifie et registre dans <code>SessionRegistry</code> (DeviceRelay ligne apres <code>registerDevice</code>)</td>
+  </tr>
+  <tr>
+    <td><code>device_offline</code></td>
+    <td>Server → toutes les apps du projet</td>
+    <td><code>{type, deviceId, reason}</code></td>
+    <td>
+      <ul style="margin:0; padding-left:16px;">
+        <li><code>reason=disconnected</code> → TCP close / timeout 90s (finally de <code>handleDeviceConnection</code>)</li>
+        <li><code>reason=token_renewed</code> → admin a appele <code>POST /api/devices/{id}/renew-token</code></li>
+        <li><code>reason=deleted</code> → admin a appele <code>DELETE /api/devices/{id}</code></li>
+      </ul>
+    </td>
+  </tr>
+  <tr>
+    <td><code>command_failed</code></td>
+    <td>Server → session emettrice uniquement</td>
+    <td><code>{type, deviceId, reason, seq}</code></td>
+    <td>
+      <ul style="margin:0; padding-left:16px;">
+        <li><code>reason=device_offline</code> → session TCP absente ou socket ferme</li>
+        <li><code>reason=forbidden</code> → device appartient a un autre user</li>
+        <li><code>reason=relay_error</code> → exception lors de l'ecriture TCP vers le device</li>
+      </ul>
+      Le champ <code>seq</code> reprend le byte SEQ de la trame entrante pour que l'app correle la reponse avec la commande envoyee.
+    </td>
+  </tr>
+</table>
+
+<h4>Flux device online/offline</h4>
+<pre><code>ESP se connecte TCP  → handshake token OK  → registerDevice
+                                            → ControlEventBroadcaster.deviceOnline(projectId, deviceId, deviceName)
+                                            → Frame.Text broadcast a toutes les apps du projet
+
+ESP disconnect TCP   → finally unregisterDevice
+                     → updateOnlineStatus(false)
+                     → ControlEventBroadcaster.deviceOffline(projectId, deviceId, "disconnected")
+
+POST renew-token     → ControlEventBroadcaster.deviceOffline(..., "token_renewed")  (broadcast AVANT close)
+                     → socket.close()  → handler TCP finally re-broadcast "disconnected" (double event accepte)
+
+DELETE device        → ControlEventBroadcaster.deviceOffline(..., "deleted")        (broadcast AVANT close)
+                     → socket.close()  → handler TCP finally re-broadcast "disconnected"
+</code></pre>
+
+<h4>Flux command_failed (App → Device en echec)</h4>
+<pre><code>App envoie trame binaire (DEV_COUNT ≥ 1) sur WS
+  → relayFrameToDevices(session, userId, frameBytes)
+  → pour chaque targetDeviceId :
+      - deviceSessions[targetDeviceId] absent/socket closed
+          → commandFailed(session, deviceId, "device_offline", seq) sur la session emettrice
+      - deviceSession.device.ownerId != userId
+          → commandFailed(session, deviceId, "forbidden", seq)
+      - exception lors de socket.write()
+          → unregisterDevice + commandFailed(session, deviceId, "relay_error", seq)
+</code></pre>
+
+<div class="note"><strong>Contrat app (B5)</strong> : l'app maintient un registre <code>pendingCommands: Map&lt;seq, (deviceId, timeout)&gt;</code> sur les commandes envoyees. A la reception d'un <code>command_failed</code>, elle match sur <code>seq</code> pour revert l'UI optimiste et afficher un toast contextuel ("Device hors ligne", etc.). Timeout 2s cote app obligatoire pour les cas ou le serveur n'a rien envoye (ex: WS coupe).</div>
 
 <!-- ============================================================ -->
 <!-- 9. PROTOCOLE BINAIRE -->
@@ -590,6 +673,7 @@ if (resource == null || resource.ownerId != userId) {
 <table>
   <tr><th>Methode</th><th>Direction</th><th>Description</th></tr>
   <tr><td><code>isValid(frame)</code></td><td>Les deux</td><td>Sync + version + taille + CRC8</td></tr>
+  <tr><td><code>extractSeq(frame)</code></td><td>Les deux</td><td>Byte SEQ (index 4) pour correlation <a href="#control-events"><code>command_failed</code></a></td></tr>
   <tr><td><code>extractWidgetId(frame)</code></td><td>Device->Server</td><td>UUID widget de la trame</td></tr>
   <tr><td><code>extractPayload(frame)</code></td><td>Device->Server</td><td>Bytes opaques (stockes base64)</td></tr>
   <tr><td><code>extractDeviceIds(frame)</code></td><td>App->Server</td><td>UUIDs devices cibles</td></tr>
@@ -722,6 +806,8 @@ flushHistoryBuffer()                     &lt;- Zero perte
   <tr><td>Port check</td><td>Verifie disponibilite avant save (bind test)</td><td><code>AuthRoutes.kt</code></td></tr>
   <tr><td>Startup graceful</td><td>Message clair si port occupe, exit(1)</td><td><code>Application.kt</code></td></tr>
   <tr><td>Licence JWT RS256</td><td>Cle publique embarquee, signature inforgeable sans cle privee, 100% offline</td><td><code>LicenceValidator.kt</code></td></tr>
+  <tr><td>Control events WS</td><td>device_online / device_offline / command_failed — elimine les silences du relay (ownership fail, device offline, renew/delete force disconnect)</td><td><code>ControlEvent.kt</code>, <code>ControlEventBroadcaster.kt</code></td></tr>
+  <tr><td>Renew/DELETE device kick</td><td>Ancienne session TCP fermee cote serveur, device re-handshake rejete jusqu'au reflash</td><td><code>DeviceRoutes.kt</code></td></tr>
 </table>
 
 <!-- ============================================================ -->
@@ -762,6 +848,22 @@ WidgetHistoryResponse(payload, recordedAt)
 AdminStatsResponse(users, projects, devicesTotal, devicesOnline, appSessionsActive, deviceSessionsActive)
 ServerInfoResponse(version, httpPort, tcpPort, uptimeMs, dbSizeBytes, javaVersion, osName, localIp)
 UpdateConfigResponse(message, httpPort, tcpPort)
+</code></pre>
+
+<h3>Control events WS (Serializable — Frame.Text JSON)</h3>
+<pre><code>ControlEvent(
+  type: String,            // "device_online" | "device_offline" | "command_failed"
+  deviceId: String?,       // present pour tous les types
+  deviceName: String?,     // present sur device_online
+  reason: String?,         // device_offline: "disconnected" | "token_renewed" | "deleted"
+                           // command_failed: "device_offline" | "forbidden" | "relay_error"
+  seq: Int?                // command_failed seulement — byte SEQ de la trame emise
+)
+
+// Constantes centralisees :
+ControlEventType       { DEVICE_ONLINE, DEVICE_OFFLINE, COMMAND_FAILED }
+DeviceOfflineReason    { DISCONNECTED, TOKEN_RENEWED, DELETED }
+CommandFailedReason    { DEVICE_OFFLINE, FORBIDDEN, RELAY_ERROR }
 </code></pre>
 
 <h3>Repository interfaces</h3>
@@ -1013,21 +1115,32 @@ python3 test-relay.py   # ou .venv/bin/python3 test-relay.py</code></pre>
 <!-- ============================================================ -->
 <h2 id="todo">19. TODO et evolutions</h2>
 
+<h3>Fait recemment (branch <code>feature/server-relay-events</code>)</h3>
+<ul>
+  <li>✅ Broadcast WS <code>device_online</code> / <code>device_offline</code> aux apps du projet</li>
+  <li>✅ Force-disconnect TCP sur <code>renew-token</code> et <code>DELETE</code> device</li>
+  <li>✅ Event <code>command_failed</code> renvoye a l'app (deboucle le handler cote app)</li>
+  <li>✅ <code>FrameParser.extractSeq()</code> pour correlation app/serveur</li>
+</ul>
+
+<h3>En cours / a faire</h3>
 <table>
   <tr><th>Sujet</th><th>Priorite</th><th>Details</th></tr>
+  <tr><td>Tests E2E control events</td><td><span class="badge badge-red">Critique</span></td><td>Etendre <code>test-relay.py</code> pour lire les Frame.Text et verifier device_online / device_offline (3 reasons) / command_failed (3 reasons avec seq).</td></tr>
   <tr><td>Apple Developer Certificate</td><td><span class="badge badge-orange">V1</span></td><td>Signer le .app pour que le double-clic fonctionne sans Gatekeeper (99$/an Apple Developer). Le launcher .command est le workaround actuel.</td></tr>
   <tr><td>CI/CD multi-plateforme</td><td><span class="badge badge-orange">V1</span></td><td>GitHub Actions pour builder .dmg (macOS) + .msi (Windows) + .deb (Linux) automatiquement a chaque release.</td></tr>
-  <tr><td>Tests automatises</td><td><span class="badge badge-orange">V1</span></td><td>Couvrir auth, routes CRUD, relay, FrameParser. Le test existant est casse (config JWT).</td></tr>
+  <tr><td>Tests automatises unitaires</td><td><span class="badge badge-orange">V1</span></td><td>Couvrir auth, routes CRUD, relay, FrameParser. Le test existant est casse (config JWT).</td></tr>
   <tr><td>Gestion tokens dans le dashboard</td><td><span class="badge badge-blue">V1.5</span></td><td>Generer, revoquer, copier les tokens device depuis le panel admin.</td></tr>
   <tr><td>Plans licence (limites)</td><td><span class="badge badge-blue">V1.5</span></td><td>Exploiter le champ <code>plan</code> du JWT pour debloquer des features premium (beta/pro/enterprise).</td></tr>
-  <tr><td>Audit log</td><td><span class="badge badge-blue">V2</span></td><td>Logger les connexions, tentatives de login, changements de config.</td></tr>
+  <tr><td>ACK device explicite</td><td><span class="badge badge-blue">V1.5</span></td><td>Le handshake TCP n'a pas d'ACK (device suppose OK si pas kick 2s). Ajouter un byte <code>0x00 = OK</code> dans le protocole pour feedback explicite.</td></tr>
+  <tr><td>Audit log</td><td><span class="badge badge-blue">V2</span></td><td>Logger les connexions, tentatives de login, changements de config, auth failures device.</td></tr>
   <tr><td>Roles et permissions</td><td><span class="badge badge-blue">V2</span></td><td>Le champ <code>role</code> existe ("admin"/"user") mais seul "admin" est verifie. Possibilite de roles custom.</td></tr>
   <tr><td>Monitoring</td><td><span class="badge badge-blue">V2</span></td><td>Endpoint /api/metrics, histogrammes, alertes.</td></tr>
 </table>
 
 <hr>
 <p style="color: var(--muted); text-align: center; margin-top: 40px;">
-  InstantIoT Server v1.0.0 — Documentation technique v3 — 16 avril 2026
+  InstantIoT Server v1.0.0 — Documentation technique v4 — 17 avril 2026
 </p>
 
 </div>

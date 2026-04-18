@@ -55,6 +55,20 @@ object FrameParser {
     }
 
     // ================================================================
+    // EXTRACTION — byte SEQ (correlation command_failed)
+    // ================================================================
+
+    /**
+     * Extrait le byte SEQ de la trame (position 4, apres AA | VER | LEN).
+     * Utilise pour la correlation des events command_failed cote app.
+     * Retourne null si la trame est trop courte.
+     */
+    fun extractSeq(frame: ByteArray): Int? {
+        if (frame.size < FIXED_HEADER_SIZE) return null
+        return frame[4].toInt() and 0xFF
+    }
+
+    // ================================================================
     // EXTRACTION — Device → Server → App
     // L'ESP envoie DEV_COUNT=0 — pas de device cible dans cette direction
     // ================================================================

@@ -122,6 +122,13 @@ private suspend fun handleDeviceConnection(
         }
         logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceAddress")
 
+        // broadcast device_online aux apps du projet
+        ControlEventBroadcaster.deviceOnline(
+            projectId  = device.projectId,
+            deviceId   = device.id,
+            deviceName = device.name
+        )
+
         // écouter les trames binaires en continu
         try {
             while (!clientSocket.isClosed) {
@@ -150,6 +157,16 @@ private suspend fun handleDeviceConnection(
             }
             logger.info("Device disconnected — deviceId=${device.id}")
             clientSocket.close()
+
+            // broadcast device_offline aux apps du projet
+            // reason = DISCONNECTED (normal TCP disconnect ou timeout)
+            // Si renew-token ou delete a deja broadcast avec un reason specifique,
+            // l'app recoit 2 events — acceptable, elle deduplique sur deviceId offline.
+            ControlEventBroadcaster.deviceOffline(
+                projectId = device.projectId,
+                deviceId  = device.id,
+                reason    = DeviceOfflineReason.DISCONNECTED
+            )
         }
 
     } catch (e: Exception) {
