@@ -7,6 +7,8 @@ import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.domain.ProjectResponse
 import com.jeanloickdt.project.domain.UpdateProjectLayoutRequest
 import com.jeanloickdt.project.domain.UpdateProjectNameRequest
+import com.jeanloickdt.relay.CLIENT_SESSION_ID_HEADER
+import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
 import com.jeanloickdt.widget.domain.WidgetRepository
 import io.ktor.http.*
@@ -55,6 +57,16 @@ fun Route.projectRoutes(
             val body    = call.receive<CreateProjectRequest>()
             val id      = projectRepository.create(body.name, ownerId)
             val project = projectRepository.findById(id)!!
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : notifie les autres appareils du meme user
+            ControlEventBroadcaster.projectCreated(
+                ownerId = ownerId,
+                projectId = project.id,
+                name = project.name,
+                createdAt = project.createdAt,
+                sourceSessionId = sourceSessionId
+            )
 
             call.respond(HttpStatusCode.Created, ProjectResponse(
                 id         = project.id,
@@ -111,6 +123,16 @@ fun Route.projectRoutes(
             val body = call.receive<UpdateProjectNameRequest>()
             projectRepository.updateName(projectId, body.name)
             val updated = projectRepository.findById(projectId)!!
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : notifie les autres appareils du meme user
+            ControlEventBroadcaster.projectRenamed(
+                ownerId = ownerId,
+                projectId = updated.id,
+                name = updated.name,
+                updatedAt = updated.updatedAt,
+                sourceSessionId = sourceSessionId
+            )
 
             call.respond(HttpStatusCode.OK, ProjectResponse(
                 id         = updated.id,
@@ -142,6 +164,18 @@ fun Route.projectRoutes(
 
             val body = call.receive<UpdateProjectLayoutRequest>()
             projectRepository.updateLayout(projectId, body.layoutJson)
+            val updated = projectRepository.findById(projectId)!!
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : broadcast layout aux autres appareils du
+            // meme user qui regardent le meme projet. L'emetteur
+            // s'ignorera lui-meme via sourceSessionId.
+            ControlEventBroadcaster.projectLayoutUpdated(
+                projectId = projectId,
+                layoutJson = body.layoutJson,
+                updatedAt = updated.updatedAt,
+                sourceSessionId = sourceSessionId
+            )
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message"   to "Layout updated",
@@ -171,6 +205,15 @@ fun Route.projectRoutes(
             widgetRepository.deleteAllByProject(projectId)
             deviceRepository.deleteAllByProject(projectId)
             projectRepository.delete(projectId)
+
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : notifie les autres appareils du meme user
+            ControlEventBroadcaster.projectDeleted(
+                ownerId = ownerId,
+                projectId = projectId,
+                sourceSessionId = sourceSessionId
+            )
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Project deleted",

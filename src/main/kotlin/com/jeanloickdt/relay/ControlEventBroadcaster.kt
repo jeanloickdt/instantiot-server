@@ -71,6 +71,134 @@ object ControlEventBroadcaster {
         sendEventToSession(session, event)
     }
 
+    // ════════════════════════════════════════════════════════════════
+    // Realtime sync broadcasts — feature `realtime_sync`
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * Layout d'un projet mis a jour par un client. Broadcast a toutes
+     * les apps qui regardent ce projet (sauf l'emetteur, qui se filtrera
+     * lui-meme via `sourceSessionId`).
+     */
+    suspend fun projectLayoutUpdated(
+        projectId: String,
+        layoutJson: String,
+        updatedAt: Long,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.PROJECT_LAYOUT_UPDATED,
+            projectId = projectId,
+            layoutJson = layoutJson,
+            updatedAt = updatedAt,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToProject(projectId, event)
+    }
+
+    /**
+     * Un nouveau projet a ete cree. Broadcast aux autres appareils du
+     * meme owner (pas broadcast par projectId — ils ne peuvent pas
+     * encore y etre connectes).
+     */
+    suspend fun projectCreated(
+        ownerId: String,
+        projectId: String,
+        name: String,
+        createdAt: Long,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.PROJECT_CREATED,
+            projectId = projectId,
+            name = name,
+            createdAt = createdAt,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToUser(ownerId, event)
+    }
+
+    /** Un projet a ete renomme. */
+    suspend fun projectRenamed(
+        ownerId: String,
+        projectId: String,
+        name: String,
+        updatedAt: Long,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.PROJECT_RENAMED,
+            projectId = projectId,
+            name = name,
+            updatedAt = updatedAt,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToUser(ownerId, event)
+    }
+
+    /** Un projet a ete supprime. */
+    suspend fun projectDeleted(
+        ownerId: String,
+        projectId: String,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.PROJECT_DELETED,
+            projectId = projectId,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToUser(ownerId, event)
+    }
+
+    /** Un device a ete enregistre (created). */
+    suspend fun deviceRegistered(
+        projectId: String,
+        deviceId: String,
+        deviceName: String,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.DEVICE_REGISTERED,
+            projectId = projectId,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToProject(projectId, event)
+    }
+
+    /** Un device a ete renomme. */
+    suspend fun deviceRenamed(
+        projectId: String,
+        deviceId: String,
+        deviceName: String,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.DEVICE_RENAMED,
+            projectId = projectId,
+            deviceId = deviceId,
+            deviceName = deviceName,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToProject(projectId, event)
+    }
+
+    /** Un device a ete supprime (distinct de DeviceOffline). */
+    suspend fun deviceDeleted(
+        projectId: String,
+        deviceId: String,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type = ControlEventType.DEVICE_DELETED,
+            projectId = projectId,
+            deviceId = deviceId,
+            sourceSessionId = sourceSessionId
+        )
+        broadcastToProject(projectId, event)
+    }
+
     // ────────────────────────────────────────────────────────────
     // Helpers internes
     // ────────────────────────────────────────────────────────────
@@ -84,6 +212,25 @@ object ControlEventBroadcaster {
                 appSession.session.send(Frame.Text(jsonText))
             } catch (e: Exception) {
                 logger.warn("Failed to send event to userId=${appSession.userId} — removing session")
+                SessionRegistry.unregisterApp(appSession.userId, appSession.session)
+            }
+        }
+    }
+
+    /**
+     * Broadcast a TOUTES les sessions WS d'un user (tous appareils
+     * connectes, peu importe le projet actuellement ouvert). Utilise
+     * pour les changements de liste de projets (creation, suppression)
+     * qui doivent etre vus meme depuis la liste Maker Pro.
+     */
+    private suspend fun broadcastToUser(userId: String, event: ControlEvent) {
+        val jsonText = json.encodeToString(event)
+        val sessions = SessionRegistry.appSessions[userId] ?: return
+        sessions.forEach { appSession ->
+            try {
+                appSession.session.send(Frame.Text(jsonText))
+            } catch (e: Exception) {
+                logger.warn("Failed to send user-event to userId=$userId — removing session")
                 SessionRegistry.unregisterApp(appSession.userId, appSession.session)
             }
         }

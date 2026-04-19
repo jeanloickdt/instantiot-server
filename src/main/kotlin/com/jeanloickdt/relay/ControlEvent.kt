@@ -24,17 +24,41 @@ data class ControlEvent(
     val deviceId: String? = null,
     val deviceName: String? = null,
     val reason: String? = null,   // motif pour device_offline et command_failed
-    val seq: Int? = null          // byte SEQ de la trame pour correlation command_failed
+    val seq: Int? = null,         // byte SEQ de la trame pour correlation command_failed
+
+    // ════════════════════════════════════════════════════════════════
+    // Realtime sync fields — feature `realtime_sync`
+    // Nullable partout pour retro-compatibilite avec les anciens events.
+    // ════════════════════════════════════════════════════════════════
+    val projectId: String? = null,
+    val layoutJson: String? = null,
+    val name: String? = null,
+    val createdAt: Long? = null,
+    val updatedAt: Long? = null,
+    /** ClientSessionId de l'appareil emetteur — lui permet d'ignorer l'echo. */
+    val sourceSessionId: String? = null
 )
 
 /**
  * Types d'events — constantes pour eviter les typos.
  */
 object ControlEventType {
-    const val DEVICE_ONLINE   = "device_online"
-    const val DEVICE_OFFLINE  = "device_offline"
-    const val COMMAND_FAILED  = "command_failed"
+    const val DEVICE_ONLINE             = "device_online"
+    const val DEVICE_OFFLINE            = "device_offline"
+    const val COMMAND_FAILED            = "command_failed"
+
+    // Realtime sync events
+    const val PROJECT_LAYOUT_UPDATED    = "project_layout_updated"
+    const val PROJECT_CREATED           = "project_created"
+    const val PROJECT_RENAMED           = "project_renamed"
+    const val PROJECT_DELETED           = "project_deleted"
+    const val DEVICE_REGISTERED         = "device_registered"
+    const val DEVICE_RENAMED            = "device_renamed"
+    const val DEVICE_DELETED            = "device_deleted"
 }
+
+/** Nom du header HTTP transportant le client session id pour le sync. */
+const val CLIENT_SESSION_ID_HEADER = "X-Client-Session-Id"
 
 /**
  * Raisons d'un device_offline.

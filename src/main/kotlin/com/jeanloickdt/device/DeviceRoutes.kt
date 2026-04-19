@@ -5,6 +5,7 @@ import com.jeanloickdt.device.domain.CreateDeviceRequest
 import com.jeanloickdt.device.domain.CreateDeviceResponse
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
+import com.jeanloickdt.relay.CLIENT_SESSION_ID_HEADER
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
 import com.jeanloickdt.relay.SessionRegistry
@@ -87,6 +88,16 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 tokenHash = tokenHash
             )
 
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : notifie les autres appareils du projet
+            ControlEventBroadcaster.deviceRegistered(
+                projectId = body.projectId,
+                deviceId = id,
+                deviceName = body.name,
+                sourceSessionId = sourceSessionId
+            )
+
             // retourne le token en clair — une seule fois
             call.respond(HttpStatusCode.Created, CreateDeviceResponse(
                 id        = id,
@@ -134,6 +145,18 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             }
 
             deviceRepository.delete(deviceId)
+
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : notifie les autres appareils du projet
+            // (distinct de deviceOffline emis juste avant — ici c'est la
+            // suppression de l'enregistrement, a propager a la liste)
+            ControlEventBroadcaster.deviceDeleted(
+                projectId = device.projectId,
+                deviceId = deviceId,
+                sourceSessionId = sourceSessionId
+            )
+
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Device deleted",
                 "id"      to deviceId
