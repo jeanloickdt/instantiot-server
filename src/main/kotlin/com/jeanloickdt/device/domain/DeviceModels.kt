@@ -25,3 +25,8 @@ data class CreateDeviceResponse(
     val projectId: String,
     val token: String  // affiché une seule fois — jamais stocké en clair
 )
+
+@Serializable
+data class UpdateDeviceNameRequest(
+    val name: String
+)

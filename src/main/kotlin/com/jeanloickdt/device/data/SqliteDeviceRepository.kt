@@ -78,10 +78,26 @@ class SqliteDeviceRepository : DeviceRepository {
         }
     }
 
+    override fun markAllOffline() {
+        transaction {
+            DeviceTable.update({ DeviceTable.isOnline eq true }) {
+                it[DeviceTable.isOnline] = false
+            }
+        }
+    }
+
     override fun updateLastSeen(id: String, timestamp: Long) {
         transaction {
             DeviceTable.update({ DeviceTable.id eq id }) {
                 it[DeviceTable.lastSeen] = timestamp
+            }
+        }
+    }
+
+    override fun updateName(id: String, newName: String) {
+        transaction {
+            DeviceTable.update({ DeviceTable.id eq id }) {
+                it[DeviceTable.name] = newName
             }
         }
     }

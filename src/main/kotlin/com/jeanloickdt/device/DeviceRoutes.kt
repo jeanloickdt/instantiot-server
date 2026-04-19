@@ -5,6 +5,7 @@ import com.jeanloickdt.device.domain.CreateDeviceRequest
 import com.jeanloickdt.device.domain.CreateDeviceResponse
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
+import com.jeanloickdt.device.domain.UpdateDeviceNameRequest
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
 import com.jeanloickdt.relay.SessionRegistry
@@ -93,6 +94,46 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 name      = body.name,
                 projectId = body.projectId,
                 token     = token
+            ))
+        }
+
+        // ============================================================
+        // PATCH /api/devices/{id}/name — renommer un device
+        // Ne touche pas la session TCP : le device ESP continue a emettre
+        // normalement, seul son label change cote serveur et apps.
+        // ============================================================
+        patch("/api/devices/{id}/name") {
+            val ownerId = call.principal<JWTPrincipal>()?.subject
+                ?: return@patch call.respond(HttpStatusCode.Unauthorized)
+
+            val deviceId = call.parameters["id"]
+                ?: return@patch call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+
+            val device = deviceRepository.findById(deviceId)
+
+            if (device == null || device.ownerId != ownerId) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Device not found"))
+                return@patch
+            }
+
+            val body = call.receive<UpdateDeviceNameRequest>()
+            val trimmed = body.name.trim()
+            if (trimmed.length < 2 || trimmed.length > 64) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "Name must be 2-64 characters")
+                )
+                return@patch
+            }
+
+            deviceRepository.updateName(deviceId, trimmed)
+
+            call.respond(HttpStatusCode.OK, DeviceResponse(
+                id        = device.id,
+                name      = trimmed,
+                projectId = device.projectId,
+                isOnline  = device.isOnline,
+                lastSeen  = device.lastSeen
             ))
         }
 
