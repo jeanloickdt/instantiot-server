@@ -7,6 +7,9 @@ import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.domain.ProjectResponse
 import com.jeanloickdt.project.domain.UpdateProjectLayoutRequest
 import com.jeanloickdt.project.domain.UpdateProjectNameRequest
+import com.jeanloickdt.relay.ControlEventBroadcaster
+import com.jeanloickdt.relay.DeviceOfflineReason
+import com.jeanloickdt.relay.SessionRegistry
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
 import com.jeanloickdt.widget.domain.WidgetRepository
 import io.ktor.http.*
@@ -166,7 +169,35 @@ fun Route.projectRoutes(
                 return@delete
             }
 
-            // cascade delete — ordre : history → widgets → devices → projet
+            // ─── Step 1 : kicker les devices encore connectes en TCP ──
+            // Avant le cascade delete, on recupere la liste des devices
+            // du projet et pour chacun on :
+            //   1. broadcast device_offline (reason=deleted) — informe
+            //      les apps qui regardent le projet (dashboard ouvert)
+            //   2. ferme la socket TCP si elle est active — sinon le
+            //      device ESP reste un fantome cote serveur, affiche
+            //      "online" alors que le projet est supprime
+            // Meme pattern que DELETE /api/devices/{id}.
+            val devicesToKick = deviceRepository.findAllByProject(projectId)
+            devicesToKick.forEach { d ->
+                ControlEventBroadcaster.deviceOffline(
+                    projectId = projectId,
+                    deviceId  = d.id,
+                    reason    = DeviceOfflineReason.DELETED
+                )
+                SessionRegistry.getDeviceSession(d.id)?.let { active ->
+                    try {
+                        active.socket.close()
+                    } catch (_: Exception) {
+                        // socket deja ferme ou I/O error — peu importe
+                    }
+                    // le finally du handleDeviceConnection retire la
+                    // session du SessionRegistry automatiquement
+                }
+            }
+
+            // ─── Step 2 : cascade delete DB ───────────────────────────
+            // ordre : history → widgets → devices → projet
             widgetHistoryRepository.deleteAllByProject(projectId)
             widgetRepository.deleteAllByProject(projectId)
             deviceRepository.deleteAllByProject(projectId)
