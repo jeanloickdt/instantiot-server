@@ -8,6 +8,8 @@ import com.jeanloickdt.device.domain.DeviceResponse
 import com.jeanloickdt.relay.CLIENT_SESSION_ID_HEADER
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
+import com.jeanloickdt.relay.DevicePayload
+import com.jeanloickdt.relay.DeviceUpdatedField
 import com.jeanloickdt.relay.SessionRegistry
 import io.ktor.http.*
 import io.ktor.server.auth.*
@@ -91,10 +93,15 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
 
             // realtime_sync : notifie les autres appareils du projet
-            ControlEventBroadcaster.deviceRegistered(
+            ControlEventBroadcaster.deviceCreated(
                 projectId = body.projectId,
-                deviceId = id,
-                deviceName = body.name,
+                device = DevicePayload(
+                    id = id,
+                    name = body.name,
+                    projectId = body.projectId,
+                    isOnline = false,
+                    lastSeen = null
+                ),
                 sourceSessionId = sourceSessionId
             )
 
@@ -208,6 +215,19 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 // le finally du handleDeviceConnection va retirer la session
                 // et broadcaster un device_offline reason=disconnected (accepte)
             }
+
+            val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
+
+            // realtime_sync : notifie les autres appareils que le device
+            // vient d'avoir son token renouvele (utile pour banner/toast
+            // "device has a new token" cote apps qui etaient sur l'ecran
+            // settings de ce device)
+            ControlEventBroadcaster.deviceUpdated(
+                projectId = device.projectId,
+                deviceId = deviceId,
+                field = DeviceUpdatedField.TOKEN_RENEWED,
+                sourceSessionId = sourceSessionId
+            )
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Token renewed — save this token, it will not be shown again",

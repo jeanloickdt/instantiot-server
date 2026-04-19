@@ -64,7 +64,6 @@ fun Route.projectRoutes(
                 ownerId = ownerId,
                 projectId = project.id,
                 name = project.name,
-                createdAt = project.createdAt,
                 sourceSessionId = sourceSessionId
             )
 
@@ -129,8 +128,7 @@ fun Route.projectRoutes(
             ControlEventBroadcaster.projectRenamed(
                 ownerId = ownerId,
                 projectId = updated.id,
-                name = updated.name,
-                updatedAt = updated.updatedAt,
+                newName = updated.name,
                 sourceSessionId = sourceSessionId
             )
 
@@ -164,7 +162,6 @@ fun Route.projectRoutes(
 
             val body = call.receive<UpdateProjectLayoutRequest>()
             projectRepository.updateLayout(projectId, body.layoutJson)
-            val updated = projectRepository.findById(projectId)!!
             val sourceSessionId = call.request.header(CLIENT_SESSION_ID_HEADER)
 
             // realtime_sync : broadcast layout aux autres appareils du
@@ -173,7 +170,6 @@ fun Route.projectRoutes(
             ControlEventBroadcaster.projectLayoutUpdated(
                 projectId = projectId,
                 layoutJson = body.layoutJson,
-                updatedAt = updated.updatedAt,
                 sourceSessionId = sourceSessionId
             )
 

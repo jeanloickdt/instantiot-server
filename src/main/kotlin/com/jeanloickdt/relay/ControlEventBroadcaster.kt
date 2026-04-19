@@ -12,49 +12,49 @@ import org.slf4j.LoggerFactory
  * Les events sont serialises en JSON et envoyes en Frame.Text (pour ne pas
  * entrer en conflit avec les Frame.Binary des trames iWidgets v1).
  *
- * Trois types d'events :
- *   - deviceOnline(projectId, deviceId, deviceName)
- *       → broadcast a toutes les apps qui regardent le projet
- *   - deviceOffline(projectId, deviceId, reason)
- *       → broadcast a toutes les apps qui regardent le projet
- *   - commandFailed(session, deviceId, reason, seq)
- *       → envoye a la session emettrice uniquement (pas un broadcast)
+ * Scope de diffusion :
+ *  - project : toutes les WS qui ont handshake sur le meme projectId
+ *  - user    : toutes les WS d'un user (peu importe le projet courant)
+ *
+ * Chaque methode accepte un `sourceSessionId` (optional) qui est juste
+ * relaye dans l'event — l'appareil emetteur se filtrera lui-meme.
  */
 object ControlEventBroadcaster {
 
     private val logger = LoggerFactory.getLogger("ControlEventBroadcaster")
     private val json = Json { encodeDefaults = false }
 
-    /**
-     * Device ESP vient de se connecter en TCP.
-     * Broadcast a toutes les apps du projet.
-     */
+    // ════════════════════════════════════════════════════════════════
+    // DEVICE TCP (events historiques — device_online / offline / command_failed)
+    // ════════════════════════════════════════════════════════════════
+
+    /** Device ESP vient de se connecter en TCP. Broadcast projet. */
     suspend fun deviceOnline(projectId: String, deviceId: String, deviceName: String) {
         val event = ControlEvent(
             type       = ControlEventType.DEVICE_ONLINE,
             deviceId   = deviceId,
-            deviceName = deviceName
+            deviceName = deviceName,
+            projectId  = projectId,
+            at         = System.currentTimeMillis()
         )
         broadcastToProject(projectId, event)
     }
 
-    /**
-     * Device ESP est deconnecte.
-     * reason : DISCONNECTED / TOKEN_RENEWED / DELETED
-     */
+    /** Device ESP deconnecte. reason : DISCONNECTED / TOKEN_RENEWED / DELETED. */
     suspend fun deviceOffline(projectId: String, deviceId: String, reason: String) {
         val event = ControlEvent(
-            type     = ControlEventType.DEVICE_OFFLINE,
-            deviceId = deviceId,
-            reason   = reason
+            type      = ControlEventType.DEVICE_OFFLINE,
+            deviceId  = deviceId,
+            reason    = reason,
+            projectId = projectId,
+            at        = System.currentTimeMillis()
         )
         broadcastToProject(projectId, event)
     }
 
     /**
-     * Commande App->Device a echoue.
-     * Envoye uniquement a la session emettrice (correlation via seq).
-     * reason : DEVICE_OFFLINE / FORBIDDEN / RELAY_ERROR
+     * Commande App->Device a echoue. Envoye uniquement a la session
+     * emettrice (correlation via seq).
      */
     suspend fun commandFailed(
         session: WebSocketSession,
@@ -66,134 +66,140 @@ object ControlEventBroadcaster {
             type     = ControlEventType.COMMAND_FAILED,
             deviceId = deviceId,
             reason   = reason,
-            seq      = seq
+            seq      = seq,
+            at       = System.currentTimeMillis()
         )
         sendEventToSession(session, event)
     }
 
     // ════════════════════════════════════════════════════════════════
-    // Realtime sync broadcasts — feature `realtime_sync`
+    // REALTIME SYNC — project_updated / created / deleted
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * Layout d'un projet mis a jour par un client. Broadcast a toutes
-     * les apps qui regardent ce projet (sauf l'emetteur, qui se filtrera
-     * lui-meme via `sourceSessionId`).
+     * Layout d'un projet a ete modifie. Broadcast projet-scope.
+     * Les appareils qui regardent ce projet appliqueront le nouveau
+     * layoutJson (apres filtrage anti-echo via sourceSessionId).
      */
     suspend fun projectLayoutUpdated(
         projectId: String,
         layoutJson: String,
-        updatedAt: Long,
         sourceSessionId: String?
     ) {
         val event = ControlEvent(
-            type = ControlEventType.PROJECT_LAYOUT_UPDATED,
-            projectId = projectId,
-            layoutJson = layoutJson,
-            updatedAt = updatedAt,
+            type            = ControlEventType.PROJECT_UPDATED,
+            projectId       = projectId,
+            field           = ProjectUpdatedField.LAYOUT,
+            layoutJson      = layoutJson,
+            at              = System.currentTimeMillis(),
             sourceSessionId = sourceSessionId
         )
         broadcastToProject(projectId, event)
     }
 
-    /**
-     * Un nouveau projet a ete cree. Broadcast aux autres appareils du
-     * meme owner (pas broadcast par projectId — ils ne peuvent pas
-     * encore y etre connectes).
-     */
+    /** Renommage d'un projet. Broadcast user-scope + project-scope. */
+    suspend fun projectRenamed(
+        ownerId: String,
+        projectId: String,
+        newName: String,
+        sourceSessionId: String?
+    ) {
+        val event = ControlEvent(
+            type            = ControlEventType.PROJECT_UPDATED,
+            projectId       = projectId,
+            field           = ProjectUpdatedField.NAME,
+            value           = newName,
+            at              = System.currentTimeMillis(),
+            sourceSessionId = sourceSessionId
+        )
+        // user-scope : tout appareil du user doit voir le nouveau nom dans sa liste
+        broadcastToUser(ownerId, event)
+    }
+
+    /** Creation d'un projet. User-scope. */
     suspend fun projectCreated(
         ownerId: String,
         projectId: String,
         name: String,
-        createdAt: Long,
         sourceSessionId: String?
     ) {
         val event = ControlEvent(
-            type = ControlEventType.PROJECT_CREATED,
-            projectId = projectId,
-            name = name,
-            createdAt = createdAt,
+            type            = ControlEventType.PROJECT_CREATED,
+            projectId       = projectId,
+            name            = name,
+            at              = System.currentTimeMillis(),
             sourceSessionId = sourceSessionId
         )
         broadcastToUser(ownerId, event)
     }
 
-    /** Un projet a ete renomme. */
-    suspend fun projectRenamed(
-        ownerId: String,
-        projectId: String,
-        name: String,
-        updatedAt: Long,
-        sourceSessionId: String?
-    ) {
-        val event = ControlEvent(
-            type = ControlEventType.PROJECT_RENAMED,
-            projectId = projectId,
-            name = name,
-            updatedAt = updatedAt,
-            sourceSessionId = sourceSessionId
-        )
-        broadcastToUser(ownerId, event)
-    }
-
-    /** Un projet a ete supprime. */
+    /** Suppression d'un projet. User-scope (les autres phones doivent refresh leur liste). */
     suspend fun projectDeleted(
         ownerId: String,
         projectId: String,
         sourceSessionId: String?
     ) {
         val event = ControlEvent(
-            type = ControlEventType.PROJECT_DELETED,
-            projectId = projectId,
+            type            = ControlEventType.PROJECT_DELETED,
+            projectId       = projectId,
+            at              = System.currentTimeMillis(),
             sourceSessionId = sourceSessionId
         )
         broadcastToUser(ownerId, event)
     }
 
-    /** Un device a ete enregistre (created). */
-    suspend fun deviceRegistered(
+    // ════════════════════════════════════════════════════════════════
+    // REALTIME SYNC — device_created / updated / deleted
+    // ════════════════════════════════════════════════════════════════
+
+    /** Device enregistre — carry le device complet (sans token). Project-scope. */
+    suspend fun deviceCreated(
         projectId: String,
-        deviceId: String,
-        deviceName: String,
+        device: DevicePayload,
         sourceSessionId: String?
     ) {
         val event = ControlEvent(
-            type = ControlEventType.DEVICE_REGISTERED,
-            projectId = projectId,
-            deviceId = deviceId,
-            deviceName = deviceName,
+            type            = ControlEventType.DEVICE_CREATED,
+            projectId       = projectId,
+            device          = device,
+            at              = System.currentTimeMillis(),
             sourceSessionId = sourceSessionId
         )
         broadcastToProject(projectId, event)
     }
 
-    /** Un device a ete renomme. */
-    suspend fun deviceRenamed(
+    /**
+     * Device modifie — pour V1 utilise uniquement pour renew-token.
+     * Le champ [field] discrimine le changement (DeviceUpdatedField).
+     */
+    suspend fun deviceUpdated(
         projectId: String,
         deviceId: String,
-        deviceName: String,
+        field: String,
         sourceSessionId: String?
     ) {
         val event = ControlEvent(
-            type = ControlEventType.DEVICE_RENAMED,
-            projectId = projectId,
-            deviceId = deviceId,
-            deviceName = deviceName,
+            type            = ControlEventType.DEVICE_UPDATED,
+            projectId       = projectId,
+            deviceId        = deviceId,
+            field           = field,
+            at              = System.currentTimeMillis(),
             sourceSessionId = sourceSessionId
         )
         broadcastToProject(projectId, event)
     }
 
-    /** Un device a ete supprime (distinct de DeviceOffline). */
+    /** Device supprime (distinct de device_offline reason=deleted). Project-scope. */
     suspend fun deviceDeleted(
         projectId: String,
         deviceId: String,
         sourceSessionId: String?
     ) {
         val event = ControlEvent(
-            type = ControlEventType.DEVICE_DELETED,
-            projectId = projectId,
-            deviceId = deviceId,
+            type            = ControlEventType.DEVICE_DELETED,
+            projectId       = projectId,
+            deviceId        = deviceId,
+            at              = System.currentTimeMillis(),
             sourceSessionId = sourceSessionId
         )
         broadcastToProject(projectId, event)
@@ -218,10 +224,9 @@ object ControlEventBroadcaster {
     }
 
     /**
-     * Broadcast a TOUTES les sessions WS d'un user (tous appareils
-     * connectes, peu importe le projet actuellement ouvert). Utilise
-     * pour les changements de liste de projets (creation, suppression)
-     * qui doivent etre vus meme depuis la liste Maker Pro.
+     * Broadcast a TOUTES les sessions WS d'un user. Utilise pour les
+     * events user-scope (project_created/renamed/deleted) qui doivent
+     * reacher les autres appareils meme s'ils ne sont pas sur ce projet.
      */
     private suspend fun broadcastToUser(userId: String, event: ControlEvent) {
         val jsonText = json.encodeToString(event)
@@ -241,7 +246,7 @@ object ControlEventBroadcaster {
         try {
             session.send(Frame.Text(jsonText))
         } catch (e: Exception) {
-            logger.warn("Failed to send command_failed event — ${e.message}")
+            logger.warn("Failed to send single-session event — ${e.message}")
         }
     }
 }
