@@ -10,6 +10,8 @@ import com.jeanloickdt.project.domain.UpdateProjectNameRequest
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
 import com.jeanloickdt.relay.SessionRegistry
+import io.ktor.websocket.CloseReason
+import io.ktor.websocket.close
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
 import com.jeanloickdt.widget.domain.WidgetRepository
 import io.ktor.http.*
@@ -196,7 +198,30 @@ fun Route.projectRoutes(
                 }
             }
 
-            // ─── Step 2 : cascade delete DB ───────────────────────────
+            // ─── Step 2 : fermer les WS app-sessions de ce projet ────
+            // Les apps qui avaient ce dashboard ouvert (phone2, tablet,
+            // autre appareil du meme user…) restaient sur une WS qui
+            // handshake un projectId defunct. On les ferme proprement
+            // avec un CloseReason.NORMAL + message → cote client la B6
+            // "disconnect dialog" se declenche et l'user peut revenir
+            // a la liste.
+            val appSessionsToKick = SessionRegistry.getAppSessionsForProject(projectId)
+            appSessionsToKick.forEach { appSession ->
+                try {
+                    appSession.session.close(
+                        CloseReason(
+                            CloseReason.Codes.NORMAL,
+                            "Project deleted"
+                        )
+                    )
+                } catch (_: Exception) {
+                    // WS deja ferme ou I/O error — peu importe
+                }
+                // le finally du appWebSocket handler retire la session
+                // du SessionRegistry automatiquement
+            }
+
+            // ─── Step 3 : cascade delete DB ───────────────────────────
             // ordre : history → widgets → devices → projet
             widgetHistoryRepository.deleteAllByProject(projectId)
             widgetRepository.deleteAllByProject(projectId)
