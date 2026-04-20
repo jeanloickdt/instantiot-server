@@ -292,6 +292,9 @@ tcp.port=9001
 2. embeddedServer(port=httpPort)     &lt;- Demarrer Ktor/Netty
 3. install(ContentNegotiation, StatusPages, CORS, RateLimit)
 4. DatabaseFactory.init()            &lt;- SQLite WAL + tables + index
+4b. deviceRepository.markAllOffline()  &lt;- Reset isOnline=false pour tous les devices
+                                         (cleanup apres kill abrupt qui skip le finally
+                                          de handleDeviceConnection)
 5. Compte admin auto-genere si count==0 (password 16 chars SecureRandom)
 6. configureAuth()                   &lt;- JWT HMAC256
 7. startDeviceRelay(tcpPort)         &lt;- TCP relay dans coroutine IO
@@ -532,19 +535,49 @@ if (resource == null || resource.ownerId != userId) {
 <h3>DeviceRelay — TCP (port configurable, defaut 9001)</h3>
 <p><strong>Fichier</strong> : <code>relay/DeviceRelay.kt</code></p>
 <pre><code>1. ESP ouvre connexion TCP
-2. Handshake : [TOKEN_LEN(1B) | TOKEN_BYTES]
+2. Handshake : [PAYLOAD_LEN(1B) | PAYLOAD_BYTES]
+   payload = "token"              (legacy, pas d'annonce de heartbeat)
+   payload = "token:heartbeatMs"  (nouveau, lib Arduino avec Instant.setHeartbeat(ms))
 3. Server SHA-256(token) -> lookup DeviceTable
 4. Authentifie -> session dans SessionRegistry, device online
+   soTimeout ajuste selon heartbeatMs :
+     - heartbeatMs declare -> soTimeout = heartbeatMs * 2.5 (clamp 2s..120s)
+     - legacy              -> soTimeout = 90s
 5. Boucle : trame binaire iWidgets v1
-   a. extractWidgetId + extractPayload
-   b. lastPayloads[widgetId] = payload (RAM, sub-ms)
-   c. historyBuffer.add(entry) (flush 5s)
-   d. widgetRepository.updateLastPayload (async IO)
-   e. broadcast trame aux apps du projet (WebSocket)
-6. Deconnexion -> device offline, session retiree
+   a. TYPE = 0xFE (heartbeat) -> skip dispatch, la reception reset le soTimeout
+   b. sinon extractWidgetId + extractPayload
+   c. lastPayloads[widgetId] = payload (RAM, sub-ms)
+   d. historyBuffer.add(entry) (flush 5s)
+   e. widgetRepository.updateLastPayload (async IO)
+   f. broadcast trame aux apps du projet (WebSocket)
+6. Deconnexion (socket close / soTimeout / exception)
+   -> finally : updateOnlineStatus(false), unregisterDevice
+   -> broadcast device_offline (reason=disconnected)
 </code></pre>
 
-<div class="security"><strong>Protections TCP</strong> : keepalive, timeout 90s, body max 1024 bytes, CRC8 verifie.</div>
+<div class="security"><strong>Protections TCP</strong> : keepalive, soTimeout adaptatif (= heartbeat x 2.5), HANDSHAKE_TIMEOUT_MS = 10s pre-handshake, body max 1024 bytes, CRC8 verifie.</div>
+
+<h4>Heartbeat (detection offline rapide)</h4>
+<p>
+La lib Arduino InstantIoT envoie toutes les <code>heartbeatMs</code> (defaut 5000 ms)
+une trame dediee <code>TYPE=0xFE</code> (<code>DEV_COUNT=0 | WID_LEN=0 | TYPE=0xFE | EVENT=0 | CRC</code>).
+Le serveur la valide (CRC/sync) mais ne dispatch rien aux apps et ne persiste pas :
+la simple reception d'un byte reset le <code>soTimeout</code> OS-level.
+</p>
+<p>
+Si aucune trame (widget OU heartbeat) n'arrive dans la fenetre
+<code>heartbeatMs x 2.5</code>, la <code>SocketTimeoutException</code> propagee
+declenche le <code>finally</code> -> <code>updateOnlineStatus(false)</code> +
+broadcast <code>device_offline</code> aux apps connectees au projet.
+Detection typique avec heartbeat=5s : ~12.5s max apres unplug / Wi-Fi drop / ESP crash.
+</p>
+
+<p>
+Cote API Arduino : <code>Instant.setHeartbeat(uint32_t ms)</code> dans le <code>setup()</code>
+(avant <code>begin()</code>). La facade <code>InstantIoTWiFiServer</code> force a la fois
+l'annonce au handshake (transport) et l'emission periodique via <code>loop()</code>
+(couche core). Mettre <code>0</code> desactive le heartbeat (mode legacy, serveur 90s).
+</p>
 
 <h3>AppRelay — WebSocket <code>/ws/app</code></h3>
 <p><strong>Fichier</strong> : <code>relay/AppRelay.kt</code></p>
@@ -554,11 +587,10 @@ if (resource == null || resource.ownerId != userId) {
 4. Session enregistree (multi-session supporte)
 5. Boucle : trames binaires (commandes)
    a. extractDeviceIds(frame) -> IDs cibles
-   b. extractSeq(frame) -> byte SEQ pour correlation eventuelle d'un command_failed
-   c. Ownership per-frame : deviceSession.device.ownerId == userId (in-memory)
-   d. trimDeviceHeader(frame) -> DEV_COUNT=0
-   e. relay TCP vers devices cibles
-   f. Si echec (offline / forbidden / I/O error) -> envoi Frame.Text command_failed a la session
+   b. Ownership per-frame : deviceSession.device.ownerId == userId (in-memory)
+   c. trimDeviceHeader(frame) -> DEV_COUNT=0
+   d. relay TCP vers devices cibles (via DeviceOutbox serialise + backpressure)
+   e. Si echec (offline / forbidden / I/O error) -> envoi Frame.Text command_failed a la session
 6. Deconnexion -> session specifique retiree
 </code></pre>
 
@@ -589,7 +621,8 @@ if (resource == null || resource.ownerId != userId) {
     <td><code>{type, deviceId, reason}</code></td>
     <td>
       <ul style="margin:0; padding-left:16px;">
-        <li><code>reason=disconnected</code> → TCP close / timeout 90s (finally de <code>handleDeviceConnection</code>)</li>
+        <li><code>reason=disconnected</code> → TCP close / soTimeout (finally de <code>handleDeviceConnection</code>).
+            <br/>soTimeout = <code>heartbeatMs x 2.5</code> (legacy: 90s). Detection sous ~12.5s avec heartbeat 5s.</li>
         <li><code>reason=token_renewed</code> → admin a appele <code>POST /api/devices/{id}/renew-token</code></li>
         <li><code>reason=deleted</code> → admin a appele <code>DELETE /api/devices/{id}</code></li>
       </ul>
@@ -598,14 +631,13 @@ if (resource == null || resource.ownerId != userId) {
   <tr>
     <td><code>command_failed</code></td>
     <td>Server → session emettrice uniquement</td>
-    <td><code>{type, deviceId, reason, seq}</code></td>
+    <td><code>{type, deviceId, reason}</code></td>
     <td>
       <ul style="margin:0; padding-left:16px;">
         <li><code>reason=device_offline</code> → session TCP absente ou socket ferme</li>
         <li><code>reason=forbidden</code> → device appartient a un autre user</li>
         <li><code>reason=relay_error</code> → exception lors de l'ecriture TCP vers le device</li>
       </ul>
-      Le champ <code>seq</code> reprend le byte SEQ de la trame entrante pour que l'app correle la reponse avec la commande envoyee.
     </td>
   </tr>
 </table>
@@ -631,14 +663,14 @@ DELETE device        → ControlEventBroadcaster.deviceOffline(..., "deleted")  
   → relayFrameToDevices(session, userId, frameBytes)
   → pour chaque targetDeviceId :
       - deviceSessions[targetDeviceId] absent/socket closed
-          → commandFailed(session, deviceId, "device_offline", seq) sur la session emettrice
+          → commandFailed(session, deviceId, "device_offline") sur la session emettrice
       - deviceSession.device.ownerId != userId
-          → commandFailed(session, deviceId, "forbidden", seq)
-      - exception lors de socket.write()
-          → unregisterDevice + commandFailed(session, deviceId, "relay_error", seq)
+          → commandFailed(session, deviceId, "forbidden")
+      - outbox ferme / exception lors de l'ecriture TCP
+          → unregisterDevice + commandFailed(session, deviceId, "relay_error")
 </code></pre>
 
-<div class="note"><strong>Contrat app (B5)</strong> : l'app maintient un registre <code>pendingCommands: Map&lt;seq, (deviceId, timeout)&gt;</code> sur les commandes envoyees. A la reception d'un <code>command_failed</code>, elle match sur <code>seq</code> pour revert l'UI optimiste et afficher un toast contextuel ("Device hors ligne", etc.). Timeout 2s cote app obligatoire pour les cas ou le serveur n'a rien envoye (ex: WS coupe).</div>
+<div class="note"><strong>Contrat app</strong> : a la reception d'un <code>command_failed</code>, l'app affiche un toast contextuel ("Device hors ligne", etc.). Pas de correlation fine par commande — les echecs restent rares et l'user voit simplement l'action qui n'a pas eu d'effet (LED qui ne s'allume pas, etc.).</div>
 
 <!-- ============================================================ -->
 <!-- 9. PROTOCOLE BINAIRE -->
@@ -648,22 +680,23 @@ DELETE device        → ControlEventBroadcaster.deviceOffline(..., "deleted")  
 <p><strong>Fichier</strong> : <code>relay/FrameParser.kt</code></p>
 
 <h3>Format de trame</h3>
-<pre><code>+------+-----+----------+-----+-----------+---------------------+---------------------------------+------+
-| 0xAA | VER | LEN (2B) | SEQ | DEV_COUNT | [DEV_LEN|DEV_ID]*N | WID_LEN|WID|TYPE|EVENT|PAYLOAD  | CRC8 |
-|  1B  | 1B  |  LE      | 1B  |    1B     |    variable         |           variable              |  1B  |
-+------+-----+----------+-----+-----------+---------------------+---------------------------------+------+
+<pre><code>+------+-----+----------+-----------+---------------------+---------------------------------+------+
+| 0xAA | VER | LEN (2B) | DEV_COUNT | [DEV_LEN|DEV_ID]*N | WID_LEN|WID|TYPE|EVENT|PAYLOAD  | CRC8 |
+|  1B  | 1B  |  LE      |    1B     |    variable         |           variable              |  1B  |
++------+-----+----------+-----------+---------------------+---------------------------------+------+
 </code></pre>
+
+<p><strong>Pas de numero de sequence</strong> : tous les transports supportes (TCP/WebSocket/BT RFCOMM/BT BLE/Serial) garantissent un ordonnancement fiable sans duplication. Un SEQ applicatif ne couvrirait aucun scenario reel et causait des drops silencieux apres redemarrage de l'app ou du device.</p>
 
 <table>
   <tr><th>Champ</th><th>Taille</th><th>Description</th></tr>
   <tr><td><code>0xAA</code></td><td>1B</td><td>Sync byte</td></tr>
   <tr><td><code>VER</code></td><td>1B</td><td><code>0x01</code></td></tr>
   <tr><td><code>LEN</code></td><td>2B LE</td><td>Taille du body (max 1024)</td></tr>
-  <tr><td><code>SEQ</code></td><td>1B</td><td>Numero de sequence</td></tr>
   <tr><td><code>DEV_COUNT</code></td><td>1B</td><td>0 = device->app, N = app->devices</td></tr>
   <tr><td><code>DEV_LEN|DEV_ID</code></td><td>var</td><td>UUID device cible (repete N fois)</td></tr>
   <tr><td><code>WID_LEN|WID</code></td><td>var</td><td>UUID du widget</td></tr>
-  <tr><td><code>TYPE</code></td><td>1B</td><td>Type (serveur ne l'interprete pas)</td></tr>
+  <tr><td><code>TYPE</code></td><td>1B</td><td>Type. Le serveur ne l'interprete pas, <strong>sauf</strong> <code>0xFE</code> (heartbeat) qu'il intercepte pour reset le soTimeout sans dispatcher.</td></tr>
   <tr><td><code>EVENT</code></td><td>1B</td><td>Evenement (serveur ne l'interprete pas)</td></tr>
   <tr><td><code>PAYLOAD</code></td><td>var</td><td>Donnees opaques (stockees base64)</td></tr>
   <tr><td><code>CRC8</code></td><td>1B</td><td>CRC-8/SMBUS (poly 0x07) sur le body</td></tr>
@@ -673,7 +706,8 @@ DELETE device        → ControlEventBroadcaster.deviceOffline(..., "deleted")  
 <table>
   <tr><th>Methode</th><th>Direction</th><th>Description</th></tr>
   <tr><td><code>isValid(frame)</code></td><td>Les deux</td><td>Sync + version + taille + CRC8</td></tr>
-  <tr><td><code>extractSeq(frame)</code></td><td>Les deux</td><td>Byte SEQ (index 4) pour correlation <a href="#control-events"><code>command_failed</code></a></td></tr>
+  <tr><td><code>extractType(frame)</code></td><td>Device->Server</td><td>Byte TYPE. Utilise par DeviceRelay pour detecter les heartbeats (<code>0xFE</code>) et skip le dispatch applicatif.</td></tr>
+  <tr><td><code>isStreamingCommand(frame)</code></td><td>App->Server</td><td>Classifie la trame comme streaming (slider ValueChanging, joystick PositionChanged) pour la backpressure outbox.</td></tr>
   <tr><td><code>extractWidgetId(frame)</code></td><td>Device->Server</td><td>UUID widget de la trame</td></tr>
   <tr><td><code>extractPayload(frame)</code></td><td>Device->Server</td><td>Bytes opaques (stockes base64)</td></tr>
   <tr><td><code>extractDeviceIds(frame)</code></td><td>App->Server</td><td>UUIDs devices cibles</td></tr>
@@ -855,9 +889,8 @@ UpdateConfigResponse(message, httpPort, tcpPort)
   type: String,            // "device_online" | "device_offline" | "command_failed"
   deviceId: String?,       // present pour tous les types
   deviceName: String?,     // present sur device_online
-  reason: String?,         // device_offline: "disconnected" | "token_renewed" | "deleted"
+  reason: String?          // device_offline: "disconnected" | "token_renewed" | "deleted"
                            // command_failed: "device_offline" | "forbidden" | "relay_error"
-  seq: Int?                // command_failed seulement — byte SEQ de la trame emise
 )
 
 // Constantes centralisees :
@@ -1123,10 +1156,25 @@ python3 test-relay.py   # ou .venv/bin/python3 test-relay.py</code></pre>
   <li>✅ <code>FrameParser.extractSeq()</code> pour correlation app/serveur</li>
 </ul>
 
+<h3>Fait recemment (heartbeat + detection offline rapide)</h3>
+<ul>
+  <li>✅ Handshake etendu <code>"token:heartbeatMs"</code> negocie par le device
+      (backward-compatible avec legacy <code>"token"</code> seul → 90s)</li>
+  <li>✅ <code>soTimeout = heartbeatMs × 2.5</code> (clamp 2s..120s) — detection offline
+      sous ~12.5s avec le defaut 5s vs 90s avant</li>
+  <li>✅ <code>TYPE_HEARTBEAT = 0xFE</code> : trame dediee emise par la lib Arduino
+      (<code>Instant.setHeartbeat(ms)</code>). Le serveur skip le dispatch
+      applicatif, la reception reset juste le soTimeout.</li>
+  <li>✅ <code>FrameParser.extractType()</code> pour discriminer heartbeat vs widget frame</li>
+  <li>✅ <code>deviceRepository.markAllOffline()</code> au startup : cleanup des
+      <code>isOnline=true</code> stale apres un kill abrupt (Ctrl+C qui skip
+      le <code>finally</code> de <code>handleDeviceConnection</code>)</li>
+</ul>
+
 <h3>En cours / a faire</h3>
 <table>
   <tr><th>Sujet</th><th>Priorite</th><th>Details</th></tr>
-  <tr><td>Tests E2E control events</td><td><span class="badge badge-red">Critique</span></td><td>Etendre <code>test-relay.py</code> pour lire les Frame.Text et verifier device_online / device_offline (3 reasons) / command_failed (3 reasons avec seq).</td></tr>
+  <tr><td>Tests E2E control events</td><td><span class="badge badge-red">Critique</span></td><td>Etendre <code>test-relay.py</code> pour lire les Frame.Text et verifier device_online / device_offline (3 reasons) / command_failed (3 reasons).</td></tr>
   <tr><td>Apple Developer Certificate</td><td><span class="badge badge-orange">V1</span></td><td>Signer le .app pour que le double-clic fonctionne sans Gatekeeper (99$/an Apple Developer). Le launcher .command est le workaround actuel.</td></tr>
   <tr><td>CI/CD multi-plateforme</td><td><span class="badge badge-orange">V1</span></td><td>GitHub Actions pour builder .dmg (macOS) + .msi (Windows) + .deb (Linux) automatiquement a chaque release.</td></tr>
   <tr><td>Tests automatises unitaires</td><td><span class="badge badge-orange">V1</span></td><td>Couvrir auth, routes CRUD, relay, FrameParser. Le test existant est casse (config JWT).</td></tr>

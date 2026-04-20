@@ -23,8 +23,7 @@ data class ControlEvent(
     val type: String,
     val deviceId: String? = null,
     val deviceName: String? = null,
-    val reason: String? = null,   // motif pour device_offline et command_failed
-    val seq: Int? = null          // byte SEQ de la trame pour correlation command_failed
+    val reason: String? = null   // motif pour device_offline et command_failed
 )
 
 /**

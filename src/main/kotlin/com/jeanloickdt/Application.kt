@@ -150,6 +150,14 @@ fun Application.module() {
         WidgetHistoryTable
     )
 
+    // Reset stale online state : si le server a été kill abruptement
+    // (Ctrl+C qui skip le `finally` de `handleDevice`), la DB peut
+    // garder `isOnline=true` pour des devices qui n'ont plus de session
+    // TCP active. Au démarrage, aucune session n'existe → tout doit
+    // être offline, les devices passeront online dès qu'ils se
+    // reconnecteront et enverront leur handshake.
+    deviceRepository.markAllOffline()
+
     // flush final au shutdown — aucune donnée du buffer perdue
     monitor.subscribe(ApplicationStopping) {
         kotlinx.coroutines.runBlocking {

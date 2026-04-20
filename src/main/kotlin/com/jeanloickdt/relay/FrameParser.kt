@@ -8,7 +8,7 @@ import java.util.Base64
  * Parser de trames binaires iWidgets v1
  *
  * Format trame complète :
- * AA | VER(01) | LEN(2B LE) | SEQ(1B) | DEV_COUNT | [DEV_LEN|DEV_ID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD... | CRC8
+ * AA | VER(01) | LEN(2B LE) | DEV_COUNT | [DEV_LEN|DEV_ID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD... | CRC8
  *
  * Le server est un dumb relay — il ne lit jamais TYPE, EVENT ni le contenu du PAYLOAD.
  * Il extrait uniquement ce dont il a besoin pour router et stocker.
@@ -20,14 +20,14 @@ import java.util.Base64
 object FrameParser {
 
     // Taille minimale d'une trame valide
-    // AA(1) + VER(1) + LEN(2) + SEQ(1) + body(min 1) + CRC(1) = 7
-    private const val MIN_FRAME_SIZE = 7
+    // AA(1) + VER(1) + LEN(2) + body(min 1) + CRC(1) = 6
+    private const val MIN_FRAME_SIZE = 6
 
     private const val SYNC_BYTE: Int    = 0xAA
     private const val VERSION_BYTE: Int = 0x01
 
-    // Header fixe : AA + VER + LEN(2) + SEQ = 5 bytes
-    private const val FIXED_HEADER_SIZE = 5
+    // Header fixe : AA + VER + LEN(2) = 4 bytes
+    private const val FIXED_HEADER_SIZE = 4
 
     // ================================================================
     // VALIDATION
@@ -55,27 +55,13 @@ object FrameParser {
     }
 
     // ================================================================
-    // EXTRACTION — byte SEQ (correlation command_failed)
-    // ================================================================
-
-    /**
-     * Extrait le byte SEQ de la trame (position 4, apres AA | VER | LEN).
-     * Utilise pour la correlation des events command_failed cote app.
-     * Retourne null si la trame est trop courte.
-     */
-    fun extractSeq(frame: ByteArray): Int? {
-        if (frame.size < FIXED_HEADER_SIZE) return null
-        return frame[4].toInt() and 0xFF
-    }
-
-    // ================================================================
     // EXTRACTION — Device → Server → App
     // L'ESP envoie DEV_COUNT=0 — pas de device cible dans cette direction
     // ================================================================
 
     /**
      * Extrait le widget ID de la trame envoyée par l'ESP.
-     * Position : après AA | VER | LEN | SEQ | DEV_COUNT(0) | WID_LEN | WID
+     * Position : après AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
      */
     fun extractWidgetId(frame: ByteArray): String? {
         return try {
@@ -93,6 +79,98 @@ object FrameParser {
             frame.decodeToString(offset, offset + widgetIdLength)
         } catch (e: Exception) {
             null
+        }
+    }
+
+    /**
+     * Extrait le byte TYPE d'une trame device→server.
+     *
+     * Position : après AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
+     *
+     * Utilisé pour distinguer les trames applicatives (widget updates)
+     * des trames de service comme le heartbeat (`TYPE = 0xFE`).
+     */
+    fun extractType(frame: ByteArray): Int? {
+        return try {
+            var offset = FIXED_HEADER_SIZE
+            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N
+            val deviceCount = frame[offset++].toInt() and 0xFF
+            repeat(deviceCount) {
+                val deviceIdLength = frame[offset++].toInt() and 0xFF
+                offset += deviceIdLength
+            }
+            // skip WID_LEN + WID
+            val widgetIdLength = frame[offset++].toInt() and 0xFF
+            offset += widgetIdLength
+            // TYPE
+            frame[offset].toInt() and 0xFF
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // ================================================================
+    // STREAMING CLASSIFICATION — backpressure DeviceOutbox
+    // ================================================================
+
+    // Codes iWidgets v1 — synchronisés avec app `BinaryProtocolCodes.kt`.
+    // Si ces valeurs changent côté app, il faut les mettre à jour ici.
+    private const val TYPE_JOYSTICK: Int = 0x04
+    private const val TYPE_HSLIDER: Int  = 0x0A
+    private const val TYPE_VSLIDER: Int  = 0x0B
+
+    private const val CMD_POSITION_CHANGED: Int = 0x01  // joystick drag
+    private const val CMD_VALUE_CHANGING: Int   = 0x10  // slider drag
+
+    /**
+     * Identifie les commandes émises par un **geste continu** (drag
+     * slider, joystick actif). Ces frames arrivent à 20 Hz pendant toute
+     * la durée du geste et saturent le pipe TCP → ESP si toutes
+     * transmises.
+     *
+     * Streaming actuellement reconnus :
+     * - HSlider `CMD_VALUE_CHANGING`    (type=0x0A, event=0x10)
+     * - VSlider `CMD_VALUE_CHANGING`    (type=0x0B, event=0x10)
+     * - Joystick `CMD_POSITION_CHANGED` (type=0x04, event=0x01)
+     *
+     * Toute autre trame est considérée **discrète** et doit arriver
+     * intacte (Press, Release, Toggle, ValueChanged final, DragStarted,
+     * DragEnded, Released joystick, SetValue switch, etc.).
+     *
+     * Appelé sur la trame **originale** (avant trim) — le format est
+     * identique côté type/event.
+     *
+     * @return `true` si streaming (peut être droppée sous backpressure),
+     *         `false` sinon ou si la frame est invalide/incomplète.
+     */
+    fun isStreamingCommand(frame: ByteArray): Boolean {
+        return try {
+            var offset = FIXED_HEADER_SIZE
+
+            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N
+            val deviceCount = frame[offset++].toInt() and 0xFF
+            repeat(deviceCount) {
+                val deviceIdLength = frame[offset++].toInt() and 0xFF
+                offset += deviceIdLength
+            }
+
+            // skip WID_LEN + WID
+            val widgetIdLength = frame[offset++].toInt() and 0xFF
+            offset += widgetIdLength
+
+            // TYPE
+            val type = frame[offset++].toInt() and 0xFF
+            // EVENT
+            val event = frame[offset].toInt() and 0xFF
+
+            when (type) {
+                TYPE_HSLIDER, TYPE_VSLIDER -> event == CMD_VALUE_CHANGING
+                TYPE_JOYSTICK              -> event == CMD_POSITION_CHANGED
+                else                       -> false
+            }
+        } catch (e: Exception) {
+            // Trame mal formée → safe default : non-streaming, pas de drop
+            false
         }
     }
 
@@ -167,8 +245,8 @@ object FrameParser {
      * Trim le header DEV de la trame App → Device.
      * Retire DEV_COUNT + [DEV_LEN|DEV_ID]×N et recalcule LEN + CRC.
      *
-     * Trame originale : AA | VER | LEN | SEQ | DEV_COUNT | [DEV_UUID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
-     * Trame trimée    : AA | VER | LEN | SEQ | 00                        | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
+     * Trame originale : AA | VER | LEN | DEV_COUNT | [DEV_UUID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
+     * Trame trimée    : AA | VER | LEN | 00                        | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
      *
      * L'ESP reçoit une trame identique au mode Direct — DEV_COUNT = 0.
      */
@@ -206,7 +284,6 @@ object FrameParser {
                 frame[1],               // VER
                 trimmedLenBytes[0],     // LEN low byte
                 trimmedLenBytes[1],     // LEN high byte
-                frame[4],               // SEQ — conservé tel quel
             ) + trimmedBody + byteArrayOf(trimmedCrc.toByte())
         } catch (e: Exception) {
             null

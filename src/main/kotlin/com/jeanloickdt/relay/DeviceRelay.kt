@@ -20,6 +20,38 @@ private val logger = LoggerFactory.getLogger("DeviceRelay")
 // Taille max du body d'une trame TCP — protège contre les frames malveillantes
 private const val MAX_FRAME_BODY_SIZE = 1024
 
+// ════════════════════════════════════════════════════════════════════
+// Session timeouts
+// ════════════════════════════════════════════════════════════════════
+
+// Fenêtre provisoire pour lire le handshake (avant de connaître le
+// heartbeat déclaré par le device). Évite qu'un client muet bloque un
+// thread indéfiniment.
+private const val HANDSHAKE_TIMEOUT_MS = 10_000
+
+// Borne basse du soTimeout post-handshake. Protège contre un device qui
+// déclare heartbeat=50ms → timeout 125ms qui timeout-loop immédiatement.
+private const val MIN_SESSION_TIMEOUT_MS = 2_000L
+
+// Borne haute du soTimeout post-handshake. Protège contre un device qui
+// déclare heartbeat=1h → détection offline inutilement lente.
+private const val MAX_SESSION_TIMEOUT_MS = 120_000L
+
+// Fallback legacy — device qui n'envoie pas `:heartbeatMs` au handshake.
+// Valeur historique (90s) pour garder la compat.
+private const val LEGACY_SESSION_TIMEOUT_MS = 90_000L
+
+// ════════════════════════════════════════════════════════════════════
+// Protocole iWidgets v1 — type byte dédié au heartbeat
+// ════════════════════════════════════════════════════════════════════
+
+// Type = 0xFE : trame de heartbeat émise par le device toutes les
+// `heartbeatMs` (lib Arduino). Le serveur la valide (CRC/sync) mais
+// **ne dispatch pas** — pas d'event widget, pas de persist. Sa seule
+// fonction côté serveur est de reset le soTimeout (ce que l'OS fait
+// automatiquement dès qu'on reçoit un byte).
+internal const val TYPE_HEARTBEAT: UByte = 0xFEu
+
 /**
  * TCP relay — connexions devices ESP32/ESP8266.
  *
@@ -91,19 +123,29 @@ private suspend fun handleDeviceConnection(
 
         // keepalive TCP — OS détecte si le device disparaît sans fermer le socket
         clientSocket.keepAlive = true
-        // timeout 90s — readFrame retourne null si rien reçu → device offline
-        clientSocket.soTimeout = 90_000
+        // soTimeout provisoire avant handshake (évite de bloquer sur un client muet)
+        clientSocket.soTimeout = HANDSHAKE_TIMEOUT_MS
 
-        // handshake — lire le token envoyé par l'ESP
-        val deviceToken = readDeviceToken(inputStream)
-        if (deviceToken == null) {
+        // handshake — format : "token" (legacy, 90s timeout) ou
+        //                       "token:heartbeatMs" (nouveau, soTimeout adaptatif)
+        val handshake = readDeviceHandshake(inputStream)
+        if (handshake == null) {
             logger.warn("Invalid handshake from $deviceAddress — closing connection")
             clientSocket.close()
             return
         }
 
+        // Post-handshake : ajuster le soTimeout selon le heartbeat annoncé.
+        // - Si heartbeat déclaré : soTimeout = heartbeat × 2.5 (tolère 2 miss + jitter)
+        // - Sinon (legacy) : 90s fallback
+        val sessionTimeoutMs = handshake.heartbeatMs?.let { hb ->
+            (hb * 25 / 10).coerceIn(MIN_SESSION_TIMEOUT_MS, MAX_SESSION_TIMEOUT_MS)
+        } ?: LEGACY_SESSION_TIMEOUT_MS
+        clientSocket.soTimeout = sessionTimeoutMs.toInt()
+        logger.info("Handshake OK — token=${handshake.token.take(8)}… heartbeat=${handshake.heartbeatMs ?: "legacy"}ms timeout=${sessionTimeoutMs}ms")
+
         // vérifier le token — SHA-256 lookup dans DeviceTable
-        val tokenHash = FrameParser.hashDeviceToken(deviceToken)
+        val tokenHash = FrameParser.hashDeviceToken(handshake.token)
         val device = withContext(Dispatchers.IO) {
             deviceRepository.findByTokenHash(tokenHash)
         }
@@ -114,8 +156,11 @@ private suspend fun handleDeviceConnection(
             return
         }
 
-        // device authentifié — enregistrer la session + marquer online
-        SessionRegistry.registerDevice(device.id, device, clientSocket)
+        // device authentifié — enregistrer la session + marquer online.
+        // On passe `applicationScope` à l'outbox → sa coroutine
+        // consommatrice survit à la coroutine `handleDeviceConnection`
+        // et s'arrête proprement via `unregisterDevice`.
+        SessionRegistry.registerDevice(device.id, device, clientSocket, applicationScope)
         withContext(Dispatchers.IO) {
             deviceRepository.updateOnlineStatus(device.id, isOnline = true)
             deviceRepository.updateLastSeen(device.id, System.currentTimeMillis())
@@ -193,6 +238,13 @@ private suspend fun handleDeviceFrame(
     widgetRepository: WidgetRepository,
     applicationScope: CoroutineScope
 ) {
+    // Heartbeat (TYPE = 0xFE) : la réception du byte reset automatiquement
+    // le soTimeout OS — aucune DB ni broadcast, on retourne early.
+    // `last_seen` était déjà MAJ au connect et sera updaté sur la prochaine
+    // vraie trame widget. Pas besoin de flood la DB pour chaque heartbeat.
+    val type = FrameParser.extractType(frameBytes)
+    if (type == TYPE_HEARTBEAT.toInt()) return
+
     val widgetId      = FrameParser.extractWidgetId(frameBytes) ?: return
     val payloadBytes  = FrameParser.extractPayload(frameBytes)  ?: return
     val payloadBase64 = FrameParser.encodePayloadToBase64(payloadBytes)
@@ -241,20 +293,51 @@ private suspend fun broadcastToApps(projectId: String, frameBytes: ByteArray) {
  * Lit le handshake initial de l'ESP.
  * Format : TOKEN_LEN(1B) | TOKEN_BYTES
  */
-private fun readDeviceToken(inputStream: InputStream): String? {
-    return try {
-        val tokenLength = inputStream.read()
-        if (tokenLength <= 0) return null
+/**
+ * Résultat du handshake device.
+ *
+ * @param token UUID du device (clé d'authentification, hash en DB)
+ * @param heartbeatMs intervalle déclaré par la lib Arduino via
+ *                    `Instant.setHeartbeat(ms)`. `null` = device
+ *                    legacy qui n'a pas annoncé d'intervalle
+ *                    (serveur fallback à 90s de soTimeout).
+ */
+private data class HandshakeResult(
+    val token: String,
+    val heartbeatMs: Long?
+)
 
-        val tokenBytes = ByteArray(tokenLength)
+/**
+ * Lit le handshake envoyé par le device.
+ *
+ * Format : 1 byte length prefix + N bytes UTF-8.
+ *
+ * La payload est soit :
+ * - `"tokenUUID"` (legacy, pas de heartbeat annoncé)
+ * - `"tokenUUID:heartbeatMs"` (nouveau, lib Arduino ≥ 0.x avec
+ *   `setHeartbeat(ms)`)
+ *
+ * Le parseur split sur le premier `:` uniquement — les tokens
+ * eux-mêmes (UUID v4) ne contiennent jamais de `:`.
+ */
+private fun readDeviceHandshake(inputStream: InputStream): HandshakeResult? {
+    return try {
+        val payloadLength = inputStream.read()
+        if (payloadLength <= 0) return null
+
+        val payloadBytes = ByteArray(payloadLength)
         var totalBytesRead = 0
-        while (totalBytesRead < tokenLength) {
-            val bytesRead = inputStream.read(tokenBytes, totalBytesRead, tokenLength - totalBytesRead)
+        while (totalBytesRead < payloadLength) {
+            val bytesRead = inputStream.read(payloadBytes, totalBytesRead, payloadLength - totalBytesRead)
             if (bytesRead == -1) return null
             totalBytesRead += bytesRead
         }
 
-        String(tokenBytes, Charsets.UTF_8)
+        val raw = String(payloadBytes, Charsets.UTF_8)
+        val parts = raw.split(":", limit = 2)
+        val token = parts[0]
+        val heartbeatMs = parts.getOrNull(1)?.toLongOrNull()
+        HandshakeResult(token = token, heartbeatMs = heartbeatMs)
     } catch (e: Exception) {
         null
     }
@@ -263,7 +346,7 @@ private fun readDeviceToken(inputStream: InputStream): String? {
 /**
  * Lit une trame binaire complète depuis le stream TCP.
  *
- * Format : AA(1) | VER(1) | LEN(2 LE) | SEQ(1) | body(LEN) | CRC(1)
+ * Format : AA(1) | VER(1) | LEN(2 LE) | body(LEN) | CRC(1)
  * Retourne null si connexion fermée ou timeout 90s dépassé.
  */
 private fun readFrame(inputStream: InputStream): ByteArray? {
@@ -285,10 +368,6 @@ private fun readFrame(inputStream: InputStream): ByteArray? {
         // rejet des frames trop grandes — protection contre les devices malveillants
         if (bodyLength > MAX_FRAME_BODY_SIZE) return null
 
-        // SEQ
-        val seqByte = inputStream.read()
-        if (seqByte == -1) return null
-
         // body
         val bodyBytes = ByteArray(bodyLength)
         var totalBytesRead = 0
@@ -308,7 +387,6 @@ private fun readFrame(inputStream: InputStream): ByteArray? {
             versionByte.toByte(),
             lenLow.toByte(),
             lenHigh.toByte(),
-            seqByte.toByte()
         ) + bodyBytes + byteArrayOf(crcByte.toByte())
 
     } catch (e: Exception) {

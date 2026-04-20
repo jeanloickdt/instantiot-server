@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory
  *       → broadcast a toutes les apps qui regardent le projet
  *   - deviceOffline(projectId, deviceId, reason)
  *       → broadcast a toutes les apps qui regardent le projet
- *   - commandFailed(session, deviceId, reason, seq)
+ *   - commandFailed(session, deviceId, reason)
  *       → envoye a la session emettrice uniquement (pas un broadcast)
  */
 object ControlEventBroadcaster {
@@ -53,20 +53,18 @@ object ControlEventBroadcaster {
 
     /**
      * Commande App->Device a echoue.
-     * Envoye uniquement a la session emettrice (correlation via seq).
+     * Envoye uniquement a la session emettrice.
      * reason : DEVICE_OFFLINE / FORBIDDEN / RELAY_ERROR
      */
     suspend fun commandFailed(
         session: WebSocketSession,
         deviceId: String,
-        reason: String,
-        seq: Int?
+        reason: String
     ) {
         val event = ControlEvent(
             type     = ControlEventType.COMMAND_FAILED,
             deviceId = deviceId,
-            reason   = reason,
-            seq      = seq
+            reason   = reason
         )
         sendEventToSession(session, event)
     }

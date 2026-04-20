@@ -44,3 +44,42 @@ If the server starts successfully, you'll see the following output:
 2024-12-04 14:32:45.682 [main] INFO  Application - Responding at http://0.0.0.0:8080
 ```
 
+## Device protocol quick reference
+
+Full technical documentation: [`doc-and-test/doc-technique.html`](doc-and-test/doc-technique.html).
+
+### TCP handshake (port `tcp.port`, default 9001)
+
+```
+[PAYLOAD_LEN(1B) | PAYLOAD_BYTES]
+```
+
+- `payload = "token"` — legacy, server soTimeout = **90s**
+- `payload = "token:heartbeatMs"` — adaptive, server soTimeout = `heartbeatMs × 2.5` (clamp 2s..120s)
+
+Example (Arduino lib ≥ heartbeat):
+
+```cpp
+InstantIoTWiFiServer instant(ip, port, token);
+void setup() {
+    instant.setHeartbeat(5000);   // optional — default already 5000ms
+    instant.begin(ssid, pass);
+}
+void loop() { instant.loop(); }
+```
+
+### Heartbeat frame
+
+iWidgets v1 binary frame with `TYPE = 0xFE`, `WID_LEN = 0`, empty payload.
+Emitted by the Arduino lib every `heartbeatMs` ms. Server skips dispatch
+but the byte reception resets the socket read timeout.
+
+With `heartbeat = 5000ms`, an unplugged / crashed device is detected
+offline in **≤ 12.5s**.
+
+### Startup hygiene
+
+At boot, the server calls `deviceRepository.markAllOffline()` to clean up
+stale `isOnline=true` left by an abrupt kill (Ctrl+C that skipped the
+`finally` block in `handleDeviceConnection`).
+

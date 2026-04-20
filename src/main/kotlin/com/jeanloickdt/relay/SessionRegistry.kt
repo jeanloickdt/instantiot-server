@@ -3,6 +3,7 @@ package com.jeanloickdt.relay
 
 import com.jeanloickdt.device.domain.DeviceRow
 import io.ktor.websocket.*
+import kotlinx.coroutines.CoroutineScope
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -43,6 +44,9 @@ object SessionRegistry {
     // deviceId → session device TCP
     val deviceSessions = ConcurrentHashMap<DeviceId, DeviceSession>()
 
+    // deviceId → outbox de sérialisation des writes TCP (cf. DeviceOutbox)
+    val deviceOutboxes = ConcurrentHashMap<DeviceId, DeviceOutbox>()
+
     // widgetId → dernier payload reçu — accès rapide sans DB
     val lastPayloads = ConcurrentHashMap<WidgetId, String>()
 
@@ -77,14 +81,26 @@ object SessionRegistry {
         }
     }
 
-    // enregistrer une session device
-    fun registerDevice(deviceId: DeviceId, device: DeviceRow, socket: Socket) {
+    // enregistrer une session device + créer son outbox.
+    // Le `scope` fourni gouverne la coroutine consommatrice de l'outbox —
+    // typiquement l'`applicationScope` Ktor (long-lived).
+    fun registerDevice(deviceId: DeviceId, device: DeviceRow, socket: Socket, scope: CoroutineScope) {
         deviceSessions[deviceId] = DeviceSession(device, socket)
+        // Fermer une éventuelle outbox précédente (reconnect rapide du même deviceId)
+        // pour éviter une fuite de coroutine consommatrice.
+        deviceOutboxes.remove(deviceId)?.close()
+        deviceOutboxes[deviceId] = DeviceOutbox(
+            deviceId = deviceId,
+            socket   = socket,
+            scope    = scope
+        )
     }
 
-    // retirer une session device — déconnexion
+    // retirer une session device — déconnexion. Ferme l'outbox (→ la
+    // coroutine consommatrice sort proprement) et libère les réfs.
     fun unregisterDevice(deviceId: DeviceId) {
         deviceSessions.remove(deviceId)
+        deviceOutboxes.remove(deviceId)?.close()
     }
 
     // trouver la session d'un device par son ID

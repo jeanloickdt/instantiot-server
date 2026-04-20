@@ -148,11 +148,15 @@ def test_device_tcp():
         sock.connect((SERVER_HOST, TCP_PORT))
         print(f"  [OK] Connecte a {SERVER_HOST}:{TCP_PORT}")
 
-        # handshake — envoyer [TOKEN_LEN | TOKEN]
-        token_bytes = DEVICE_TOKEN.encode("utf-8")
-        handshake = bytes([len(token_bytes)]) + token_bytes
+        # handshake — [PAYLOAD_LEN(1B) | PAYLOAD]
+        # payload = "token"              (legacy, soTimeout serveur = 90s)
+        # payload = "token:heartbeatMs"  (nouveau, soTimeout = heartbeatMs * 2.5)
+        # Ex : "abc-123-def:5000" -> serveur soTimeout 12.5s.
+        # Ici on reste en mode legacy (pas de heartbeat envoye par le script).
+        payload = DEVICE_TOKEN.encode("utf-8")
+        handshake = bytes([len(payload)]) + payload
         sock.sendall(handshake)
-        print(f"  [OK] Handshake envoye (token {len(token_bytes)} bytes)")
+        print(f"  [OK] Handshake envoye (payload {len(payload)} bytes, legacy mode)")
 
         # attendre que le serveur accepte (pas de rejet = OK)
         time.sleep(1)
