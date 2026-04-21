@@ -1,8 +1,10 @@
 // device/data/SqliteDeviceRepository.kt
 package com.jeanloickdt.device.data
 
+import com.jeanloickdt.device.domain.DeviceConnectivity
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceRow
+import com.jeanloickdt.device.domain.DeviceType
 import org.jetbrains.exposed.sql.*
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -10,17 +12,26 @@ import java.util.UUID
 
 class SqliteDeviceRepository : DeviceRepository {
 
-    override fun create(name: String, projectId: String, ownerId: String, tokenHash: String): String {
+    override fun create(
+        name: String,
+        projectId: String,
+        ownerId: String,
+        tokenHash: String,
+        deviceType: DeviceType,
+        connectivity: DeviceConnectivity
+    ): String {
         val id = UUID.randomUUID().toString()
         transaction {
             DeviceTable.insert {
-                it[DeviceTable.id]        = id
-                it[DeviceTable.projectId] = projectId
-                it[DeviceTable.ownerId]   = ownerId
-                it[DeviceTable.name]      = name
-                it[DeviceTable.tokenHash] = tokenHash
-                it[DeviceTable.isOnline]  = false
-                it[DeviceTable.lastSeen]  = null
+                it[DeviceTable.id]           = id
+                it[DeviceTable.projectId]    = projectId
+                it[DeviceTable.ownerId]      = ownerId
+                it[DeviceTable.name]         = name
+                it[DeviceTable.tokenHash]    = tokenHash
+                it[DeviceTable.isOnline]     = false
+                it[DeviceTable.lastSeen]     = null
+                it[DeviceTable.deviceType]   = deviceType.name
+                it[DeviceTable.connectivity] = connectivity.name
             }
         }
         return id
@@ -135,12 +146,14 @@ class SqliteDeviceRepository : DeviceRepository {
     }
 
     private fun ResultRow.toDeviceRow() = DeviceRow(
-        id        = this[DeviceTable.id],
-        projectId = this[DeviceTable.projectId],
-        ownerId   = this[DeviceTable.ownerId],
-        name      = this[DeviceTable.name],
-        tokenHash = this[DeviceTable.tokenHash],
-        lastSeen  = this[DeviceTable.lastSeen],
-        isOnline  = this[DeviceTable.isOnline]
+        id           = this[DeviceTable.id],
+        projectId    = this[DeviceTable.projectId],
+        ownerId      = this[DeviceTable.ownerId],
+        name         = this[DeviceTable.name],
+        tokenHash    = this[DeviceTable.tokenHash],
+        lastSeen     = this[DeviceTable.lastSeen],
+        isOnline     = this[DeviceTable.isOnline],
+        deviceType   = DeviceType.fromString(this[DeviceTable.deviceType]),
+        connectivity = DeviceConnectivity.fromString(this[DeviceTable.connectivity])
     )
 }

@@ -3,6 +3,9 @@ package com.jeanloickdt.device
 
 import com.jeanloickdt.device.domain.CreateDeviceRequest
 import com.jeanloickdt.device.domain.CreateDeviceResponse
+import com.jeanloickdt.device.domain.DeviceConnectivity
+import com.jeanloickdt.device.domain.DeviceType
+import com.jeanloickdt.device.domain.isValidDeviceCombination
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
 import com.jeanloickdt.device.domain.UpdateDeviceNameRequest
@@ -32,11 +35,13 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             val devices = deviceRepository.findAllByOwner(ownerId)
                 .map {
                     DeviceResponse(
-                        id        = it.id,
-                        name      = it.name,
-                        projectId = it.projectId,
-                        isOnline  = it.isOnline,
-                        lastSeen  = it.lastSeen
+                        id           = it.id,
+                        name         = it.name,
+                        projectId    = it.projectId,
+                        isOnline     = it.isOnline,
+                        lastSeen     = it.lastSeen,
+                        deviceType   = it.deviceType?.name,
+                        connectivity = it.connectivity?.name
                     )
                 }
             call.respond(HttpStatusCode.OK, devices)
@@ -56,11 +61,13 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 .filter { it.ownerId == ownerId }
                 .map {
                     DeviceResponse(
-                        id        = it.id,
-                        name      = it.name,
-                        projectId = it.projectId,
-                        isOnline  = it.isOnline,
-                        lastSeen  = it.lastSeen
+                        id           = it.id,
+                        name         = it.name,
+                        projectId    = it.projectId,
+                        isOnline     = it.isOnline,
+                        lastSeen     = it.lastSeen,
+                        deviceType   = it.deviceType?.name,
+                        connectivity = it.connectivity?.name
                     )
                 }
             call.respond(HttpStatusCode.OK, devices)
@@ -77,23 +84,50 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 
             val body = call.receive<CreateDeviceRequest>()
 
+            // ── Validation enums ──────────────────────────────────
+            val deviceType = DeviceType.fromString(body.deviceType)
+                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf(
+                    "error" to "Unknown deviceType",
+                    "value" to body.deviceType,
+                    "allowed" to DeviceType.entries.map { it.name }
+                ))
+
+            val connectivity = DeviceConnectivity.fromString(body.connectivity)
+                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf(
+                    "error" to "Unknown connectivity",
+                    "value" to body.connectivity,
+                    "allowed" to DeviceConnectivity.entries.map { it.name }
+                ))
+
+            if (!isValidDeviceCombination(deviceType, connectivity)) {
+                return@post call.respond(HttpStatusCode.BadRequest, mapOf(
+                    "error" to "Invalid combination (deviceType, connectivity)",
+                    "deviceType" to deviceType.name,
+                    "connectivity" to connectivity.name
+                ))
+            }
+
             // génère le token en clair — affiché une seule fois
             val token     = UUID.randomUUID().toString()
             val tokenHash = sha256(token)
 
             val id = deviceRepository.create(
-                name      = body.name,
-                projectId = body.projectId,
-                ownerId   = ownerId,
-                tokenHash = tokenHash
+                name         = body.name,
+                projectId    = body.projectId,
+                ownerId      = ownerId,
+                tokenHash    = tokenHash,
+                deviceType   = deviceType,
+                connectivity = connectivity
             )
 
             // retourne le token en clair — une seule fois
             call.respond(HttpStatusCode.Created, CreateDeviceResponse(
-                id        = id,
-                name      = body.name,
-                projectId = body.projectId,
-                token     = token
+                id           = id,
+                name         = body.name,
+                projectId    = body.projectId,
+                token        = token,
+                deviceType   = deviceType.name,
+                connectivity = connectivity.name
             ))
         }
 
@@ -129,11 +163,13 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             deviceRepository.updateName(deviceId, trimmed)
 
             call.respond(HttpStatusCode.OK, DeviceResponse(
-                id        = device.id,
-                name      = trimmed,
-                projectId = device.projectId,
-                isOnline  = device.isOnline,
-                lastSeen  = device.lastSeen
+                id           = device.id,
+                name         = trimmed,
+                projectId    = device.projectId,
+                isOnline     = device.isOnline,
+                lastSeen     = device.lastSeen,
+                deviceType   = device.deviceType?.name,
+                connectivity = device.connectivity?.name
             ))
         }
 
