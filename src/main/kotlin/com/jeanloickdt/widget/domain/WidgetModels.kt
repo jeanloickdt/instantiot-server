@@ -11,8 +11,23 @@ import kotlinx.serialization.Serializable
 // Le server ne connaît que l'id et le type — pas la géométrie ni les settings
 @Serializable
 data class RegisterWidgetRequest(
-    val id: String,    // UUID généré par l'app — doit correspondre au widget dans layoutJson
-    val type: String   // "display" | "command"
+    val id: String,    // protocolId du widget (matche ce que le device envoie)
+    val type: String   // kind du widget ("Gauge", "SimpleButton", "HorizontalSlider", etc.)
+)
+
+// Batch register — appelé par l'app après un layout save pour s'assurer
+// que TOUS les widgets du layout sont connus côté serveur, même ceux qui
+// n'ont pas encore reçu de trame device (sliders/boutons App→Device).
+// Idempotent via `registerIfAbsent`.
+@Serializable
+data class BulkRegisterWidgetsRequest(
+    val widgets: List<RegisterWidgetRequest>
+)
+
+@Serializable
+data class BulkRegisterWidgetsResponse(
+    val created: Int,   // nombre de widgets nouvellement insérés
+    val existing: Int   // nombre de widgets déjà en DB (no-op)
 )
 
 // ============================================================

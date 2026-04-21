@@ -1,6 +1,9 @@
 // widget/WidgetRoutes.kt
 package com.jeanloickdt.widget
 
+import com.jeanloickdt.relay.SessionRegistry
+import com.jeanloickdt.widget.domain.BulkRegisterWidgetsRequest
+import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
 import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
@@ -28,9 +31,9 @@ fun Route.widgetRoutes(
     authenticate("jwt") {
 
         // ============================================================
-        // POST /api/projects/{projectId}/widgets — enregistrer un widget
-        // L'app génère l'id — doit correspondre au widget dans layoutJson
-        // Le server stocke id + type uniquement
+        // POST /api/projects/{projectId}/widgets — enregistrer un widget (idempotent)
+        // Le `id` doit être le `protocolId` (celui que le device utilise
+        // dans ses frames iWidgets v1).
         // ============================================================
         post("/api/projects/{projectId}/widgets") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -41,17 +44,60 @@ fun Route.widgetRoutes(
 
             val body = call.receive<RegisterWidgetRequest>()
 
-            widgetRepository.register(
+            val created = widgetRepository.registerIfAbsent(
                 id        = body.id,
                 projectId = projectId,
                 ownerId   = ownerId,
                 type      = body.type
             )
+            if (created) SessionRegistry.knownWidgetIds.add(body.id)
 
-            call.respond(HttpStatusCode.Created, mapOf(
-                "message"  to "Widget registered",
-                "id"       to body.id,
-                "type"     to body.type
+            call.respond(
+                if (created) HttpStatusCode.Created else HttpStatusCode.OK,
+                mapOf(
+                    "message"  to if (created) "Widget registered" else "Widget already registered",
+                    "id"       to body.id,
+                    "type"     to body.type,
+                    "created"  to created
+                )
+            )
+        }
+
+        // ============================================================
+        // POST /api/projects/{projectId}/widgets/bulk — register en masse
+        // Appelé par l'app après chaque save de layout pour s'assurer que
+        // tous les widgets du projet sont connus. Idempotent.
+        // ============================================================
+        post("/api/projects/{projectId}/widgets/bulk") {
+            val ownerId = call.principal<JWTPrincipal>()?.subject
+                ?: return@post call.respond(HttpStatusCode.Unauthorized)
+
+            val projectId = call.parameters["projectId"]
+                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectId"))
+
+            val body = call.receive<BulkRegisterWidgetsRequest>()
+
+            var created = 0
+            var existing = 0
+            body.widgets.forEach { w ->
+                if (w.id.isBlank()) return@forEach
+                val inserted = widgetRepository.registerIfAbsent(
+                    id        = w.id,
+                    projectId = projectId,
+                    ownerId   = ownerId,
+                    type      = w.type
+                )
+                if (inserted) {
+                    SessionRegistry.knownWidgetIds.add(w.id)
+                    created++
+                } else {
+                    existing++
+                }
+            }
+
+            call.respond(HttpStatusCode.OK, BulkRegisterWidgetsResponse(
+                created  = created,
+                existing = existing
             ))
         }
 
