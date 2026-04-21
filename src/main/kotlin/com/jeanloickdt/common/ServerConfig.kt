@@ -52,6 +52,29 @@ object ServerConfig {
     var historyThrottleRawIntervalMs: Long = 5_000L
         private set
 
+    // ============================================================
+    // HISTORIQUE — Phase 2 (downsampling)
+    // ============================================================
+
+    /** Rétention des buckets MINUTE (jours). */
+    var historyRetentionMinDays: Int = 90
+        private set
+
+    /** Rétention des buckets HOUR (jours). */
+    var historyRetentionHourDays: Int = 365
+        private set
+
+    /**
+     * Rétention des buckets DAY (jours).
+     * `-1` = infini (jamais purgé).
+     */
+    var historyRetentionDayDays: Int = -1
+        private set
+
+    /** Intervalle entre deux runs du downsampler (minutes). */
+    var historyDownsampleIntervalMinutes: Int = 60
+        private set
+
     val version: String get() = VERSION
     val startedAt: Long = System.currentTimeMillis()
 
@@ -100,6 +123,16 @@ object ServerConfig {
                 .toIntOrNull()?.coerceAtLeast(1) ?: 1
             historyThrottleRawIntervalMs = (props.getProperty("history.throttle.raw.intervalSeconds", "5")
                 .toLongOrNull()?.coerceAtLeast(0L) ?: 5L) * 1000L
+
+            // Phase 2 — downsampling
+            historyRetentionMinDays = props.getProperty("history.retention.min.days", "90")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 90
+            historyRetentionHourDays = props.getProperty("history.retention.hour.days", "365")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 365
+            historyRetentionDayDays = props.getProperty("history.retention.day.days", "-1")
+                .toIntOrNull() ?: -1
+            historyDownsampleIntervalMinutes = props.getProperty("history.downsample.intervalMinutes", "60")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 60
         } catch (_: Exception) {
             // fichier corrompu — garder les valeurs par defaut
         }
@@ -123,6 +156,10 @@ object ServerConfig {
         props.setProperty("history.retention.raw.days", historyRetentionRawDays.toString())
         props.setProperty("history.retention.opaque.days", historyRetentionOpaqueDays.toString())
         props.setProperty("history.throttle.raw.intervalSeconds", (historyThrottleRawIntervalMs / 1000L).toString())
+        props.setProperty("history.retention.min.days", historyRetentionMinDays.toString())
+        props.setProperty("history.retention.hour.days", historyRetentionHourDays.toString())
+        props.setProperty("history.retention.day.days", historyRetentionDayDays.toString())
+        props.setProperty("history.downsample.intervalMinutes", historyDownsampleIntervalMinutes.toString())
         configFile.outputStream().use { props.store(it, "InstantIoT Server Configuration") }
     }
 }

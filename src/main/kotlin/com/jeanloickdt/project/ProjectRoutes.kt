@@ -26,7 +26,10 @@ fun Route.projectRoutes(
     deviceRepository: DeviceRepository,
     widgetRepository: WidgetRepository,
     widgetHistoryRepository: WidgetHistoryRepository,
-    widgetHistoryNumericRepository: com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
+    widgetHistoryNumericRepository: com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository,
+    widgetHistoryMinRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
+    widgetHistoryHourRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
+    widgetHistoryDayRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
 ) {
 
     authenticate("jwt") {
@@ -223,9 +226,12 @@ fun Route.projectRoutes(
             }
 
             // ─── Step 3 : cascade delete DB ───────────────────────────
-            // ordre : history (opaque + numérique) → widgets → devices → projet
+            // ordre : history (tous tiers) → widgets → devices → projet
             widgetHistoryRepository.deleteAllByProject(projectId)
             widgetHistoryNumericRepository.deleteAllByProject(projectId)
+            widgetHistoryMinRepository.deleteAllByProject(projectId)
+            widgetHistoryHourRepository.deleteAllByProject(projectId)
+            widgetHistoryDayRepository.deleteAllByProject(projectId)
             widgetRepository.deleteAllByProject(projectId)
             deviceRepository.deleteAllByProject(projectId)
             projectRepository.delete(projectId)

@@ -21,12 +21,18 @@ import com.jeanloickdt.relay.NumericHistoryEntry
 import com.jeanloickdt.relay.SessionRegistry
 import com.jeanloickdt.relay.configureAppRelay
 import com.jeanloickdt.relay.startDeviceRelay
+import com.jeanloickdt.widget.data.HistoryAggregator
+import com.jeanloickdt.widget.data.SqliteWidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.data.SqliteWidgetHistoryNumericRepository
 import com.jeanloickdt.widget.data.SqliteWidgetHistoryRepository
 import com.jeanloickdt.widget.data.SqliteWidgetRepository
+import com.jeanloickdt.widget.data.WidgetHistoryDayTable
+import com.jeanloickdt.widget.data.WidgetHistoryHourTable
+import com.jeanloickdt.widget.data.WidgetHistoryMinTable
 import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
 import com.jeanloickdt.widget.data.WidgetHistoryTable
 import com.jeanloickdt.widget.data.WidgetTable
+import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryNumericRow
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
@@ -111,6 +117,9 @@ val deviceRepository: DeviceRepository           = SqliteDeviceRepository()
 val widgetRepository: WidgetRepository           = SqliteWidgetRepository()
 val widgetHistoryRepository: WidgetHistoryRepository = SqliteWidgetHistoryRepository()
 val widgetHistoryNumericRepository: WidgetHistoryNumericRepository = SqliteWidgetHistoryNumericRepository()
+val widgetHistoryMinRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryMinTable)
+val widgetHistoryHourRepository: WidgetHistoryAggregateRepository = SqliteWidgetHistoryAggregateRepository(WidgetHistoryHourTable)
+val widgetHistoryDayRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryDayTable)
 
 private val logger = LoggerFactory.getLogger("Application")
 
@@ -154,7 +163,10 @@ fun Application.module() {
         DeviceTable,
         WidgetTable,
         WidgetHistoryTable,
-        WidgetHistoryNumericTable
+        WidgetHistoryNumericTable,
+        WidgetHistoryMinTable,
+        WidgetHistoryHourTable,
+        WidgetHistoryDayTable
     )
 
     // Reset stale online state : si le server a été kill abruptement
@@ -220,19 +232,40 @@ fun Application.module() {
         }
     }
 
-    // cleanup history — toutes les heures
+    // downsample raw → min → hour → day + cleanup tous les tiers
     launch(Dispatchers.IO) {
         while (true) {
-            delay(1.hours)
+            delay(com.jeanloickdt.common.ServerConfig.historyDownsampleIntervalMinutes.toLong().minutes)
             val now = System.currentTimeMillis()
 
-            // opaque (widget_history) — fenêtre courte, streams + discrete events
-            val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * 24L * 3600_000L
+            // Étape 1 — agrégation (Phase 2)
+            HistoryAggregator.runAll(now)
+
+            // Étape 2 — cleanup par tier
+            val dayMs = 24L * 3600_000L
+
+            // opaque (widget_history) — événements non-numériques
+            val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * dayMs
             widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
 
-            // numérique (widget_history_numeric) — fenêtre raw Phase 1
-            val numericCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * 24L * 3600_000L
-            widgetHistoryNumericRepository.deleteOlderThan(numericCutoff)
+            // raw numérique (widget_history_numeric)
+            val rawCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * dayMs
+            widgetHistoryNumericRepository.deleteOlderThan(rawCutoff)
+
+            // Buckets 1 min
+            val minCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionMinDays.toLong() * dayMs
+            widgetHistoryMinRepository.deleteOlderThan(minCutoff)
+
+            // Buckets 1 h
+            val hourCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionHourDays.toLong() * dayMs
+            widgetHistoryHourRepository.deleteOlderThan(hourCutoff)
+
+            // Buckets 1 jour — purge SI retention > 0, sinon garder indéfiniment
+            val dayRetention = com.jeanloickdt.common.ServerConfig.historyRetentionDayDays
+            if (dayRetention > 0) {
+                val dayCutoff = now - dayRetention.toLong() * dayMs
+                widgetHistoryDayRepository.deleteOlderThan(dayCutoff)
+            }
         }
     }
 
@@ -257,9 +290,16 @@ fun Application.module() {
         }
 
         authRoutes(userRepository, projectRepository, deviceRepository)
-        projectRoutes(projectRepository, deviceRepository, widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository)
+        projectRoutes(
+            projectRepository, deviceRepository, widgetRepository,
+            widgetHistoryRepository, widgetHistoryNumericRepository,
+            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository
+        )
         deviceRoutes(deviceRepository)
-        widgetRoutes(widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository)
+        widgetRoutes(
+            widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
+            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository
+        )
 
         // TODO: ajouter les routes des nouveaux modules ici
     }

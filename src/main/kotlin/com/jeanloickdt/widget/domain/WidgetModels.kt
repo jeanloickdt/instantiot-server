@@ -37,10 +37,16 @@ data class WidgetHistoryResponse(
 )
 
 // Point numérique d'un widget — pour chart/gauge/metric/level/slider
-// Retourné par GET /api/widgets/{id}/history?from=&to=&seriesId=
+// Retourné par GET /api/widgets/{id}/history?from=&to=&seriesId=&granularity=
+//
+// Pour granularity=raw : yMin/yMax/count null (point individuel).
+// Pour granularity=min/hour/day : yMin/yMax/count populés (bucket agrégé).
 @Serializable
 data class WidgetHistoryPointResponse(
-    val t: Long,          // timestamp ms epoch — "recordedAt" raccourci JSON
-    val y: Double,        // valeur — "value" raccourci JSON
-    val seriesId: String? = null  // null pour widgets non-chart
+    val t: Long,                  // timestamp ms epoch (recordedAt pour raw, bucket_at pour agrégé)
+    val y: Double,                // value pour raw, avg pour agrégé
+    val seriesId: String? = null, // null pour widgets non-chart
+    val yMin: Double? = null,     // null pour raw ; min du bucket pour agrégé
+    val yMax: Double? = null,     // null pour raw ; max du bucket pour agrégé
+    val count: Int? = null        // null pour raw ; nombre d'échantillons du bucket
 )

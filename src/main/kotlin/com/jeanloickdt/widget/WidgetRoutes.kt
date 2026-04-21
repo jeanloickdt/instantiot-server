@@ -2,6 +2,7 @@
 package com.jeanloickdt.widget
 
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
+import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryPointResponse
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
@@ -18,7 +19,10 @@ import io.ktor.server.routing.*
 fun Route.widgetRoutes(
     widgetRepository: WidgetRepository,
     widgetHistoryRepository: WidgetHistoryRepository,
-    widgetHistoryNumericRepository: WidgetHistoryNumericRepository
+    widgetHistoryNumericRepository: WidgetHistoryNumericRepository,
+    widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
+    widgetHistoryHourRepository: WidgetHistoryAggregateRepository,
+    widgetHistoryDayRepository: WidgetHistoryAggregateRepository
 ) {
 
     authenticate("jwt") {
@@ -68,9 +72,12 @@ fun Route.widgetRoutes(
                 return@delete
             }
 
-            // supprimer history d'abord — cascade
+            // supprimer history d'abord — cascade tous les tiers
             widgetHistoryRepository.deleteAllByWidget(widgetId)
             widgetHistoryNumericRepository.deleteAllByWidget(widgetId)
+            widgetHistoryMinRepository.deleteAllByWidget(widgetId)
+            widgetHistoryHourRepository.deleteAllByWidget(widgetId)
+            widgetHistoryDayRepository.deleteAllByWidget(widgetId)
             widgetRepository.delete(widgetId)
 
             call.respond(HttpStatusCode.OK, mapOf(
@@ -104,15 +111,16 @@ fun Route.widgetRoutes(
         }
 
         // ============================================================
-        // GET /api/widgets/{id}/history?from=&to=&seriesId= — points numériques
+        // GET /api/widgets/{id}/history?from=&to=&seriesId=&granularity=
         //
-        // Retourne l'historique décodé (t, y, seriesId?) prêt à hydrater
-        // un chart/gauge/metric/level/slider côté app. `seriesId` est
-        // optionnel — sans, toutes les séries du widget sont retournées
-        // triées par timestamp.
+        // Granularité (défaut = "raw") :
+        //   raw   : échantillons bruts (max 1 / 5s par widget+série)
+        //   min   : buckets 1 minute    (downsampled, avec yMin/yMax/count)
+        //   hour  : buckets 1 heure
+        //   day   : buckets 1 jour
         //
-        // Fenêtre de rétention par défaut : 7 jours (history.retention.raw.days
-        // dans ~/.instantiot/server.properties).
+        // Rétention par tier (config dans ~/.instantiot/server.properties) :
+        //   raw=7j · min=90j · hour=365j · day=infini
         // ============================================================
         get("/api/widgets/{id}/history") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -128,6 +136,7 @@ fun Route.widgetRoutes(
                 ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing to"))
 
             val seriesId = call.parameters["seriesId"]?.takeIf { it.isNotBlank() }
+            val granularity = (call.parameters["granularity"] ?: "raw").lowercase()
 
             val widget = widgetRepository.findById(widgetId)
 
@@ -136,15 +145,40 @@ fun Route.widgetRoutes(
                 return@get
             }
 
-            val points = widgetHistoryNumericRepository
-                .findByWidgetAndRange(widgetId, from, to, seriesId)
-                .map {
-                    WidgetHistoryPointResponse(
-                        t        = it.recordedAt,
-                        y        = it.value,
-                        seriesId = it.seriesId
-                    )
+            val points: List<WidgetHistoryPointResponse> = when (granularity) {
+                "raw" -> widgetHistoryNumericRepository
+                    .findByWidgetAndRange(widgetId, from, to, seriesId)
+                    .map {
+                        WidgetHistoryPointResponse(
+                            t        = it.recordedAt,
+                            y        = it.value,
+                            seriesId = it.seriesId
+                        )
+                    }
+                "min", "hour", "day" -> {
+                    val repo = when (granularity) {
+                        "min"  -> widgetHistoryMinRepository
+                        "hour" -> widgetHistoryHourRepository
+                        else   -> widgetHistoryDayRepository
+                    }
+                    repo.findByWidgetAndRange(widgetId, from, to, seriesId).map {
+                        WidgetHistoryPointResponse(
+                            t        = it.bucketAt,
+                            y        = it.avgValue,
+                            seriesId = it.seriesId,
+                            yMin     = it.minValue,
+                            yMax     = it.maxValue,
+                            count    = it.sampleCount
+                        )
+                    }
                 }
+                else -> {
+                    call.respond(HttpStatusCode.BadRequest, mapOf(
+                        "error" to "Invalid granularity (use raw|min|hour|day)"
+                    ))
+                    return@get
+                }
+            }
 
             call.respond(HttpStatusCode.OK, points)
         }
