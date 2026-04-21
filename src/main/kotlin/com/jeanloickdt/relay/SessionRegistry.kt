@@ -36,6 +36,18 @@ data class HistoryEntry(
     val recordedAt: Long
 )
 
+// Entry history **numérique** — buffer avant flush SQLite
+// Populée en parallèle de HistoryEntry quand FrameParser.extractNumericValue
+// retourne un échantillon décodable (gauge/metric/level/slider/chart).
+data class NumericHistoryEntry(
+    val widgetId: WidgetId,
+    val projectId: String,
+    val ownerId: String,
+    val seriesId: String?,
+    val value: Double,
+    val recordedAt: Long
+)
+
 object SessionRegistry {
 
     // userId → liste de sessions app WebSocket (multi-device : téléphone + tablette)
@@ -52,6 +64,16 @@ object SessionRegistry {
 
     // buffer history — flush toutes les 5s vers SQLite WAL batch
     val historyBuffer = ConcurrentLinkedQueue<HistoryEntry>()
+
+    // buffer history numérique — même cadence flush, mais throttle en amont
+    // (cf. numericThrottleMap + ServerConfig.historyThrottleRawIntervalMs)
+    val numericHistoryBuffer = ConcurrentLinkedQueue<NumericHistoryEntry>()
+
+    // Throttle map pour le numeric buffer : clé = "widgetId|seriesId" (seriesId peut
+    // être vide pour les widgets non-chart), valeur = timestamp ms du dernier append.
+    // Permet d'imposer 1 point / N secondes par (widget, série) dans la DB.
+    // N'affecte PAS le relay temps réel — seulement la persistance.
+    val numericThrottleMap = ConcurrentHashMap<String, Long>()
 
     // enregistrer une session app — supporte plusieurs connexions par user
     fun registerApp(userId: UserId, session: WebSocketSession): AppSession {

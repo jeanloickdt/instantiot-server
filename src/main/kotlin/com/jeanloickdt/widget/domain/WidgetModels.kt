@@ -28,10 +28,19 @@ data class WidgetStateResponse(
     val lastSeenAt: Long?
 )
 
-// Historique d'un widget — payload par plage de temps
-// Retourné par GET /api/widgets/{id}/history?from=&to=
+// Historique d'un widget — payload opaque par plage de temps
+// Retourné par GET /api/widgets/{id}/history-raw?from=&to=
 @Serializable
 data class WidgetHistoryResponse(
     val payload: String,
     val recordedAt: Long
+)
+
+// Point numérique d'un widget — pour chart/gauge/metric/level/slider
+// Retourné par GET /api/widgets/{id}/history?from=&to=&seriesId=
+@Serializable
+data class WidgetHistoryPointResponse(
+    val t: Long,          // timestamp ms epoch — "recordedAt" raccourci JSON
+    val y: Double,        // valeur — "value" raccourci JSON
+    val seriesId: String? = null  // null pour widgets non-chart
 )

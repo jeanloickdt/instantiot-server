@@ -2,6 +2,8 @@
 package com.jeanloickdt.widget
 
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
+import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
+import com.jeanloickdt.widget.domain.WidgetHistoryPointResponse
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryResponse
 import com.jeanloickdt.widget.domain.WidgetRepository
@@ -15,7 +17,8 @@ import io.ktor.server.routing.*
 
 fun Route.widgetRoutes(
     widgetRepository: WidgetRepository,
-    widgetHistoryRepository: WidgetHistoryRepository
+    widgetHistoryRepository: WidgetHistoryRepository,
+    widgetHistoryNumericRepository: WidgetHistoryNumericRepository
 ) {
 
     authenticate("jwt") {
@@ -49,7 +52,7 @@ fun Route.widgetRoutes(
         }
 
         // ============================================================
-        // DELETE /api/widgets/{id} — supprimer widget + history
+        // DELETE /api/widgets/{id} — supprimer widget + history (opaque + numérique)
         // ============================================================
         delete("/api/widgets/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -67,6 +70,7 @@ fun Route.widgetRoutes(
 
             // supprimer history d'abord — cascade
             widgetHistoryRepository.deleteAllByWidget(widgetId)
+            widgetHistoryNumericRepository.deleteAllByWidget(widgetId)
             widgetRepository.delete(widgetId)
 
             call.respond(HttpStatusCode.OK, mapOf(
@@ -100,11 +104,59 @@ fun Route.widgetRoutes(
         }
 
         // ============================================================
-        // GET /api/widgets/{id}/history?from=&to= — historique
-        // Plage de temps en milliseconds Unix timestamp
-        // Max 7200 rows sur 2h avec throttle 1/sec
+        // GET /api/widgets/{id}/history?from=&to=&seriesId= — points numériques
+        //
+        // Retourne l'historique décodé (t, y, seriesId?) prêt à hydrater
+        // un chart/gauge/metric/level/slider côté app. `seriesId` est
+        // optionnel — sans, toutes les séries du widget sont retournées
+        // triées par timestamp.
+        //
+        // Fenêtre de rétention par défaut : 7 jours (history.retention.raw.days
+        // dans ~/.instantiot/server.properties).
         // ============================================================
         get("/api/widgets/{id}/history") {
+            val ownerId = call.principal<JWTPrincipal>()?.subject
+                ?: return@get call.respond(HttpStatusCode.Unauthorized)
+
+            val widgetId = call.parameters["id"]
+                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+
+            val from = call.parameters["from"]?.toLongOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing from"))
+
+            val to = call.parameters["to"]?.toLongOrNull()
+                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing to"))
+
+            val seriesId = call.parameters["seriesId"]?.takeIf { it.isNotBlank() }
+
+            val widget = widgetRepository.findById(widgetId)
+
+            if (widget == null || widget.ownerId != ownerId) {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Widget not found"))
+                return@get
+            }
+
+            val points = widgetHistoryNumericRepository
+                .findByWidgetAndRange(widgetId, from, to, seriesId)
+                .map {
+                    WidgetHistoryPointResponse(
+                        t        = it.recordedAt,
+                        y        = it.value,
+                        seriesId = it.seriesId
+                    )
+                }
+
+            call.respond(HttpStatusCode.OK, points)
+        }
+
+        // ============================================================
+        // GET /api/widgets/{id}/history-raw?from=&to= — historique opaque
+        //
+        // Ancienne route retournant le payload Base64 brut. Conservée pour
+        // les widgets non-numériques (boutons, segswitch, dpad) et les
+        // clients qui veulent décoder eux-mêmes.
+        // ============================================================
+        get("/api/widgets/{id}/history-raw") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 

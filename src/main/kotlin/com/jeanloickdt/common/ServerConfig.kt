@@ -31,6 +31,27 @@ object ServerConfig {
     var runningTcpPort: Int = 9001
         private set
 
+    // ============================================================
+    // HISTORIQUE — Phase 1 (raw numeric)
+    // ============================================================
+
+    /** Retention des rows RAW dans `widget_history_numeric` (jours). */
+    var historyRetentionRawDays: Int = 7
+        private set
+
+    /** Retention des rows opaques dans `widget_history` (jours). */
+    var historyRetentionOpaqueDays: Int = 1
+        private set
+
+    /**
+     * Throttle d'écriture en RAM → DB par (widgetId, seriesId).
+     * 5s par défaut = max 17280 rows/jour/série pour des capteurs rapides.
+     * Le relay temps réel n'est **pas** affecté — c'est purement la cadence
+     * de persistance.
+     */
+    var historyThrottleRawIntervalMs: Long = 5_000L
+        private set
+
     val version: String get() = VERSION
     val startedAt: Long = System.currentTimeMillis()
 
@@ -71,6 +92,14 @@ object ServerConfig {
             configFile.inputStream().use { props.load(it) }
             httpPort = props.getProperty("http.port", "8080").toIntOrNull() ?: 8080
             tcpPort = props.getProperty("tcp.port", "9001").toIntOrNull() ?: 9001
+
+            // Historique — Phase 1
+            historyRetentionRawDays = props.getProperty("history.retention.raw.days", "7")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 7
+            historyRetentionOpaqueDays = props.getProperty("history.retention.opaque.days", "1")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 1
+            historyThrottleRawIntervalMs = (props.getProperty("history.throttle.raw.intervalSeconds", "5")
+                .toLongOrNull()?.coerceAtLeast(0L) ?: 5L) * 1000L
         } catch (_: Exception) {
             // fichier corrompu — garder les valeurs par defaut
         }
@@ -91,6 +120,9 @@ object ServerConfig {
         val props = Properties()
         props.setProperty("http.port", httpPort.toString())
         props.setProperty("tcp.port", tcpPort.toString())
+        props.setProperty("history.retention.raw.days", historyRetentionRawDays.toString())
+        props.setProperty("history.retention.opaque.days", historyRetentionOpaqueDays.toString())
+        props.setProperty("history.throttle.raw.intervalSeconds", (historyThrottleRawIntervalMs / 1000L).toString())
         configFile.outputStream().use { props.store(it, "InstantIoT Server Configuration") }
     }
 }

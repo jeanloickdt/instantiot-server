@@ -115,12 +115,23 @@ object FrameParser {
 
     // Codes iWidgets v1 — synchronisés avec app `BinaryProtocolCodes.kt`.
     // Si ces valeurs changent côté app, il faut les mettre à jour ici.
+    private const val TYPE_GAUGE: Int    = 0x03
     private const val TYPE_JOYSTICK: Int = 0x04
+    private const val TYPE_HLEVEL: Int   = 0x05
+    private const val TYPE_VLEVEL: Int   = 0x06
+    private const val TYPE_METRIC: Int   = 0x07
+    private const val TYPE_CHART: Int    = 0x09
     private const val TYPE_HSLIDER: Int  = 0x0A
     private const val TYPE_VSLIDER: Int  = 0x0B
 
     private const val CMD_POSITION_CHANGED: Int = 0x01  // joystick drag
     private const val CMD_VALUE_CHANGING: Int   = 0x10  // slider drag
+
+    // Device→App event codes (0x01..0x0E)
+    private const val EV_SETVALUE: Int        = 0x01  // gauge/hlevel/vlevel/metric/slider
+    private const val EV_UPDATE: Int          = 0x03  // gauge/hlevel/vlevel : value+min+max
+    private const val EV_ADD_POINT: Int       = 0x01  // chart : seriesId + y  (même code que EV_SETVALUE, disambiguated par TYPE)
+    private const val EV_ADD_TIMED_POINT: Int = 0x02  // chart : seriesId + x + y
 
     /**
      * Identifie les commandes émises par un **geste continu** (drag
@@ -211,6 +222,110 @@ object FrameParser {
         } catch (e: Exception) {
             null
         }
+    }
+
+    // ================================================================
+    // EXTRACTION NUMÉRIQUE — pour l'historique des widgets analogiques
+    // ================================================================
+
+    /**
+     * Échantillon numérique décodé d'une trame device→app.
+     *
+     * @param seriesId Pour chart multi-séries ("line1"). `null` pour les
+     *                 widgets simples (gauge, metric, level, slider).
+     * @param value    La valeur numérique principale (toujours un double).
+     */
+    data class NumericSample(
+        val seriesId: String?,
+        val value: Double
+    )
+
+    /**
+     * Décode une trame device→app et extrait un échantillon numérique
+     * si l'event contient un `value` (float) analogique.
+     *
+     * Supporté :
+     * - Gauge / HLevel / VLevel : EV_SETVALUE (4B float), EV_UPDATE (value+min+max, on prend value)
+     * - Metric                  : EV_SETVALUE
+     * - HSlider / VSlider       : EV_SETVALUE (device→app, rare mais possible)
+     * - Chart                   : EV_ADD_POINT (seriesId + y), EV_ADD_TIMED_POINT (seriesId + x + y, on prend y)
+     *
+     * Tout autre (boutons, switchs, joystick push, segSwitch, etc.) → `null`
+     * → pas d'historique numérique pour ce type.
+     *
+     * @return L'échantillon décodé, ou `null` si non-extractable / trame invalide.
+     */
+    fun extractNumericValue(frame: ByteArray): NumericSample? {
+        return try {
+            var offset = FIXED_HEADER_SIZE
+
+            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N (device→app : devCount=0 normalement)
+            val deviceCount = frame[offset++].toInt() and 0xFF
+            repeat(deviceCount) {
+                val deviceIdLength = frame[offset++].toInt() and 0xFF
+                offset += deviceIdLength
+            }
+
+            // skip WID_LEN + WID
+            val widgetIdLength = frame[offset++].toInt() and 0xFF
+            offset += widgetIdLength
+
+            // TYPE + EVENT
+            val type  = frame[offset++].toInt() and 0xFF
+            val event = frame[offset++].toInt() and 0xFF
+
+            // offset pointe maintenant sur le début du payload.
+            // Tous les payloads numériques se suffisent à eux-mêmes
+            // (pas besoin de connaître la fin du body pour ces cas).
+            when (type) {
+                TYPE_GAUGE, TYPE_HLEVEL, TYPE_VLEVEL -> when (event) {
+                    EV_SETVALUE -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) }
+                    EV_UPDATE   -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) } // value, puis min, max — on garde value
+                    else        -> null
+                }
+                TYPE_METRIC -> when (event) {
+                    EV_SETVALUE -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) }
+                    else        -> null
+                }
+                TYPE_HSLIDER, TYPE_VSLIDER -> when (event) {
+                    EV_SETVALUE -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) }
+                    else        -> null
+                }
+                TYPE_CHART -> {
+                    // Payload format : seriesId (1B len + bytes) + float(s)
+                    val seriesIdLen = frame[offset].toInt() and 0xFF
+                    val seriesIdStart = offset + 1
+                    val seriesIdEnd   = seriesIdStart + seriesIdLen
+                    if (seriesIdEnd + 4 > frame.size) return null
+                    val seriesId = frame.decodeToString(seriesIdStart, seriesIdEnd)
+                    when (event) {
+                        EV_ADD_POINT -> {
+                            // seriesId + y (4B)
+                            readFloatAt(frame, seriesIdEnd)?.let { NumericSample(seriesId, it.toDouble()) }
+                        }
+                        EV_ADD_TIMED_POINT -> {
+                            // seriesId + x (4B) + y (4B) — on garde y (la valeur), x sert à l'axe temps côté app mais recordedAt fait le job pour nous
+                            if (seriesIdEnd + 8 > frame.size) return null
+                            readFloatAt(frame, seriesIdEnd + 4)?.let { NumericSample(seriesId, it.toDouble()) }
+                        }
+                        else -> null
+                    }
+                }
+                else -> null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Lit 4 octets little-endian en Float IEEE 754. `null` si hors borne. */
+    private fun readFloatAt(frame: ByteArray, offset: Int): Float? {
+        if (offset + 4 > frame.size) return null
+        val bits = (frame[offset].toInt() and 0xFF) or
+                ((frame[offset + 1].toInt() and 0xFF) shl 8) or
+                ((frame[offset + 2].toInt() and 0xFF) shl 16) or
+                ((frame[offset + 3].toInt() and 0xFF) shl 24)
+        return Float.fromBits(bits)
     }
 
     // ================================================================

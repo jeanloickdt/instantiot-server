@@ -17,13 +17,18 @@ import com.jeanloickdt.project.data.SqliteProjectRepository
 import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.projectRoutes
 import com.jeanloickdt.relay.HistoryEntry
+import com.jeanloickdt.relay.NumericHistoryEntry
 import com.jeanloickdt.relay.SessionRegistry
 import com.jeanloickdt.relay.configureAppRelay
 import com.jeanloickdt.relay.startDeviceRelay
+import com.jeanloickdt.widget.data.SqliteWidgetHistoryNumericRepository
 import com.jeanloickdt.widget.data.SqliteWidgetHistoryRepository
 import com.jeanloickdt.widget.data.SqliteWidgetRepository
+import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
 import com.jeanloickdt.widget.data.WidgetHistoryTable
 import com.jeanloickdt.widget.data.WidgetTable
+import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
+import com.jeanloickdt.widget.domain.WidgetHistoryNumericRow
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryRow
 import com.jeanloickdt.widget.domain.WidgetRepository
@@ -105,6 +110,7 @@ val projectRepository: ProjectRepository         = SqliteProjectRepository()
 val deviceRepository: DeviceRepository           = SqliteDeviceRepository()
 val widgetRepository: WidgetRepository           = SqliteWidgetRepository()
 val widgetHistoryRepository: WidgetHistoryRepository = SqliteWidgetHistoryRepository()
+val widgetHistoryNumericRepository: WidgetHistoryNumericRepository = SqliteWidgetHistoryNumericRepository()
 
 private val logger = LoggerFactory.getLogger("Application")
 
@@ -147,7 +153,8 @@ fun Application.module() {
         ProjectTable,
         DeviceTable,
         WidgetTable,
-        WidgetHistoryTable
+        WidgetHistoryTable,
+        WidgetHistoryNumericTable
     )
 
     // Reset stale online state : si le server a été kill abruptement
@@ -162,6 +169,7 @@ fun Application.module() {
     monitor.subscribe(ApplicationStopping) {
         kotlinx.coroutines.runBlocking {
             flushHistoryBuffer(widgetHistoryRepository)
+            flushNumericHistoryBuffer(widgetHistoryNumericRepository)
         }
     }
 
@@ -208,15 +216,23 @@ fun Application.module() {
         while (true) {
             delay(5_000)
             flushHistoryBuffer(widgetHistoryRepository)
+            flushNumericHistoryBuffer(widgetHistoryNumericRepository)
         }
     }
 
-    // cleanup history > 24h — toutes les heures
+    // cleanup history — toutes les heures
     launch(Dispatchers.IO) {
         while (true) {
             delay(1.hours)
-            val cutoff = System.currentTimeMillis() - 24.hours.inWholeMilliseconds
-            widgetHistoryRepository.deleteOlderThan(cutoff)
+            val now = System.currentTimeMillis()
+
+            // opaque (widget_history) — fenêtre courte, streams + discrete events
+            val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * 24L * 3600_000L
+            widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
+
+            // numérique (widget_history_numeric) — fenêtre raw Phase 1
+            val numericCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * 24L * 3600_000L
+            widgetHistoryNumericRepository.deleteOlderThan(numericCutoff)
         }
     }
 
@@ -241,9 +257,9 @@ fun Application.module() {
         }
 
         authRoutes(userRepository, projectRepository, deviceRepository)
-        projectRoutes(projectRepository, deviceRepository, widgetRepository, widgetHistoryRepository)
+        projectRoutes(projectRepository, deviceRepository, widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository)
         deviceRoutes(deviceRepository)
-        widgetRoutes(widgetRepository, widgetHistoryRepository)
+        widgetRoutes(widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository)
 
         // TODO: ajouter les routes des nouveaux modules ici
     }
@@ -283,4 +299,30 @@ private suspend fun flushHistoryBuffer(widgetHistoryRepository: WidgetHistoryRep
     }
 
     widgetHistoryRepository.insertBatch(historyRows)
+}
+
+// ============================================================
+// Flush numeric history buffer → SQLite WAL batch insert
+// ============================================================
+private suspend fun flushNumericHistoryBuffer(repo: WidgetHistoryNumericRepository) {
+    val batch = mutableListOf<NumericHistoryEntry>()
+    while (SessionRegistry.numericHistoryBuffer.isNotEmpty()) {
+        batch.add(SessionRegistry.numericHistoryBuffer.poll() ?: break)
+    }
+
+    if (batch.isEmpty()) return
+
+    val rows = batch.map { entry ->
+        WidgetHistoryNumericRow(
+            id         = 0,
+            widgetId   = entry.widgetId,
+            projectId  = entry.projectId,
+            ownerId    = entry.ownerId,
+            seriesId   = entry.seriesId,
+            value      = entry.value,
+            recordedAt = entry.recordedAt
+        )
+    }
+
+    repo.insertBatch(rows)
 }

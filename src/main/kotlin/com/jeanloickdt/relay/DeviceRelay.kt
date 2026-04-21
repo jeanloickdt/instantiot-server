@@ -1,6 +1,7 @@
 // relay/DeviceRelay.kt
 package com.jeanloickdt.relay
 
+import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceRow
 import com.jeanloickdt.widget.domain.WidgetRepository
@@ -263,6 +264,27 @@ private suspend fun handleDeviceFrame(
             recordedAt = now
         )
     )
+
+    // historique NUMÉRIQUE — décoder la valeur si le widget est analogique
+    // (gauge/metric/level/slider/chart). Throttle par (widgetId, seriesId).
+    FrameParser.extractNumericValue(frameBytes)?.let { sample ->
+        val throttleKey = widgetId + "|" + (sample.seriesId ?: "")
+        val lastWriteAt = SessionRegistry.numericThrottleMap[throttleKey]
+        val intervalMs  = ServerConfig.historyThrottleRawIntervalMs
+        if (lastWriteAt == null || (now - lastWriteAt) >= intervalMs) {
+            SessionRegistry.numericThrottleMap[throttleKey] = now
+            SessionRegistry.numericHistoryBuffer.add(
+                NumericHistoryEntry(
+                    widgetId   = widgetId,
+                    projectId  = device.projectId,
+                    ownerId    = device.ownerId,
+                    seriesId   = sample.seriesId,
+                    value      = sample.value,
+                    recordedAt = now
+                )
+            )
+        }
+    }
 
     // mettre à jour last_payload en DB — asynchrone non-bloquant
     applicationScope.launch(Dispatchers.IO) {
