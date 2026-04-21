@@ -1,0 +1,41 @@
+meta {
+  name: 3. Get History — raw
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/widgets/{{widgetId}}/history?from={{fromMs}}&to={{toMs}}&granularity=raw
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Retourne les échantillons bruts de widget_history_numeric.
+
+  - Throttled à 1 pt / 5s par (widgetId, seriesId) — configurable via
+    history.throttle.raw.intervalSeconds dans ~/.instantiot/server.properties.
+  - Rétention : 7 jours (history.retention.raw.days).
+
+  Champs populés dans la réponse : t, y, seriesId?
+  Champs toujours null          : yMin, yMax, count.
+
+  Pour filtrer sur une série spécifique (chart multi-séries), ajoute
+  &seriesId=xxx à l'URL, ou set la var `seriesId` dans l'env.
+
+  Les vars `fromMs` et `toMs` sont auto-settées par le pre-request
+  script si non-définies (fenêtre par défaut = dernière heure).
+}
+
+script:pre-request {
+  if (!bru.getVar("fromMs") || bru.getVar("fromMs") === "") {
+    bru.setVar("fromMs", (Date.now() - 3600000).toString());
+  }
+  if (!bru.getVar("toMs") || bru.getVar("toMs") === "") {
+    bru.setVar("toMs", Date.now().toString());
+  }
+}

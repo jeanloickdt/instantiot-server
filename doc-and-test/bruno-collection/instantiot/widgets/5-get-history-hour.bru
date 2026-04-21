@@ -1,0 +1,36 @@
+meta {
+  name: 5. Get History — hour buckets
+  type: http
+  seq: 5
+}
+
+get {
+  url: {{baseUrl}}/api/widgets/{{widgetId}}/history?from={{fromMs}}&to={{toMs}}&granularity=hour
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Buckets 1-heure agrégés de widget_history_hour.
+
+  - Moyenne pondérée par sample_count : reste fidèle à la distribution
+    originale lors des ré-agrégations successives.
+  - Rétention : 365 jours (history.retention.hour.days).
+  - Vide tant qu'une heure complète ne s'est pas écoulée ET que le
+    downsampler n'a pas tourné après cette heure.
+
+  Fenêtre par défaut : derniers 7 jours.
+}
+
+script:pre-request {
+  if (!bru.getVar("fromMs") || bru.getVar("fromMs") === "") {
+    bru.setVar("fromMs", (Date.now() - 7 * 86400000).toString());
+  }
+  if (!bru.getVar("toMs") || bru.getVar("toMs") === "") {
+    bru.setVar("toMs", Date.now().toString());
+  }
+}

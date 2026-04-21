@@ -1,0 +1,35 @@
+meta {
+  name: 4. Get History — minute buckets
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/widgets/{{widgetId}}/history?from={{fromMs}}&to={{toMs}}&granularity=min
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Buckets 1-minute agrégés de widget_history_min.
+
+  - Peuplés par le cron HistoryAggregator toutes les
+    history.downsample.intervalMinutes (60 par défaut).
+  - Pour des tests rapides, set-le à 1 dans server.properties.
+  - Rétention : 90 jours (history.retention.min.days).
+
+  Champs populés : t (bucket_at), y (avg), seriesId?, yMin, yMax, count.
+}
+
+script:pre-request {
+  if (!bru.getVar("fromMs") || bru.getVar("fromMs") === "") {
+    bru.setVar("fromMs", (Date.now() - 3600000).toString());
+  }
+  if (!bru.getVar("toMs") || bru.getVar("toMs") === "") {
+    bru.setVar("toMs", Date.now().toString());
+  }
+}
