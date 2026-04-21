@@ -251,6 +251,24 @@ private suspend fun handleDeviceFrame(
     val payloadBase64 = FrameParser.encodePayloadToBase64(payloadBytes)
     val now           = System.currentTimeMillis()
 
+    // ── Auto-register : si on n'a jamais vu ce widgetId, INSERT OR IGNORE
+    //    dans la table `widgets` (+ ajout au Set RAM). Permet aux REST
+    //    history lookups de fonctionner sans que l'app ait besoin de POST
+    //    explicitement. Cache RAM → 0 DB hit quand le widget est connu.
+    if (SessionRegistry.knownWidgetIds.add(widgetId)) {
+        applicationScope.launch(Dispatchers.IO) {
+            val created = widgetRepository.registerIfAbsent(
+                id        = widgetId,
+                projectId = device.projectId,
+                ownerId   = device.ownerId,
+                type      = "auto"
+            )
+            if (created) {
+                logger.info("Auto-registered widget=$widgetId project=${device.projectId} (first frame from device=${device.id})")
+            }
+        }
+    }
+
     // mettre à jour lastPayloads en RAM — accès sub-milliseconde
     SessionRegistry.lastPayloads[widgetId] = payloadBase64
 

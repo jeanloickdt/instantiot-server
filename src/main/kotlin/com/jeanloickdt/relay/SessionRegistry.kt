@@ -75,6 +75,12 @@ object SessionRegistry {
     // N'affecte PAS le relay temps réel — seulement la persistance.
     val numericThrottleMap = ConcurrentHashMap<String, Long>()
 
+    // Cache RAM des widgetId (= protocolId) déjà connus en DB.
+    // Utilisé par l'auto-register dans DeviceRelay : un widgetId déjà dans
+    // le Set → pas de DB hit, sinon INSERT OR IGNORE + ajout au Set.
+    // Peuplé au démarrage via `seedKnownWidgets()` + au fur et à mesure.
+    val knownWidgetIds: MutableSet<WidgetId> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
     // enregistrer une session app — supporte plusieurs connexions par user
     fun registerApp(userId: UserId, session: WebSocketSession): AppSession {
         val appSession = AppSession(userId, session)

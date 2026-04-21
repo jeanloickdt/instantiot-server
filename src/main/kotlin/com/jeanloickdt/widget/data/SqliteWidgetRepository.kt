@@ -26,6 +26,34 @@ class SqliteWidgetRepository : WidgetRepository {
     }
 
     // ============================================================
+    // Register idempotent — auto-register depuis DeviceRelay
+    // Utilise INSERT OR IGNORE via SQLite ignoreAndReturnGeneratedKeys
+    // ============================================================
+    override fun registerIfAbsent(
+        id: String,
+        projectId: String,
+        ownerId: String,
+        type: String
+    ): Boolean {
+        return transaction {
+            // `insertIgnore` → no-op si (id) existe déjà (primary key).
+            // On n'écrase jamais : les champs lastPayload/lastSeenAt d'un
+            // widget existant ne sont pas touchés.
+            val inserted = WidgetTable.insertIgnore {
+                it[WidgetTable.id]          = id
+                it[WidgetTable.projectId]   = projectId
+                it[WidgetTable.ownerId]     = ownerId
+                it[WidgetTable.type]        = type
+                it[WidgetTable.lastPayload] = null
+                it[WidgetTable.lastSeenAt]  = null
+            }
+            // `insertIgnore` retourne un InsertStatement ; insertedCount > 0
+            // → une ligne a été créée.
+            inserted.insertedCount > 0
+        }
+    }
+
+    // ============================================================
     // Trouver un widget par son id
     // ============================================================
     override fun findById(id: String): WidgetRow? {
