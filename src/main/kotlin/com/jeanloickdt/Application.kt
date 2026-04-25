@@ -185,6 +185,12 @@ fun Application.module() {
         }
     }
 
+    // mDNS / Bonjour — désinscrit le service avant que les sockets ferment
+    // pour que les apps voient le serveur disparaître proprement.
+    monitor.subscribe(ApplicationStopping) {
+        com.jeanloickdt.discovery.MdnsPublisher.stop()
+    }
+
     // ============================================================
     // Licence — charger depuis ~/.instantiot/licence.key
     // ============================================================
@@ -219,6 +225,17 @@ fun Application.module() {
     // Chaque connexion ESP dans sa propre coroutine IO
     // ============================================================
     startDeviceRelay(deviceRepository, widgetRepository, tcpPort = com.jeanloickdt.common.ServerConfig.tcpPort)
+
+    // ============================================================
+    // mDNS / Bonjour — annonce du service _instantiot._tcp
+    // À ce stade les ports HTTP + TCP sont bindés, on peut publier.
+    // Échec non-fatal : si JmDNS ne se lance pas, l'app peut toujours
+    // ajouter le serveur manuellement.
+    // ============================================================
+    val displayName = (System.getenv("HOSTNAME")
+        ?: System.getenv("COMPUTERNAME")
+        ?: "InstantIoT Server")
+    com.jeanloickdt.discovery.MdnsPublisher.start(displayName = displayName)
 
     // ============================================================
     // Flush history buffer → SQLite WAL batch toutes les 5s
