@@ -7,6 +7,7 @@ import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
 import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
+import com.jeanloickdt.widget.domain.WidgetHistoryEnvelope
 import com.jeanloickdt.widget.domain.WidgetHistoryPointResponse
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryResponse
@@ -226,7 +227,12 @@ fun Route.widgetRoutes(
                 }
             }
 
-            call.respond(HttpStatusCode.OK, points)
+            // Capturé après la query : reflète le moment où le serveur
+            // est sur le point de répondre. L'app utilise ça pour
+            // corriger le clock skew app↔serveur (cf. AdvancedChart
+            // live append).
+            val serverTimeMs = System.currentTimeMillis()
+            call.respond(HttpStatusCode.OK, WidgetHistoryEnvelope(serverTimeMs, points))
         }
 
         // ============================================================

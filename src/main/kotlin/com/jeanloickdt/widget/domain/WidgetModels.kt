@@ -65,3 +65,19 @@ data class WidgetHistoryPointResponse(
     val yMax: Double? = null,     // null pour raw ; max du bucket pour agrégé
     val count: Int? = null        // null pour raw ; nombre d'échantillons du bucket
 )
+
+/**
+ * Enveloppe de réponse pour `GET /api/widgets/{id}/history`.
+ *
+ * Le champ [serverTimeMs] permet à l'app de calculer son **clock skew**
+ * (`serverTimeMs - app.now()` au moment de la réception) et de corriger
+ * les timestamps des points live arrivant ensuite via WebSocket. Sans
+ * ça, mélanger des t serveur (historique) et des t app (live) crée des
+ * sauts visibles dans la courbe ("fishhook" à la frontière historique
+ * ↔ live) dès qu'il y a >1s d'écart d'horloge.
+ */
+@Serializable
+data class WidgetHistoryEnvelope(
+    val serverTimeMs: Long,
+    val points: List<WidgetHistoryPointResponse>
+)
