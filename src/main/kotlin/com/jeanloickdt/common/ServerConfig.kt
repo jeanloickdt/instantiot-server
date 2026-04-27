@@ -148,7 +148,34 @@ object ServerConfig {
     fun save(newHttpPort: Int? = null, newTcpPort: Int? = null) {
         if (newHttpPort != null) httpPort = newHttpPort
         if (newTcpPort != null) tcpPort = newTcpPort
+        writeProperties()
+    }
 
+    /**
+     * Sauvegarder les paramètres d'historique. Tout `null` est ignoré
+     * (partial update). Pas de redémarrage nécessaire — les valeurs
+     * sont relues à chaque cycle de cleanup / downsample / write.
+     */
+    fun saveHistoryConfig(
+        retentionRawDays: Int? = null,
+        retentionOpaqueDays: Int? = null,
+        throttleRawIntervalSeconds: Long? = null,
+        retentionMinDays: Int? = null,
+        retentionHourDays: Int? = null,
+        retentionDayDays: Int? = null,
+        downsampleIntervalMinutes: Int? = null
+    ) {
+        if (retentionRawDays != null)          historyRetentionRawDays          = retentionRawDays.coerceAtLeast(1)
+        if (retentionOpaqueDays != null)       historyRetentionOpaqueDays       = retentionOpaqueDays.coerceAtLeast(1)
+        if (throttleRawIntervalSeconds != null) historyThrottleRawIntervalMs    = throttleRawIntervalSeconds.coerceAtLeast(0L) * 1000L
+        if (retentionMinDays != null)          historyRetentionMinDays          = retentionMinDays.coerceAtLeast(1)
+        if (retentionHourDays != null)         historyRetentionHourDays         = retentionHourDays.coerceAtLeast(1)
+        if (retentionDayDays != null)          historyRetentionDayDays          = retentionDayDays // -1 autorisé = infini
+        if (downsampleIntervalMinutes != null) historyDownsampleIntervalMinutes = downsampleIntervalMinutes.coerceAtLeast(1)
+        writeProperties()
+    }
+
+    private fun writeProperties() {
         configFile.parentFile.mkdirs()
         val props = Properties()
         props.setProperty("http.port", httpPort.toString())

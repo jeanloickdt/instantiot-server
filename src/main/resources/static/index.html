@@ -147,6 +147,50 @@
           <p class="config-note" x-text="t('config.restartNote')"></p>
         </div>
 
+        <!-- HISTORY RETENTION / DOWNSAMPLE -->
+        <div class="section">
+          <h2 class="section-title" x-text="t('history.title')"></h2>
+          <p class="config-note" x-text="t('history.intro')"></p>
+          <form class="config-form" @submit.prevent="saveHistoryConfig()">
+
+            <div class="config-row">
+              <label x-text="t('history.retentionRaw')" :title="t('history.retentionRawHelp')"></label>
+              <input type="number" x-model.number="historyForm.retentionRawDays" min="1" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('history.retentionOpaque')" :title="t('history.retentionOpaqueHelp')"></label>
+              <input type="number" x-model.number="historyForm.retentionOpaqueDays" min="1" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('history.throttle')" :title="t('history.throttleHelp')"></label>
+              <input type="number" x-model.number="historyForm.throttleRawIntervalSeconds" min="0" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('history.retentionMin')" :title="t('history.retentionMinHelp')"></label>
+              <input type="number" x-model.number="historyForm.retentionMinDays" min="1" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('history.retentionHour')" :title="t('history.retentionHourHelp')"></label>
+              <input type="number" x-model.number="historyForm.retentionHourDays" min="1" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('history.retentionDay')" :title="t('history.retentionDayHelp')"></label>
+              <input type="number" x-model.number="historyForm.retentionDayDays" min="-1" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('history.downsampleInterval')" :title="t('history.downsampleIntervalHelp')"></label>
+              <input type="number" x-model.number="historyForm.downsampleIntervalMinutes" min="1" required>
+            </div>
+
+            <div class="config-actions">
+              <button type="submit" x-text="t('history.save')"></button>
+              <button type="button" class="btn-cancel" @click="loadHistoryConfig()" x-text="t('history.reset')"></button>
+              <p class="config-msg" :class="historyForm.msgType" x-text="historyForm.msg"></p>
+            </div>
+          </form>
+          <p class="config-note" x-text="t('history.note')"></p>
+        </div>
+
       </div>
 
       <div class="col-side">

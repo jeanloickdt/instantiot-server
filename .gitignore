@@ -43,3 +43,7 @@ doc-and-test/licence-keys/licence-private.pem
 .venv/
 build/installer/
 build/jpackage-input/
+
+# macOS
+.DS_Store
+**/.DS_Store

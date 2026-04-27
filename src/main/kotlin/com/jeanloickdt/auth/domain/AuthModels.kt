@@ -73,3 +73,29 @@ data class UpdateConfigResponse(
     val httpPort: Int,
     val tcpPort: Int
 )
+
+// ============================================================
+// HISTORIQUE — config exposée dans le panel admin
+// ============================================================
+
+@Serializable
+data class HistoryConfigResponse(
+    val retentionRawDays: Int,
+    val retentionOpaqueDays: Int,
+    val throttleRawIntervalSeconds: Long,
+    val retentionMinDays: Int,
+    val retentionHourDays: Int,
+    val retentionDayDays: Int,     // -1 = infini
+    val downsampleIntervalMinutes: Int
+)
+
+@Serializable
+data class UpdateHistoryConfigRequest(
+    val retentionRawDays: Int? = null,
+    val retentionOpaqueDays: Int? = null,
+    val throttleRawIntervalSeconds: Long? = null,
+    val retentionMinDays: Int? = null,
+    val retentionHourDays: Int? = null,
+    val retentionDayDays: Int? = null,
+    val downsampleIntervalMinutes: Int? = null
+)

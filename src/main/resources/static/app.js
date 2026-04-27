@@ -20,6 +20,16 @@ document.addEventListener('alpine:init', () => {
     loginForm: { username: '', password: '', error: '' },
     setupForm: { current: '', newPwd: '', confirm: '', error: '' },
     configForm: { httpPort: 8080, tcpPort: 9001, msg: '', msgType: '' },
+    historyForm: {
+      retentionRawDays: 7,
+      retentionOpaqueDays: 1,
+      throttleRawIntervalSeconds: 5,
+      retentionMinDays: 90,
+      retentionHourDays: 365,
+      retentionDayDays: -1,
+      downsampleIntervalMinutes: 60,
+      msg: '', msgType: ''
+    },
 
     // ── Data ───────────────────────────────────────────────
     stats: {
@@ -218,6 +228,7 @@ document.addEventListener('alpine:init', () => {
     async loadDashboard() {
       this.loadStats();
       this.loadServerInfo();
+      this.loadHistoryConfig();
     },
 
     async loadStats() {
@@ -254,6 +265,49 @@ document.addEventListener('alpine:init', () => {
         const data = await res.json().catch(() => null);
         this.configForm.msg = data?.error || this.t('config.saveError');
         this.configForm.msgType = 'error';
+      }
+    },
+
+    // ── History config ─────────────────────────────────────
+    async loadHistoryConfig() {
+      const res = await this.api('/api/admin/history-config');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.historyForm.retentionRawDays           = data.retentionRawDays;
+      this.historyForm.retentionOpaqueDays        = data.retentionOpaqueDays;
+      this.historyForm.throttleRawIntervalSeconds = data.throttleRawIntervalSeconds;
+      this.historyForm.retentionMinDays           = data.retentionMinDays;
+      this.historyForm.retentionHourDays          = data.retentionHourDays;
+      this.historyForm.retentionDayDays           = data.retentionDayDays;
+      this.historyForm.downsampleIntervalMinutes  = data.downsampleIntervalMinutes;
+      this.historyForm.msg = '';
+      this.historyForm.msgType = '';
+    },
+
+    async saveHistoryConfig() {
+      this.historyForm.msg = '';
+      this.historyForm.msgType = '';
+
+      const res = await this.api('/api/admin/history-config', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          retentionRawDays:           this.historyForm.retentionRawDays,
+          retentionOpaqueDays:        this.historyForm.retentionOpaqueDays,
+          throttleRawIntervalSeconds: this.historyForm.throttleRawIntervalSeconds,
+          retentionMinDays:           this.historyForm.retentionMinDays,
+          retentionHourDays:          this.historyForm.retentionHourDays,
+          retentionDayDays:           this.historyForm.retentionDayDays,
+          downsampleIntervalMinutes:  this.historyForm.downsampleIntervalMinutes
+        })
+      });
+
+      if (res && res.ok) {
+        this.historyForm.msg = this.t('history.saved');
+        this.historyForm.msgType = 'success';
+      } else if (res) {
+        const data = await res.json().catch(() => null);
+        this.historyForm.msg = data?.error || this.t('history.saveError');
+        this.historyForm.msgType = 'error';
       }
     },
 

@@ -24,6 +24,15 @@ object DatabaseFactory {
         transaction {
             SchemaUtils.create(*tables)
 
+            // ─── Migration : device_type + connectivity sur `devices` ───
+            // SchemaUtils.create utilise CREATE TABLE IF NOT EXISTS et
+            // n'ALTER jamais une table existante. On tente donc l'ajout
+            // des colonnes manquantes et on ignore l'erreur "duplicate
+            // column" si la DB est déjà à jour (SQLite < 3.35 n'a pas
+            // ADD COLUMN IF NOT EXISTS).
+            runCatching { exec("ALTER TABLE devices ADD COLUMN device_type TEXT") }
+            runCatching { exec("ALTER TABLE devices ADD COLUMN connectivity TEXT") }
+
             // index pour widget_history — queries rapides par plage de temps
             exec("CREATE INDEX IF NOT EXISTS idx_history_widget  ON widget_history (widget_id, recorded_at)")
             exec("CREATE INDEX IF NOT EXISTS idx_history_project ON widget_history (project_id, recorded_at)")

@@ -299,6 +299,98 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
+// 🗄️ ADMIN HISTORY CONFIG — admin only — paramètres rétention / downsample
+// Pas de redémarrage requis : les valeurs sont relues à chaque cycle.
+// ============================================================
+fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
+
+    // garde commune admin-only
+    suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
+        val userId = call.principal<JWTPrincipal>()?.subject
+        if (userId == null) {
+            call.respond(HttpStatusCode.Unauthorized)
+            return false
+        }
+        val user = userRepository.findById(userId)
+        if (user == null || user.role != "admin") {
+            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
+            return false
+        }
+        return true
+    }
+
+    get("/api/admin/history-config") {
+        if (!checkAdmin(call)) return@get
+        call.respond(HttpStatusCode.OK, HistoryConfigResponse(
+            retentionRawDays          = ServerConfig.historyRetentionRawDays,
+            retentionOpaqueDays       = ServerConfig.historyRetentionOpaqueDays,
+            throttleRawIntervalSeconds = ServerConfig.historyThrottleRawIntervalMs / 1000L,
+            retentionMinDays          = ServerConfig.historyRetentionMinDays,
+            retentionHourDays         = ServerConfig.historyRetentionHourDays,
+            retentionDayDays          = ServerConfig.historyRetentionDayDays,
+            downsampleIntervalMinutes = ServerConfig.historyDownsampleIntervalMinutes
+        ))
+    }
+
+    patch("/api/admin/history-config") {
+        if (!checkAdmin(call)) return@patch
+
+        val body = call.receive<UpdateHistoryConfigRequest>()
+
+        // validations — bornes positives (sauf day qui accepte -1 = infini)
+        body.retentionRawDays?.let {
+            if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "retentionRawDays must be >= 1"))
+        }
+        body.retentionOpaqueDays?.let {
+            if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "retentionOpaqueDays must be >= 1"))
+        }
+        body.throttleRawIntervalSeconds?.let {
+            if (it < 0) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "throttleRawIntervalSeconds must be >= 0"))
+        }
+        body.retentionMinDays?.let {
+            if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "retentionMinDays must be >= 1"))
+        }
+        body.retentionHourDays?.let {
+            if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "retentionHourDays must be >= 1"))
+        }
+        body.retentionDayDays?.let {
+            // -1 = infini, sinon >= 1
+            if (it != -1 && it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "retentionDayDays must be >= 1 or -1 for unlimited"))
+        }
+        body.downsampleIntervalMinutes?.let {
+            if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
+                mapOf("error" to "downsampleIntervalMinutes must be >= 1"))
+        }
+
+        ServerConfig.saveHistoryConfig(
+            retentionRawDays          = body.retentionRawDays,
+            retentionOpaqueDays       = body.retentionOpaqueDays,
+            throttleRawIntervalSeconds = body.throttleRawIntervalSeconds,
+            retentionMinDays          = body.retentionMinDays,
+            retentionHourDays         = body.retentionHourDays,
+            retentionDayDays          = body.retentionDayDays,
+            downsampleIntervalMinutes = body.downsampleIntervalMinutes
+        )
+
+        call.respond(HttpStatusCode.OK, HistoryConfigResponse(
+            retentionRawDays          = ServerConfig.historyRetentionRawDays,
+            retentionOpaqueDays       = ServerConfig.historyRetentionOpaqueDays,
+            throttleRawIntervalSeconds = ServerConfig.historyThrottleRawIntervalMs / 1000L,
+            retentionMinDays          = ServerConfig.historyRetentionMinDays,
+            retentionHourDays         = ServerConfig.historyRetentionHourDays,
+            retentionDayDays          = ServerConfig.historyRetentionDayDays,
+            downsampleIntervalMinutes = ServerConfig.historyDownsampleIntervalMinutes
+        ))
+    }
+}
+
+// ============================================================
 // 🔄 ADMIN RESTART — admin only — arrêt propre du serveur
 // Le process manager (systemd, jpackage, etc.) le redémarrera
 // ============================================================
@@ -382,6 +474,7 @@ fun Route.authRoutes(
         adminDevicesRoute(userRepository, deviceRepository)
         adminServerInfoRoute(userRepository)
         adminConfigRoute(userRepository)
+        adminHistoryConfigRoute(userRepository)
         adminRestartRoute(userRepository)
     }
 }
