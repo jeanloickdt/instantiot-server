@@ -5,16 +5,15 @@ interface UserRepository {
     /**
      * Create a new user in the users table.
      *
-     * @param passwordChanged `true` when the user chose the password themselves
-     *   (e.g. via /api/register). `false` when the password was assigned
-     *   (admin bootstrap or admin-reset via a forgot-password flow) — the
-     *   user will be forced to change it at the next login.
+     * Note: the legacy `passwordChanged` flag has been removed. The V1
+     * first-launch flow handles credential bootstrap differently
+     * (licence-key-based admin password + welcome screen with
+     * Renew/Skip choice). See V1_PLAN.md.
      */
     fun create(
         username: String,
         pwdHash: String,
-        role: String = "user",
-        passwordChanged: Boolean = false
+        role: String = "user"
     ): String
 
     fun findByUsername(username: String): UserRow?
@@ -22,4 +21,3 @@ interface UserRepository {
     fun updatePassword(id: String, newHash: String)
     fun count(): Long
 }
-

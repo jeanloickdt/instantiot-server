@@ -17,8 +17,7 @@ data class LoginRequest(
 @Serializable
 data class AuthResponse(
     val token: String,
-    val role: String,
-    val passwordChanged: Boolean
+    val role: String
 )
 
 @Serializable

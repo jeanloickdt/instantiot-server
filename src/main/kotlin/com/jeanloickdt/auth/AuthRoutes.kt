@@ -46,7 +46,7 @@ private const val PASSWORD_MAX_LENGTH = 128
 
 // ============================================================
 // 🔓 LOGIN — toujours accessible, même sans licence
-// Retourne le token + role + passwordChanged pour le dashboard
+// Retourne le token + role pour le dashboard
 // ============================================================
 fun Route.loginRoute(userRepository: UserRepository) {
     post("/api/login") {
@@ -60,9 +60,8 @@ fun Route.loginRoute(userRepository: UserRepository) {
 
         val token = JwtConfig.generateToken(user.id)
         call.respond(AuthResponse(
-            token           = token,
-            role            = user.role,
-            passwordChanged = user.passwordChanged
+            token = token,
+            role  = user.role
         ))
     }
 }
@@ -102,21 +101,16 @@ fun Route.registerRoute(userRepository: UserRepository) {
         }
 
         val hash   = BCrypt.hashpw(body.password, BCrypt.gensalt())
-        // Self-register : the user picked this password, so we mark it as
-        // chosen (passwordChanged=true) to avoid forcing a pointless change
-        // at the next login.
         val userId = userRepository.create(
             username = body.username,
-            pwdHash = hash,
-            passwordChanged = true
+            pwdHash = hash
         )
         val user   = userRepository.findById(userId)!!
         val token  = JwtConfig.generateToken(userId)
 
         call.respond(HttpStatusCode.Created, AuthResponse(
-            token           = token,
-            role            = user.role,
-            passwordChanged = user.passwordChanged
+            token = token,
+            role  = user.role
         ))
     }
 }

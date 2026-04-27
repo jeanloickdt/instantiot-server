@@ -9,7 +9,12 @@ document.addEventListener('alpine:init', () => {
     view: 'login',
     token: localStorage.getItem('token'),
     role: localStorage.getItem('role'),
-    passwordChanged: localStorage.getItem('passwordChanged') === 'true',
+    // Legacy flag — le serveur ne l'envoie plus (V1 first-launch flow).
+    // On default à 'true' (= setup done, va direct au dashboard) si absent
+    // ou si stocké à une valeur différente de 'false'. L'écran 'setup'
+    // reste accessible si le serveur (ancien) renvoie explicitement false,
+    // ou si une install legacy avait stocké 'false' dans localStorage.
+    passwordChanged: localStorage.getItem('passwordChanged') !== 'false',
     lang: localStorage.getItem('lang') || 'en',
     theme: localStorage.getItem('theme') || null,
     refreshInterval: null,
@@ -153,10 +158,11 @@ document.addEventListener('alpine:init', () => {
         const data = await res.json();
         this.token = data.token;
         this.role = data.role;
-        this.passwordChanged = data.passwordChanged;
+        // Tolère absence du champ (V1 server) → considère setup done
+        this.passwordChanged = data.passwordChanged !== false;
         localStorage.setItem('token', data.token);
         localStorage.setItem('role', data.role);
-        localStorage.setItem('passwordChanged', String(data.passwordChanged));
+        localStorage.setItem('passwordChanged', String(this.passwordChanged));
 
         if (this.role !== 'admin') {
           this.logout();

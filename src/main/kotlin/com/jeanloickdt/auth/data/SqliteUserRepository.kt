@@ -11,8 +11,7 @@ class SqliteUserRepository : UserRepository {
     override fun create(
         username: String,
         pwdHash: String,
-        role: String,
-        passwordChanged: Boolean
+        role: String
     ): String {
         val id = UUID.randomUUID().toString()
         transaction {
@@ -21,7 +20,12 @@ class SqliteUserRepository : UserRepository {
                 it[UserTable.username]        = username
                 it[UserTable.pwdHash]         = pwdHash
                 it[UserTable.role]            = role
-                it[UserTable.passwordChanged] = passwordChanged
+                // password_changed column kept for backward DB compat,
+                // forced to true on insert (legacy "needs change" flag
+                // is no longer used — V1 first-launch flow handles
+                // bootstrap differently). Default value still satisfied
+                // for any existing rows.
+                it[UserTable.passwordChanged] = true
                 it[UserTable.createdAt]       = System.currentTimeMillis()
             }
         }
@@ -52,7 +56,6 @@ class SqliteUserRepository : UserRepository {
         transaction {
             UserTable.update({ UserTable.id eq id }) {
                 it[pwdHash] = newHash
-                it[passwordChanged] = true
             }
         }
     }
@@ -64,11 +67,10 @@ class SqliteUserRepository : UserRepository {
     }
 
     private fun ResultRow.toUserRow() = UserRow(
-        id              = this[UserTable.id],
-        username        = this[UserTable.username],
-        pwdHash         = this[UserTable.pwdHash],
-        role            = this[UserTable.role],
-        passwordChanged = this[UserTable.passwordChanged],
-        createdAt       = this[UserTable.createdAt]
+        id        = this[UserTable.id],
+        username  = this[UserTable.username],
+        pwdHash   = this[UserTable.pwdHash],
+        role      = this[UserTable.role],
+        createdAt = this[UserTable.createdAt]
     )
 }
