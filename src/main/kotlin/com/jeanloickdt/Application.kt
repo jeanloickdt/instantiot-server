@@ -209,10 +209,27 @@ fun Application.module() {
     //     licence (impossible de se connecter de toute façon : login
     //     sans licence dirige vers /setup côté front)
     //
+    // SAUF cas recovery : licence.key restauré depuis backup mais DB
+    // vide (perte SQLite, restore partiel). Là on recrée silencieusement
+    // l'admin avec licence.id pour que l'user puisse re-login. Sans
+    // ça il serait coincé sur /login sans pouvoir s'authentifier (et
+    // le setup screen ne s'afficherait pas puisque licence active).
+    //
     // generateAdminPassword() reste défini plus bas mais inutilisé —
     // gardé temporairement comme référence, à supprimer dans un
     // commit ultérieur quand le flow V1 sera complètement validé.
     // ============================================================
+    val licenceInfo = LicenceValidator.getLicenceInfo()
+    if (licenceInfo != null && LicenceValidator.isActivated() &&
+        userRepository.findByUsername("admin") == null) {
+        val pwdHash = BCrypt.hashpw(licenceInfo.id, BCrypt.gensalt())
+        userRepository.create("admin", pwdHash, role = "admin")
+        LoggerFactory.getLogger("InstantIoT").warn(
+            "Recovery bootstrap: licence valid but admin missing — " +
+                "re-created admin from licence (id prefix={})",
+            licenceInfo.id.take(8)
+        )
+    }
 
     // ============================================================
     // Setup state — log au boot pour visibilité opérationnelle
