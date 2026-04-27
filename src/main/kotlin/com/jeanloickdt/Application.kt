@@ -333,9 +333,27 @@ fun Application.module() {
         staticResources("/", "static")
 
         // GET /api/status — état du server — toujours accessible
+        // V1 : enrichi avec setup_state + licence summary pour que
+        // le frontend route vers /setup, /welcome ou /login selon
+        // l'état du first-launch flow.
         get("/api/status") {
+            val state = setupStateService.compute()
+            val info  = LicenceValidator.getLicenceInfo()
             call.respond(StatusResponse(
                 status           = "ok",
+                setupState       = when (state) {
+                    com.jeanloickdt.auth.SetupState.NeedsLicence -> "needs_licence"
+                    com.jeanloickdt.auth.SetupState.NeedsWelcome -> "needs_welcome"
+                    com.jeanloickdt.auth.SetupState.Ready        -> "ready"
+                },
+                licence          = if (info != null && LicenceValidator.isActivated()) {
+                    com.jeanloickdt.common.LicenceSummary(
+                        id        = info.id,
+                        plan      = info.plan,
+                        expiresAt = info.expiresAt
+                    )
+                } else null,
+                // legacy fields — derived from same source for compat
                 setup_required   = userRepository.count() == 0L,
                 licence_required = !LicenceValidator.isActivated()
             ))
