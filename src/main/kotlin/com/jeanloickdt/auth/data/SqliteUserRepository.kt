@@ -60,6 +60,16 @@ class SqliteUserRepository : UserRepository {
         }
     }
 
+    override fun updateCredentials(id: String, newUsername: String?, newPwdHash: String?) {
+        if (newUsername == null && newPwdHash == null) return
+        transaction {
+            UserTable.update({ UserTable.id eq id }) {
+                if (newUsername != null) it[username] = newUsername
+                if (newPwdHash != null)  it[pwdHash]  = newPwdHash
+            }
+        }
+    }
+
     override fun count(): Long {
         return transaction {
             UserTable.selectAll().count()

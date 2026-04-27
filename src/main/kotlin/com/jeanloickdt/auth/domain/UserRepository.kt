@@ -19,5 +19,14 @@ interface UserRepository {
     fun findByUsername(username: String): UserRow?
     fun findById(id: String): UserRow?
     fun updatePassword(id: String, newHash: String)
+
+    /**
+     * Partial update : si un argument est `null`, le champ correspondant
+     * reste inchangé. No-op si les deux sont null. Utilisé par le V1
+     * first-launch welcome (Renew action) qui peut modifier l'un et/ou
+     * l'autre.
+     */
+    fun updateCredentials(id: String, newUsername: String?, newPwdHash: String?)
+
     fun count(): Long
 }

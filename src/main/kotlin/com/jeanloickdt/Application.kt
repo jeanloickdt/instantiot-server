@@ -238,8 +238,13 @@ fun Application.module() {
     // Sera utilisé par GET /api/status pour rediriger le browser
     // vers /setup, /welcome ou /login selon l'état.
     // ============================================================
+    // SetupStateStore partagé entre le service (lecture) et le route
+    // /api/setup/welcome (écriture via markComplete). Une seule instance
+    // = pas de race / divergence d'état.
+    val setupStateStore = com.jeanloickdt.auth.SetupStateStore()
     val setupStateService = com.jeanloickdt.auth.SetupStateService(
-        userRepository = userRepository
+        userRepository  = userRepository,
+        setupStateStore = setupStateStore
     )
     LoggerFactory.getLogger("InstantIoT").info(
         "Setup state at boot: ${setupStateService.compute()}"
@@ -336,7 +341,7 @@ fun Application.module() {
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository)
+        authRoutes(userRepository, projectRepository, deviceRepository, setupStateStore)
         projectRoutes(
             projectRepository, deviceRepository, widgetRepository,
             widgetHistoryRepository, widgetHistoryNumericRepository,

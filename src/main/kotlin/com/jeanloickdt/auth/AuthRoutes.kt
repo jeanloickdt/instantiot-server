@@ -443,9 +443,10 @@ fun Route.licenceRoute(userRepository: UserRepository) {
             // renouvelée), on ne touche surtout PAS au password
             // existant — l'user a peut-être fait Renew avec ses
             // propres credentials.
+            var bootstrapToken: String? = null
             if (userRepository.findByUsername("admin") == null) {
                 val pwdHash = BCrypt.hashpw(info.id, BCrypt.gensalt())
-                userRepository.create(
+                val adminId = userRepository.create(
                     username = "admin",
                     pwdHash  = pwdHash,
                     role     = "admin"
@@ -454,14 +455,113 @@ fun Route.licenceRoute(userRepository: UserRepository) {
                     "Admin user bootstrapped from licence (id prefix={})",
                     info.id.take(8)  // log seulement le prefix, pas le password complet
                 )
+                // Auto-login : émission d'un JWT pour que le browser
+                // puisse appeler POST /api/setup/welcome (authentifié)
+                // sans repasser par /api/login. UX : l'user enchaîne
+                // setup → welcome sans friction.
+                bootstrapToken = JwtConfig.generateToken(adminId)
             }
             call.respond(HttpStatusCode.OK, LicenceResponse(
                 id        = info.id,
                 plan      = info.plan,
-                expiresAt = info.expiresAt
+                expiresAt = info.expiresAt,
+                token     = bootstrapToken
             ))
         } else {
             call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid licence key"))
+        }
+    }
+}
+
+// ============================================================
+// 🎉 WELCOME — finalise le first-launch flow
+// Authentifié admin only — l'user vient juste d'avoir son token via
+// POST /api/licence (auto-login) OU via login classique.
+// Action = "renew" (change credentials) ou "skip" (garde defaults).
+// Dans les deux cas, marque setup.done → welcome ne réapparaît plus.
+// ============================================================
+fun Route.welcomeRoute(
+    userRepository: UserRepository,
+    setupStateStore: SetupStateStore
+) {
+    authenticate("jwt") {
+        post("/api/setup/welcome") {
+            val userId = call.principal<JWTPrincipal>()?.subject
+                ?: return@post call.respond(HttpStatusCode.Unauthorized)
+            val user = userRepository.findById(userId)
+            if (user == null || user.role != "admin") {
+                return@post call.respond(
+                    HttpStatusCode.Forbidden,
+                    mapOf("error" to "Admin only")
+                )
+            }
+
+            val body = call.receive<WelcomeRequest>()
+
+            when (body.action.lowercase()) {
+                "renew" -> {
+                    val newUsername = body.username?.trim()?.takeIf { it.isNotBlank() }
+                    val newPassword = body.password?.takeIf { it.isNotBlank() }
+
+                    if (newUsername == null && newPassword == null) {
+                        return@post call.respond(
+                            HttpStatusCode.BadRequest,
+                            mapOf("error" to "Renew requires at least one of: username, password")
+                        )
+                    }
+
+                    if (newUsername != null) {
+                        if (!USERNAME_REGEX.matches(newUsername)) {
+                            return@post call.respond(
+                                HttpStatusCode.BadRequest,
+                                mapOf("error" to "Invalid username format (3-32 alphanumeric/underscore)")
+                            )
+                        }
+                        // Conflit si autre user a déjà ce username
+                        if (newUsername != user.username) {
+                            val existing = userRepository.findByUsername(newUsername)
+                            if (existing != null && existing.id != userId) {
+                                return@post call.respond(
+                                    HttpStatusCode.Conflict,
+                                    mapOf("error" to "Username already taken")
+                                )
+                            }
+                        }
+                    }
+
+                    if (newPassword != null) {
+                        if (newPassword.length < PASSWORD_MIN_LENGTH ||
+                            newPassword.length > PASSWORD_MAX_LENGTH) {
+                            return@post call.respond(
+                                HttpStatusCode.BadRequest,
+                                mapOf("error" to "Password must be $PASSWORD_MIN_LENGTH-$PASSWORD_MAX_LENGTH characters")
+                            )
+                        }
+                    }
+
+                    val newHash = newPassword?.let { BCrypt.hashpw(it, BCrypt.gensalt()) }
+                    userRepository.updateCredentials(userId, newUsername, newHash)
+                    LoggerFactory.getLogger("InstantIoT").info(
+                        "Welcome flow: admin credentials updated (renew)"
+                    )
+                }
+                "skip" -> {
+                    LoggerFactory.getLogger("InstantIoT").info(
+                        "Welcome flow: skipped — keeping default credentials"
+                    )
+                }
+                else -> return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "action must be 'renew' or 'skip'")
+                )
+            }
+
+            // Marque le setup comme complet — welcome ne réapparaîtra
+            // plus jamais (sauf si l'user delete setup.done volontairement,
+            // auquel cas l'auto-heal de SetupStateService recréé le
+            // marker silencieusement puisqu'un admin existe).
+            setupStateStore.markComplete()
+            call.respond(HttpStatusCode.OK)
         }
     }
 }
@@ -473,9 +573,11 @@ fun Route.licenceRoute(userRepository: UserRepository) {
 fun Route.authRoutes(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
-    deviceRepository: DeviceRepository
+    deviceRepository: DeviceRepository,
+    setupStateStore: SetupStateStore
 ) {
     licenceRoute(userRepository)
+    welcomeRoute(userRepository, setupStateStore)
 
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)

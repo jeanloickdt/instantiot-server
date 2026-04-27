@@ -63,7 +63,32 @@ data class LicenceRequest(
 data class LicenceResponse(
     val id: String,
     val plan: String,
-    val expiresAt: Long
+    val expiresAt: Long,
+    /**
+     * Token JWT auto-login généré uniquement quand l'activation
+     * a aussi déclenché le bootstrap admin (V1 first-launch flow).
+     * Null sinon (re-activation, simple GET) — l'user passera par
+     * /api/login normalement.
+     */
+    val token: String? = null
+)
+
+/**
+ * Body de POST /api/setup/welcome (V1 first-launch flow).
+ *
+ *   action = "renew" : update credentials admin (au moins un de
+ *                      `username`/`password` doit être fourni)
+ *   action = "skip"  : conserve les credentials par défaut
+ *                      (admin / licence.id)
+ *
+ * Dans les deux cas, le marker `~/.instantiot/setup.done` est créé
+ * → welcome ne réapparaîtra plus.
+ */
+@Serializable
+data class WelcomeRequest(
+    val action: String,
+    val username: String? = null,
+    val password: String? = null
 )
 
 @Serializable
