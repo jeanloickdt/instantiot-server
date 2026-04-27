@@ -15,6 +15,7 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.mindrot.jbcrypt.BCrypt
+import org.slf4j.LoggerFactory
 
 // ============================================================
 // Validation — port disponible
@@ -414,7 +415,7 @@ fun Route.adminRestartRoute(userRepository: UserRepository) {
 // 🔑 ADMIN LICENCE — activer une licence JWT signée
 // Pas besoin d'être authentifié — la licence est nécessaire AVANT le login
 // ============================================================
-fun Route.licenceRoute() {
+fun Route.licenceRoute(userRepository: UserRepository) {
     // GET — état de la licence courante
     get("/api/licence") {
         val info = LicenceValidator.getLicenceInfo()
@@ -429,12 +430,31 @@ fun Route.licenceRoute() {
         }
     }
 
-    // POST — activer une licence
+    // POST — activer une licence + bootstrap admin (V1 first-launch flow)
     post("/api/licence") {
         val body = call.receive<LicenceRequest>()
 
         val info = LicenceValidator.activate(body.key)
         if (info != null) {
+            // Bootstrap admin user si absent — V1 first-launch flow.
+            // password = licence.id (court, mémorisable, présent dans
+            // l'email d'achat). Si admin existe déjà (re-activation
+            // d'une licence sur un serveur configuré, ou licence
+            // renouvelée), on ne touche surtout PAS au password
+            // existant — l'user a peut-être fait Renew avec ses
+            // propres credentials.
+            if (userRepository.findByUsername("admin") == null) {
+                val pwdHash = BCrypt.hashpw(info.id, BCrypt.gensalt())
+                userRepository.create(
+                    username = "admin",
+                    pwdHash  = pwdHash,
+                    role     = "admin"
+                )
+                LoggerFactory.getLogger("InstantIoT").info(
+                    "Admin user bootstrapped from licence (id prefix={})",
+                    info.id.take(8)  // log seulement le prefix, pas le password complet
+                )
+            }
             call.respond(HttpStatusCode.OK, LicenceResponse(
                 id        = info.id,
                 plan      = info.plan,
@@ -455,7 +475,7 @@ fun Route.authRoutes(
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository
 ) {
-    licenceRoute()
+    licenceRoute(userRepository)
 
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)

@@ -197,26 +197,22 @@ fun Application.module() {
     LicenceValidator.load()
 
     // ============================================================
-    // Premier lancement — création compte admin automatique
-    // Password affiché dans les logs une seule fois
-    // (legacy — sera remplacé par le V1 first-launch flow où le
-    //  bootstrap admin se fait à l'activation de la licence avec
-    //  password = licence.id, cf. V1_PLAN.md)
+    // Bootstrap admin — V1 first-launch flow
+    //
+    // PLUS de création d'admin avec password random au boot.
+    // Le bootstrap est maintenant déclenché par POST /api/licence
+    // (cf. licenceRoute) avec password = licence.id, ce qui :
+    //   - aligne les credentials par défaut sur la valeur que l'user
+    //     reçoit dans son email d'achat (mémorisable, pas un secret
+    //     random qui scrolle dans les logs)
+    //   - évite d'avoir un admin "orphelin" sur un serveur sans
+    //     licence (impossible de se connecter de toute façon : login
+    //     sans licence dirige vers /setup côté front)
+    //
+    // generateAdminPassword() reste défini plus bas mais inutilisé —
+    // gardé temporairement comme référence, à supprimer dans un
+    // commit ultérieur quand le flow V1 sera complètement validé.
     // ============================================================
-    if (userRepository.count() == 0L) {
-        val adminPassword = generateAdminPassword()
-        val adminPasswordHash = BCrypt.hashpw(adminPassword, BCrypt.gensalt())
-        userRepository.create("admin", adminPasswordHash, role = "admin")
-
-        val logger = LoggerFactory.getLogger("InstantIoT")
-        logger.info("========================================")
-        logger.info("InstantIoT Server — First Launch")
-        logger.info("Admin account created")
-        logger.info("Username : admin")
-        logger.info("Password : $adminPassword")
-        logger.info("SAVE THIS — will not be shown again")
-        logger.info("========================================")
-    }
 
     // ============================================================
     // Setup state — log au boot pour visibilité opérationnelle
