@@ -199,6 +199,9 @@ fun Application.module() {
     // ============================================================
     // Premier lancement — création compte admin automatique
     // Password affiché dans les logs une seule fois
+    // (legacy — sera remplacé par le V1 first-launch flow où le
+    //  bootstrap admin se fait à l'activation de la licence avec
+    //  password = licence.id, cf. V1_PLAN.md)
     // ============================================================
     if (userRepository.count() == 0L) {
         val adminPassword = generateAdminPassword()
@@ -214,6 +217,20 @@ fun Application.module() {
         logger.info("SAVE THIS — will not be shown again")
         logger.info("========================================")
     }
+
+    // ============================================================
+    // Setup state — log au boot pour visibilité opérationnelle
+    // (V1 first-launch flow). Le service combine licence + DB +
+    // marker file et auto-heal si marker absent mais admin existe.
+    // Sera utilisé par GET /api/status pour rediriger le browser
+    // vers /setup, /welcome ou /login selon l'état.
+    // ============================================================
+    val setupStateService = com.jeanloickdt.auth.SetupStateService(
+        userRepository = userRepository
+    )
+    LoggerFactory.getLogger("InstantIoT").info(
+        "Setup state at boot: ${setupStateService.compute()}"
+    )
 
     // ============================================================
     // Authentification JWT — doit être configuré avant les routes
