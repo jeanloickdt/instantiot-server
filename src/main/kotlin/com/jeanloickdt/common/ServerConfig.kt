@@ -89,15 +89,76 @@ object ServerConfig {
 
     val uptimeMs: Long get() = System.currentTimeMillis() - startedAt
 
+    /**
+     * Résout l'IP LAN du serveur en privilégiant la "vraie" interface
+     * Wi-Fi/Ethernet, pas un VPN ou interface virtuelle.
+     *
+     * Pourquoi un scoring : sur macOS avec un VPN actif (Cisco, Wireguard,
+     * Tailscale, etc.), `getNetworkInterfaces` peut retourner l'interface
+     * tunnel `utun` AVANT l'interface Wi-Fi `en0`. Si on prend la 1ère
+     * trouvée, mDNS bind sur le tunnel → multicast `224.0.0.251` → "No
+     * route to host" → mDNS down.
+     *
+     * Filtres + scoring :
+     *   - Skip : loopback, down, virtuel, point-to-point, sans multicast
+     *   - Score IP : 192.168.* (LAN home) > 10.* (LAN entreprise) >
+     *                172.16-31.* (souvent VPN/Docker) > autre
+     *   - Tie-break : interface name (en0 < en1 < etc.)
+     */
     val localIp: String get() = try {
-        // chercher la vraie IP LAN (pas 127.0.0.1)
-        NetworkInterface.getNetworkInterfaces().asSequence()
-            .flatMap { it.inetAddresses.asSequence() }
-            .filter { !it.isLoopbackAddress && it is java.net.Inet4Address }
-            .map { it.hostAddress }
-            .firstOrNull() ?: InetAddress.getLocalHost().hostAddress
+        bestLanInterface()?.first ?: InetAddress.getLocalHost().hostAddress
     } catch (_: Exception) {
         "unknown"
+    }
+
+    /**
+     * Retourne (ipAddress, interfaceName) de la "meilleure" interface LAN
+     * trouvée, ou null si aucune candidat valide.
+     */
+    fun bestLanInterface(): Pair<String, String>? {
+        val candidates = NetworkInterface.getNetworkInterfaces().asSequence()
+            .filter { iface ->
+                try {
+                    iface.isUp &&
+                        !iface.isLoopback &&
+                        !iface.isVirtual &&
+                        !iface.isPointToPoint &&
+                        iface.supportsMulticast()
+                } catch (_: Exception) { false }
+            }
+            .flatMap { iface ->
+                iface.inetAddresses.asSequence()
+                    .filter { it is java.net.Inet4Address && !it.isLoopbackAddress }
+                    .map { it.hostAddress to iface.name }
+            }
+            .toList()
+
+        if (candidates.isEmpty()) return null
+
+        // Score : plus haut = mieux
+        fun score(ip: String, name: String): Int {
+            var s = 0
+            if (ip.startsWith("192.168.")) s += 100
+            else if (ip.startsWith("10."))  s += 80
+            else if (ip.startsWith("172.")) {
+                // 172.16-31 = privé. Souvent docker/VPN — moins prioritaire.
+                val second = ip.split(".").getOrNull(1)?.toIntOrNull() ?: 0
+                if (second in 16..31) s += 30
+            }
+            // Préfère interfaces "physiques" classiques
+            if (name.startsWith("en"))  s += 10  // macOS Wi-Fi/Ethernet
+            if (name.startsWith("eth")) s += 10  // Linux Ethernet
+            if (name.startsWith("wl"))  s += 8   // Linux Wi-Fi
+            // Pénalise interfaces tunnel / virtuelles
+            if (name.startsWith("utun")) s -= 50
+            if (name.startsWith("tun"))  s -= 50
+            if (name.startsWith("tap"))  s -= 50
+            if (name.contains("docker")) s -= 50
+            if (name.startsWith("br-"))  s -= 30  // Linux bridge
+            return s
+        }
+
+        return candidates.maxByOrNull { (ip, name) -> score(ip, name) }
     }
 
     val dbSizeBytes: Long get() = try {

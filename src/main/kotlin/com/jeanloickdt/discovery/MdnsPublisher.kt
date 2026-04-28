@@ -109,17 +109,26 @@ object MdnsPublisher {
     }
 
     /**
-     * Résout l'adresse IPv4 LAN pour le bind JmDNS. Fallback sur
-     * `InetAddress.getLocalHost()` si la résolution custom échoue.
+     * Résout l'adresse IPv4 LAN pour le bind JmDNS. Utilise le scoring
+     * intelligent de [ServerConfig.bestLanInterface] qui filtre les
+     * interfaces VPN (utun/tun/tap), virtuelles, sans multicast — sinon
+     * JmDNS bind sur l'interface VPN et on prend des
+     * `NoRouteToHostException` au premier paquet multicast `224.0.0.251`.
+     *
+     * Fallback `InetAddress.getLocalHost()` en dernier recours.
      */
     private fun resolveBindAddress(): InetAddress = try {
-        val localIp = ServerConfig.localIp
-        if (localIp.isNotBlank() && localIp != "unknown") {
-            InetAddress.getByName(localIp)
+        val best = ServerConfig.bestLanInterface()
+        if (best != null) {
+            val (ip, name) = best
+            log.info("mDNS bind selected interface: {} ({})", name, ip)
+            InetAddress.getByName(ip)
         } else {
+            log.warn("No suitable LAN interface found — falling back to localhost (mDNS may not work)")
             InetAddress.getLocalHost()
         }
-    } catch (_: Exception) {
+    } catch (e: Exception) {
+        log.warn("Failed to resolve bind address — fallback localhost: {}", e.message)
         InetAddress.getLocalHost()
     }
 }

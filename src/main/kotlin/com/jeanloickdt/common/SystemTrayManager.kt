@@ -3,7 +3,6 @@ package com.jeanloickdt.common
 import org.slf4j.LoggerFactory
 import java.awt.*
 import java.awt.image.BufferedImage
-import java.net.NetworkInterface
 import java.net.URI
 
 /**
@@ -141,22 +140,11 @@ object SystemTrayManager {
     }
 
     /**
-     * Détecte l'IP locale du LAN en cherchant la première interface
-     * réseau active non-loopback avec IPv4. Fallback "localhost" si
-     * échec (cas docker isolé, etc.).
+     * Détecte l'IP locale via [ServerConfig.localIp] qui applique le
+     * scoring intelligent (filtre VPN/virtuels, privilège Wi-Fi/Ethernet).
      */
-    private fun detectLocalIp(): String {
-        return try {
-            NetworkInterface.getNetworkInterfaces().toList()
-                .filter { it.isUp && !it.isLoopback && !it.isVirtual }
-                .flatMap { it.inetAddresses.toList() }
-                .firstOrNull { !it.isLoopbackAddress && it.address.size == 4 }
-                ?.hostAddress
-                ?: "localhost"
-        } catch (_: Exception) {
-            "localhost"
-        }
-    }
+    private fun detectLocalIp(): String =
+        ServerConfig.localIp.takeUnless { it == "unknown" || it.isBlank() } ?: "localhost"
 
     /**
      * Generer une icone 16x16 programmatiquement.
