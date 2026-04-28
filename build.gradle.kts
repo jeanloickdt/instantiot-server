@@ -48,3 +48,102 @@ dependencies {
     // pour que l'app le découvre automatiquement (cf. MdnsPublisher).
     implementation("org.jmdns:jmdns:3.6.1")
 }
+
+// ════════════════════════════════════════════════════════════
+// jpackage — installer natif par OS (macOS .dmg, Win .msi, Linux .deb)
+// ────────────────────────────────────────────────────────────
+// Stratégie V1 : chaque OS build son propre installer via jpackage.
+// Pas de cross-compilation pour V1 (CI matrix viendra plus tard).
+//
+// Usage local :
+//   ./gradlew packageInstaller
+//
+// Output : build/jpackage/InstantIoT-Server-X.Y.Z.{dmg,msi,deb}
+//
+// Pré-requis : `jpackage` est dans le JDK 22 (JAVA_HOME/bin/jpackage)
+// ════════════════════════════════════════════════════════════
+val packageInstaller by tasks.registering(Exec::class) {
+    group = "distribution"
+    description = "Build native installer for current OS (.dmg / .msi / .deb)"
+
+    // jpackage a besoin du fat JAR — dépend de la tâche Ktor
+    dependsOn("buildFatJar")
+
+    val osName = System.getProperty("os.name").lowercase()
+    val installerType = when {
+        osName.contains("mac")   -> "dmg"
+        osName.contains("win")   -> "msi"
+        osName.contains("linux") -> "deb"
+        else -> error("Unsupported OS for jpackage: $osName")
+    }
+
+    val outDir = layout.buildDirectory.dir("jpackage").get().asFile
+    val fatJarDir = layout.buildDirectory.dir("libs").get().asFile
+    // Le buildFatJar du plugin Ktor produit `<project>-all.jar`
+    val fatJarName = "${project.name}-all.jar"
+
+    doFirst {
+        outDir.deleteRecursively()
+        outDir.mkdirs()
+    }
+
+    val jpackageBin = "${System.getProperty("java.home")}/bin/jpackage"
+
+    val baseArgs = mutableListOf(
+        jpackageBin,
+        "--type", installerType,
+        "--input", fatJarDir.absolutePath,
+        "--main-jar", fatJarName,
+        "--main-class", "com.jeanloickdt.ApplicationKt",
+        "--name", "InstantIoT Server",
+        // jpackage refuse les versions commençant par 0 (genre "0.0.1")
+        // Pour une version semver "MAJOR.MINOR.PATCH" si MAJOR == 0, on la
+        // bumppe à 1.0.0 pour le packaging — la version "logique" du
+        // serveur reste celle de project.version, juste le binaire packaged
+        // affiche 1.0.0 dans les métadonnées OS.
+        "--app-version", project.version.toString().let { v ->
+            if (v.startsWith("0.")) "1.0.0" else v
+        },
+        "--vendor", "InstantIoT",
+        "--description", "Self-hosted IoT dashboard server for makers",
+        "--copyright", "© 2026 InstantIoT",
+        "--dest", outDir.absolutePath,
+        // -Xmx128m suffit largement (relay TCP léger + SQLite local)
+        // -Dfile.encoding=UTF-8 pour cohérence cross-platform
+        "--java-options", "-Xmx256m",
+        "--java-options", "-Dfile.encoding=UTF-8"
+    )
+
+    // Options par OS
+    when (installerType) {
+        "dmg" -> {
+            baseArgs += listOf(
+                "--mac-package-name", "InstantIoTServer"
+            )
+        }
+        "msi" -> {
+            baseArgs += listOf(
+                "--win-menu",
+                "--win-shortcut",
+                "--win-dir-chooser",
+                "--win-menu-group", "InstantIoT"
+            )
+        }
+        "deb" -> {
+            baseArgs += listOf(
+                "--linux-shortcut",
+                "--linux-menu-group", "Network",
+                "--linux-app-category", "utils",
+                "--linux-package-name", "instantiot-server"
+            )
+        }
+    }
+
+    commandLine = baseArgs
+
+    doLast {
+        println()
+        println("✅ Installer built in: $outDir")
+        outDir.listFiles()?.forEach { println("   $it (${it.length() / 1024 / 1024} MB)") }
+    }
+}
