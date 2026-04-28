@@ -55,6 +55,42 @@ object ServerConfig {
     // HISTORIQUE — Phase 1 (raw numeric)
     // ============================================================
 
+    // ============================================================
+    // BACKUP AUTOMATIQUE — V1
+    // ============================================================
+
+    /** Backup auto activé par défaut — protège le maker contre la perte
+     *  de DB en cas de corruption SQLite, disque qui meurt, etc. */
+    var backupEnabled: Boolean = true
+        private set
+
+    /** Intervalle entre 2 backups automatiques (heures). 24h = une fois
+     *  par jour, low impact. Min 1h, pas de max (mais pas en dessous
+     *  d'1h pour éviter les write storms sur SD cards Pi). */
+    var backupIntervalHours: Int = 24
+        private set
+
+    /** Nombre de backups gardés. Au-delà, les plus vieux sont purgés
+     *  par le cleanup post-snapshot. 30 = ~1 mois si daily. */
+    var backupRetentionCount: Int = 30
+        private set
+
+    /** Répertoire des snapshots — sous-dossier de instantiotDir pour
+     *  rester groupé avec licence.key, secret.key, instantiot.db. */
+    val backupDir: File = File(instantiotDir, "backups").apply { mkdirs() }
+
+    /** Sauvegarde la config backup. Hot-reload — pas de restart requis. */
+    fun saveBackupConfig(
+        enabled: Boolean? = null,
+        intervalHours: Int? = null,
+        retentionCount: Int? = null
+    ) {
+        if (enabled != null)        backupEnabled = enabled
+        if (intervalHours != null)  backupIntervalHours = intervalHours.coerceAtLeast(1)
+        if (retentionCount != null) backupRetentionCount = retentionCount.coerceAtLeast(1)
+        writeProperties()
+    }
+
     /** Retention des rows RAW dans `widget_history_numeric` (jours). */
     var historyRetentionRawDays: Int = 7
         private set
@@ -214,6 +250,12 @@ object ServerConfig {
                 .toIntOrNull() ?: -1
             historyDownsampleIntervalMinutes = props.getProperty("history.downsample.intervalMinutes", "60")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 60
+            backupEnabled = props.getProperty("backup.enabled", "true")
+                .toBooleanStrictOrNull() ?: true
+            backupIntervalHours = props.getProperty("backup.interval.hours", "24")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 24
+            backupRetentionCount = props.getProperty("backup.retention.count", "30")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 30
         } catch (_: Exception) {
             // fichier corrompu — garder les valeurs par defaut
         }
@@ -268,6 +310,9 @@ object ServerConfig {
         props.setProperty("history.retention.hour.days", historyRetentionHourDays.toString())
         props.setProperty("history.retention.day.days", historyRetentionDayDays.toString())
         props.setProperty("history.downsample.intervalMinutes", historyDownsampleIntervalMinutes.toString())
+        props.setProperty("backup.enabled", backupEnabled.toString())
+        props.setProperty("backup.interval.hours", backupIntervalHours.toString())
+        props.setProperty("backup.retention.count", backupRetentionCount.toString())
         configFile.outputStream().use { props.store(it, "InstantIoT Server Configuration") }
     }
 }

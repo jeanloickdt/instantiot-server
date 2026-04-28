@@ -329,6 +329,29 @@ fun Application.module() {
     }
 
     // ============================================================
+    // Backup automatique SQLite (V1 Phase 4)
+    // Snapshot via VACUUM INTO toutes les N heures + purge selon
+    // rétention. Hot-reload : si l'admin change l'interval/retention
+    // dans le panel, la prochaine itération utilise les nouveaux
+    // params (lecture de ServerConfig à chaque tour).
+    // ============================================================
+    launch(Dispatchers.IO) {
+        // Petit délai initial pour ne pas snapshot pendant le boot
+        // (laisse le serveur s'installer / faire son init de DB)
+        delay(60_000)
+        while (true) {
+            if (com.jeanloickdt.common.ServerConfig.backupEnabled) {
+                com.jeanloickdt.backup.BackupManager.snapshotNow()
+                com.jeanloickdt.backup.BackupManager.cleanup()
+            }
+            // Re-lecture de l'interval à chaque iter — hot-reload friendly
+            val intervalMs = com.jeanloickdt.common.ServerConfig.backupIntervalHours
+                .toLong() * 3600_000L
+            delay(intervalMs)
+        }
+    }
+
+    // ============================================================
     // Relay app — WebSocket /ws/app
     // ============================================================
     configureAppRelay(projectRepository)

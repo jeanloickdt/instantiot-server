@@ -386,6 +386,118 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
+// 💾 ADMIN BACKUP — admin only — snapshots SQLite (V1 Phase 4)
+// ============================================================
+fun Route.adminBackupRoute(userRepository: UserRepository) {
+
+    suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
+        val userId = call.principal<JWTPrincipal>()?.subject
+        if (userId == null) {
+            call.respond(HttpStatusCode.Unauthorized)
+            return false
+        }
+        val user = userRepository.findById(userId)
+        if (user == null || user.role != "admin") {
+            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
+            return false
+        }
+        return true
+    }
+
+    fun configResponse() = BackupConfigResponse(
+        enabled         = ServerConfig.backupEnabled,
+        intervalHours   = ServerConfig.backupIntervalHours,
+        retentionCount  = ServerConfig.backupRetentionCount,
+        lastBackupAtMs  = com.jeanloickdt.backup.BackupManager.lastBackupAtMs,
+        backupCount     = com.jeanloickdt.backup.BackupManager.list().size,
+        backupDirPath   = ServerConfig.backupDir.absolutePath
+    )
+
+    // ── Config (GET / PATCH) ───────────────────────────────
+    get("/api/admin/backup/config") {
+        if (!checkAdmin(call)) return@get
+        call.respond(HttpStatusCode.OK, configResponse())
+    }
+
+    patch("/api/admin/backup/config") {
+        if (!checkAdmin(call)) return@patch
+
+        val body = call.receive<UpdateBackupConfigRequest>()
+        body.intervalHours?.let {
+            if (it < 1) return@patch call.respond(
+                HttpStatusCode.BadRequest,
+                mapOf("error" to "intervalHours must be >= 1")
+            )
+        }
+        body.retentionCount?.let {
+            if (it < 1) return@patch call.respond(
+                HttpStatusCode.BadRequest,
+                mapOf("error" to "retentionCount must be >= 1")
+            )
+        }
+
+        ServerConfig.saveBackupConfig(
+            enabled        = body.enabled,
+            intervalHours  = body.intervalHours,
+            retentionCount = body.retentionCount
+        )
+        call.respond(HttpStatusCode.OK, configResponse())
+    }
+
+    // ── Snapshot manuel ────────────────────────────────────
+    post("/api/admin/backup/now") {
+        if (!checkAdmin(call)) return@post
+        val file = com.jeanloickdt.backup.BackupManager.snapshotNow()
+        if (file == null) {
+            return@post call.respond(
+                HttpStatusCode.InternalServerError,
+                mapOf("error" to "Backup failed — see server logs")
+            )
+        }
+        com.jeanloickdt.backup.BackupManager.cleanup()
+        call.respond(HttpStatusCode.OK, configResponse())
+    }
+
+    // ── Liste ──────────────────────────────────────────────
+    get("/api/admin/backup/list") {
+        if (!checkAdmin(call)) return@get
+        val backups = com.jeanloickdt.backup.BackupManager.list().map { info ->
+            BackupListEntry(
+                filename           = info.filename,
+                sizeBytes          = info.sizeBytes,
+                createdAtMs        = info.createdAt,
+                createdAtFormatted = info.createdAtFormatted
+            )
+        }
+        call.respond(HttpStatusCode.OK, BackupListResponse(backups))
+    }
+
+    // ── Restore (restart required) ─────────────────────────
+    post("/api/admin/backup/restore") {
+        if (!checkAdmin(call)) return@post
+        val body = call.receive<RestoreBackupRequest>()
+        if (body.filename.isBlank()) {
+            return@post call.respond(
+                HttpStatusCode.BadRequest,
+                mapOf("error" to "filename required")
+            )
+        }
+        val result = com.jeanloickdt.backup.BackupManager.restore(body.filename)
+        if (result == null) {
+            return@post call.respond(
+                HttpStatusCode.NotFound,
+                mapOf("error" to "Backup not found or restore failed — see server logs")
+            )
+        }
+        val (_, safetyNet) = result
+        call.respond(HttpStatusCode.OK, RestoreBackupResponse(
+            message = "Backup restored. Restart the server now to load the restored DB.",
+            safetyNetFilename = safetyNet.name
+        ))
+    }
+}
+
+// ============================================================
 // 🔄 ADMIN RESTART — admin only — arrêt propre du serveur
 // Le process manager (systemd, jpackage, etc.) le redémarrera
 // ============================================================
@@ -647,6 +759,7 @@ fun Route.authRoutes(
         adminServerInfoRoute(userRepository)
         adminConfigRoute(userRepository)
         adminHistoryConfigRoute(userRepository)
+        adminBackupRoute(userRepository)
         adminRestartRoute(userRepository)
     }
 }

@@ -136,3 +136,47 @@ data class UpdateHistoryConfigRequest(
     val retentionDayDays: Int? = null,
     val downsampleIntervalMinutes: Int? = null
 )
+// ============================================================
+// BACKUP — admin panel V1
+// ============================================================
+
+@Serializable
+data class BackupConfigResponse(
+    val enabled: Boolean,
+    val intervalHours: Int,
+    val retentionCount: Int,
+    val lastBackupAtMs: Long,        // 0 si jamais
+    val backupCount: Int,            // nombre de backups actuellement présents
+    val backupDirPath: String        // pour info dans l'UI
+)
+
+@Serializable
+data class UpdateBackupConfigRequest(
+    val enabled: Boolean? = null,
+    val intervalHours: Int? = null,
+    val retentionCount: Int? = null
+)
+
+@Serializable
+data class BackupListEntry(
+    val filename: String,
+    val sizeBytes: Long,
+    val createdAtMs: Long,
+    val createdAtFormatted: String
+)
+
+@Serializable
+data class BackupListResponse(
+    val backups: List<BackupListEntry>
+)
+
+@Serializable
+data class RestoreBackupRequest(
+    val filename: String
+)
+
+@Serializable
+data class RestoreBackupResponse(
+    val message: String,             // ex: "Restart required to load restored DB"
+    val safetyNetFilename: String    // ancien DB renommé
+)
