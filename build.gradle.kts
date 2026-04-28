@@ -130,11 +130,34 @@ val packageInstaller by tasks.registering(Exec::class) {
             )
         }
         "deb" -> {
+            // ─── Resources Linux : service systemd + scripts dpkg ─
+            // jpackage --resource-dir prend un dossier dont :
+            //   - le contenu de `lib/` est copié dans /opt/<pkg>/lib/
+            //   - les scripts `postinst`, `prerm`, `postrm`, `preinst`
+            //     sont utilisés tels quels par dpkg
+            // On stage tout ça dans build/jpackage-linux-resources/.
+            val linuxResourceDir = layout.buildDirectory.dir("jpackage-linux-resources").get().asFile
+            doFirst {
+                linuxResourceDir.deleteRecursively()
+                linuxResourceDir.mkdirs()
+                // Copy le .service dans lib/ (sera installé dans /opt/instantiot-server/lib/)
+                val libDir = linuxResourceDir.resolve("lib").apply { mkdirs() }
+                file("src/main/packaging/linux/instantiot-server.service")
+                    .copyTo(libDir.resolve("instantiot-server.service"), overwrite = true)
+                // Scripts dpkg à la racine
+                listOf("postinst", "prerm").forEach { name ->
+                    val src = file("src/main/packaging/linux/$name")
+                    val dst = linuxResourceDir.resolve(name)
+                    src.copyTo(dst, overwrite = true)
+                    dst.setExecutable(true, false)
+                }
+            }
             baseArgs += listOf(
                 "--linux-shortcut",
                 "--linux-menu-group", "Network",
                 "--linux-app-category", "utils",
-                "--linux-package-name", "instantiot-server"
+                "--linux-package-name", "instantiot-server",
+                "--resource-dir", linuxResourceDir.absolutePath
             )
         }
     }

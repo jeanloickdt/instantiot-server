@@ -1,0 +1,14 @@
+#!/bin/bash
+# Pre-remove script Debian — exécuté avant désinstallation du paquet.
+# Stop + disable le service. On garde l'user `instantiot` et ses
+# données dans /var/lib/instantiot/ — l'admin peut les wiper
+# manuellement s'il veut un nettoyage complet.
+
+set -e
+
+systemctl stop instantiot-server.service >/dev/null 2>&1 || true
+systemctl disable instantiot-server.service >/dev/null 2>&1 || true
+rm -f /etc/systemd/system/instantiot-server.service
+systemctl daemon-reload
+
+exit 0

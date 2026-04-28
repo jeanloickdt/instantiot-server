@@ -1,0 +1,52 @@
+#!/bin/bash
+# Post-install script Debian (.deb) — InstantIoT Server
+# Exécuté par dpkg après l'extraction du paquet.
+#
+# Étapes :
+#   1. Créer l'user system `instantiot` (no shell, no login)
+#   2. Créer /var/lib/instantiot/ (home + état persistant)
+#   3. Installer le service systemd
+#   4. Enable + start au boot
+
+set -e
+
+# 1. User system dédié — id < 1000, pas de shell, pas de home interactif
+if ! id -u instantiot >/dev/null 2>&1; then
+    useradd --system \
+            --no-create-home \
+            --home-dir /var/lib/instantiot \
+            --shell /usr/sbin/nologin \
+            --comment "InstantIoT Server" \
+            instantiot
+fi
+
+# 2. Home / data directory
+install -d -o instantiot -g instantiot -m 0750 /var/lib/instantiot
+
+# 3. Service systemd
+install -o root -g root -m 0644 \
+    /opt/instantiot-server/lib/instantiot-server.service \
+    /etc/systemd/system/instantiot-server.service
+
+systemctl daemon-reload
+
+# 4. Enable au boot + démarre maintenant
+systemctl enable instantiot-server.service >/dev/null 2>&1 || true
+systemctl start instantiot-server.service >/dev/null 2>&1 || true
+
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+echo "  InstantIoT Server installed"
+echo "═══════════════════════════════════════════════════════════"
+echo ""
+echo "  Status :   systemctl status instantiot-server"
+echo "  Logs   :   journalctl -u instantiot-server -f"
+echo "  Stop   :   sudo systemctl stop instantiot-server"
+echo "  Start  :   sudo systemctl start instantiot-server"
+echo ""
+echo "  Web admin panel : http://$(hostname -I | awk '{print $1}'):8080"
+echo "  (or any port the server falls back to if 8080 is busy)"
+echo ""
+echo "═══════════════════════════════════════════════════════════"
+
+exit 0
