@@ -427,3 +427,82 @@ td code {
   .stat-label { min-height: 32px; }
   th, td { padding: 8px 10px; font-size: 0.8em; }
 }
+
+/* ============================================================ */
+/* WELCOME — V1 first-launch flow                               */
+/* ============================================================ */
+.welcome-card {
+  max-width: 480px;
+  width: 100%;
+  text-align: left;
+}
+
+.welcome-card .logo,
+.welcome-card .subtitle {
+  text-align: center;
+}
+
+.welcome-defaults {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px;
+  margin: 16px 0 20px;
+}
+
+.welcome-defaults-title {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.welcome-cred-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 0.95em;
+}
+
+.welcome-cred-label {
+  min-width: 110px;
+  color: var(--text-muted);
+}
+
+.welcome-cred-value {
+  font-family: monospace;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 0.9em;
+  word-break: break-all;
+  flex: 1;
+}
+
+.welcome-defaults-hint {
+  margin-top: 12px;
+  font-size: 0.8em;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.welcome-renew-title {
+  font-size: 0.85em;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+}
+
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.welcome-actions button {
+  flex: 1;
+  margin: 0;
+}

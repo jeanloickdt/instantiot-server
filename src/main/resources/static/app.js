@@ -24,6 +24,15 @@ document.addEventListener('alpine:init', () => {
     licenceForm: { key: '', error: '' },
     loginForm: { username: '', password: '', error: '' },
     setupForm: { current: '', newPwd: '', confirm: '', error: '' },
+
+    // ── Welcome (V1 first-launch) ──────────────────────────
+    // bootstrapLicenceId : licence.id remontée par POST /api/licence,
+    // affichée sur l'écran welcome comme default password
+    bootstrapLicenceId: '',
+    welcomeForm: { username: '', password: '', error: '', submitting: false },
+
+    // ── Forgot password ─────────────────────────────────────
+    forgotForm: { key: '', error: '', success: false },
     configForm: { httpPort: 8080, tcpPort: 9001, msg: '', msgType: '' },
     historyForm: {
       retentionRawDays: 7,
@@ -73,21 +82,47 @@ document.addEventListener('alpine:init', () => {
     },
 
     // ── Init ───────────────────────────────────────────────
+    // Routing V1 first-launch flow basé sur GET /api/status :
+    //   setup_state = "needs_licence" → /licence (saisie de la clé)
+    //   setup_state = "needs_welcome" → /welcome (set credentials)
+    //   setup_state = "ready"          → /login ou /dashboard si token
+    //
+    // Fallback compat : si /api/status ne renvoie pas setup_state
+    // (ancien serveur), on retombe sur les booléens legacy
+    // licence_required + setup_required.
     async init() {
       if (this.theme) {
         document.documentElement.setAttribute('data-theme', this.theme);
       }
       document.documentElement.lang = this.lang;
 
-      // verifier la licence d'abord
-      const licenceOk = await this.checkLicence();
-      if (!licenceOk) {
+      const status = await this.fetchStatus();
+      const state = this.deriveSetupState(status);
+
+      if (state === 'needs_licence') {
         this.view = 'licence';
         return;
       }
+      if (state === 'needs_welcome') {
+        // Si on a un token (auto-login post-activation), on peut
+        // aller direct sur welcome. Sinon il faut passer par licence
+        // → welcome (cas du browser fraîchement ouvert sur un serveur
+        // dont le welcome n'a pas encore été acté).
+        if (this.token) {
+          this.view = 'welcome';
+        } else {
+          // Pas de token → forcer licence pour qu'activate ré-émette
+          // le token auto-login. Ce cas est rare (il faudrait que
+          // l'user ait fermé le browser entre activation et welcome).
+          this.view = 'licence';
+        }
+        return;
+      }
 
+      // setup_state = "ready"
       if (this.token && this.role === 'admin') {
         if (!this.passwordChanged) {
+          // Compat ancien serveur — sera dead path en V1
           this.view = 'setup';
         } else {
           this.enterDashboard();
@@ -95,6 +130,32 @@ document.addEventListener('alpine:init', () => {
       } else {
         this.view = 'login';
       }
+    },
+
+    /**
+     * Récupère /api/status et retourne l'objet ou null si pas joignable.
+     */
+    async fetchStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (!res.ok) return null;
+        return await res.json();
+      } catch (_) {
+        return null;
+      }
+    },
+
+    /**
+     * Dérive le setup_state depuis la réponse /api/status. Privilège le
+     * champ moderne `setup_state` ; sinon fallback sur les booléens
+     * legacy (rétro-compat ancien serveur).
+     */
+    deriveSetupState(status) {
+      if (!status) return 'needs_licence';   // serveur down → on assume worst case
+      if (status.setup_state) return status.setup_state;
+      if (status.licence_required) return 'needs_licence';
+      if (status.setup_required)   return 'needs_welcome';
+      return 'ready';
     },
 
     // ── API helper ─────────────────────────────────────────
@@ -131,14 +192,76 @@ document.addEventListener('alpine:init', () => {
           body: JSON.stringify({ key })
         });
 
-        if (res.ok) {
-          // licence activee — passer au login
-          this.view = 'login';
-        } else {
+        if (!res.ok) {
           this.licenceForm.error = this.t('licence.invalid');
+          return;
         }
+
+        const data = await res.json();
+        // Stocker l'id pour l'écran welcome qui l'affiche comme
+        // default password
+        this.bootstrapLicenceId = data.id || '';
+
+        if (data.token) {
+          // Bootstrap admin déclenché par l'activation — auto-login
+          // pour enchainer setup → welcome sans friction
+          this.token = data.token;
+          this.role = 'admin';
+          this.passwordChanged = true;  // pas de force-change V1
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('role', 'admin');
+          localStorage.setItem('passwordChanged', 'true');
+          this.view = 'welcome';
+        } else {
+          // Re-activation sur serveur déjà setup — pas de token,
+          // l'user passe par login normal
+          this.view = 'login';
+        }
+
+        this.licenceForm.key = '';   // wipe input
       } catch (_) {
         this.licenceForm.error = this.t('licence.error');
+      }
+    },
+
+    // ── Welcome (V1 first-launch) ──────────────────────────
+    async submitWelcome(action) {
+      if (this.welcomeForm.submitting) return;
+      this.welcomeForm.error = '';
+
+      const body = { action };
+      if (action === 'renew') {
+        const u = this.welcomeForm.username.trim();
+        const p = this.welcomeForm.password;
+        if (!u && !p) {
+          this.welcomeForm.error = this.t('welcome.atLeastOne');
+          return;
+        }
+        if (u) body.username = u;
+        if (p) body.password = p;
+      }
+
+      this.welcomeForm.submitting = true;
+      try {
+        const res = await this.api('/api/setup/welcome', {
+          method: 'POST',
+          body: JSON.stringify(body)
+        });
+        if (!res) return;   // 401 → logout déjà déclenché par api()
+
+        if (res.ok) {
+          this.welcomeForm = { username: '', password: '', error: '', submitting: false };
+          this.bootstrapLicenceId = '';
+          this.enterDashboard();
+        } else {
+          let errMsg = this.t('welcome.error');
+          try { errMsg = (await res.json()).error || errMsg; } catch (_) {}
+          this.welcomeForm.error = errMsg;
+        }
+      } catch (_) {
+        this.welcomeForm.error = this.t('welcome.error');
+      } finally {
+        this.welcomeForm.submitting = false;
       }
     },
 

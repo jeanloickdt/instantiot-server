@@ -31,6 +31,64 @@
 </div>
 
 <!-- ============================================================ -->
+<!-- WELCOME — V1 first-launch flow                               -->
+<!-- ============================================================ -->
+<div class="view view-center" x-show="view === 'welcome'">
+  <div class="card login-card welcome-card">
+    <div class="logo">InstantIoT</div>
+    <p class="subtitle" x-text="t('welcome.subtitle')"></p>
+
+    <!-- Bloc default credentials (lecture seule) -->
+    <div class="welcome-defaults">
+      <div class="welcome-defaults-title" x-text="t('welcome.defaultsTitle')"></div>
+      <div class="welcome-cred-row">
+        <span class="welcome-cred-label" x-text="t('welcome.username')"></span>
+        <code class="welcome-cred-value">admin</code>
+      </div>
+      <div class="welcome-cred-row">
+        <span class="welcome-cred-label" x-text="t('welcome.password')"></span>
+        <code class="welcome-cred-value" x-text="bootstrapLicenceId"></code>
+        <button class="copy-btn" @click="copyText(bootstrapLicenceId, $el)" title="Copy">&#128203;</button>
+      </div>
+      <p class="welcome-defaults-hint" x-text="t('welcome.defaultsHint')"></p>
+    </div>
+
+    <!-- Bloc Renew (optionnel) -->
+    <div class="welcome-renew">
+      <div class="welcome-renew-title" x-text="t('welcome.renewTitle')"></div>
+      <input type="text"
+             x-model="welcomeForm.username"
+             :placeholder="t('welcome.newUsername')"
+             autocomplete="username"
+             :disabled="welcomeForm.submitting">
+      <input type="password"
+             x-model="welcomeForm.password"
+             :placeholder="t('welcome.newPassword')"
+             autocomplete="new-password"
+             :disabled="welcomeForm.submitting">
+
+      <div class="welcome-actions">
+        <button type="button"
+                class="btn-cancel"
+                @click="submitWelcome('skip')"
+                :disabled="welcomeForm.submitting"
+                x-text="t('welcome.skip')"></button>
+        <button type="button"
+                @click="submitWelcome('renew')"
+                :disabled="welcomeForm.submitting"
+                x-text="t('welcome.renew')"></button>
+      </div>
+      <p class="error" x-text="welcomeForm.error"></p>
+    </div>
+
+    <div class="lang-switch">
+      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
 <!-- LOGIN                                                        -->
 <!-- ============================================================ -->
 <div class="view view-center" x-show="view === 'login'">
