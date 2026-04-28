@@ -9,11 +9,14 @@ Usage:
   # Premier lancement — genere la paire de cles RSA
   python3 generate-licence.py --generate-keys
 
-  # Generer une licence pour un client
-  python3 generate-licence.py --plan beta --expires 2027-01-01
+  # Licence lifetime (defaut V1 maker) — pas d'expiration
+  python3 generate-licence.py
 
-  # Generer une licence avec un ID custom
-  python3 generate-licence.py --plan pro --expires 2027-06-01 --id CLIENT-001
+  # Licence avec expiration (trial, beta tests, demo)
+  python3 generate-licence.py --expires 2027-01-01
+
+  # ID custom (sinon auto-genere INST-XXXX-XXXX-XXXX)
+  python3 generate-licence.py --id INST-CLIENT-001-DEMO
 
 Dependances:
   pip install PyJWT cryptography
@@ -87,8 +90,12 @@ def generate_keys():
     print(f"       Copie serveur : {SERVER_PUBLIC_KEY}")
 
 
-def generate_licence(plan: str, expires: str, licence_id: str = None):
-    """Genere un JWT licence signe avec la cle privee"""
+def generate_licence(expires: str = None, licence_id: str = None):
+    """Genere un JWT licence signe avec la cle privee.
+
+    expires = None → licence lifetime (claim `exp` omis du JWT)
+    expires = "YYYY-MM-DD" → licence avec expiration (trial, beta...)
+    """
 
     if not PRIVATE_KEY_FILE.exists():
         print("  [ERREUR] Cle privee introuvable. Lancer d'abord :")
@@ -106,21 +113,23 @@ def generate_licence(plan: str, expires: str, licence_id: str = None):
         uid = uuid.uuid4().hex[:12].upper()
         licence_id = f"INST-{uid[:4]}-{uid[4:8]}-{uid[8:12]}"
 
-    # Parser la date d'expiration
-    try:
-        exp_date = datetime.strptime(expires, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        print(f"  [ERREUR] Format de date invalide : {expires} (attendu: YYYY-MM-DD)")
-        sys.exit(1)
-
-    # Construire le JWT
+    # Construire le JWT — V1 : pas de claim `plan` (ignore par le serveur),
+    # toutes les licences sont equivalentes (pas de feature gates).
     payload = {
         "sub": licence_id,
-        "plan": plan,
         "iss": ISSUER,
-        "iat": int(datetime.now(timezone.utc).timestamp()),
-        "exp": int(exp_date.timestamp())
+        "iat": int(datetime.now(timezone.utc).timestamp())
     }
+
+    expires_str = "lifetime"
+    if expires is not None:
+        try:
+            exp_date = datetime.strptime(expires, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        except ValueError:
+            print(f"  [ERREUR] Format de date invalide : {expires} (attendu: YYYY-MM-DD)")
+            sys.exit(1)
+        payload["exp"] = int(exp_date.timestamp())
+        expires_str = expires
 
     token = jwt.encode(payload, private_key, algorithm="RS256")
 
@@ -129,8 +138,7 @@ def generate_licence(plan: str, expires: str, licence_id: str = None):
     print(f"  Licence generee avec succes")
     print(f"  ================================================")
     print(f"  ID       : {licence_id}")
-    print(f"  Plan     : {plan}")
-    print(f"  Expire   : {expires}")
+    print(f"  Expire   : {expires_str}")
     print(f"  Issuer   : {ISSUER}")
     print(f"  ================================================")
     print()
@@ -138,17 +146,34 @@ def generate_licence(plan: str, expires: str, licence_id: str = None):
     print()
     print(f"  {token}")
     print()
+    print("  Default admin password (a communiquer dans l'email d'achat) :")
+    print(f"  {licence_id}")
+    print()
     print("  ================================================")
 
     return token
 
 
 def main():
-    parser = argparse.ArgumentParser(description="InstantIoT Licence Generator")
-    parser.add_argument("--generate-keys", action="store_true", help="Generer la paire de cles RSA")
-    parser.add_argument("--plan", type=str, default="beta", help="Plan: beta, pro, enterprise (default: beta)")
-    parser.add_argument("--expires", type=str, help="Date d'expiration: YYYY-MM-DD")
-    parser.add_argument("--id", type=str, help="ID licence custom (default: auto-genere)")
+    parser = argparse.ArgumentParser(
+        description="InstantIoT Licence Generator",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  python3 generate-licence.py --generate-keys
+  python3 generate-licence.py                          # lifetime
+  python3 generate-licence.py --expires 2027-01-01     # avec exp
+  python3 generate-licence.py --id INST-CLIENT-001     # ID custom
+"""
+    )
+    parser.add_argument("--generate-keys", action="store_true",
+                        help="Generer la paire de cles RSA (1ere fois)")
+    parser.add_argument("--expires", type=str,
+                        help="Date d'expiration YYYY-MM-DD (default: lifetime, claim `exp` omis)")
+    parser.add_argument("--id", type=str,
+                        help="ID licence custom (default: auto-genere INST-XXXX-XXXX-XXXX)")
+    parser.add_argument("--plan", type=str,
+                        help="[deprecated, ignore par le serveur V1] Garde pour compat")
 
     args = parser.parse_args()
 
@@ -160,12 +185,11 @@ def main():
         generate_keys()
         return
 
-    if not args.expires:
-        print("  [ERREUR] --expires requis. Exemple:")
-        print("    python3 generate-licence.py --plan beta --expires 2027-01-01")
-        sys.exit(1)
+    if args.plan:
+        print("  [WARN] --plan est ignore par le serveur V1 — toutes les licences")
+        print("         sont equivalentes (pas de feature gates).")
 
-    generate_licence(plan=args.plan, expires=args.expires, licence_id=args.id)
+    generate_licence(expires=args.expires, licence_id=args.id)
 
 
 if __name__ == "__main__":
