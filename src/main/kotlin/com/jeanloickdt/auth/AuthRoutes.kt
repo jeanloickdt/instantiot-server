@@ -565,6 +565,63 @@ fun Route.welcomeRoute(
 }
 
 // ============================================================
+// 🆘 FORGOT PASSWORD — reset admin via licence key
+// Pas authentifié (l'user a perdu son password). Sécurisé par la
+// preuve de possession de la licence : seul le détenteur de la
+// clé licence valide ET déjà activée sur ce serveur peut reset.
+// ============================================================
+fun Route.forgotPasswordRoute(userRepository: UserRepository) {
+    rateLimit(RateLimitName("auth")) {
+        post("/api/setup/forgot-password") {
+            val body = call.receive<ForgotPasswordRequest>()
+
+            // 1. Verifier la signature de la clé soumise
+            val submitted = LicenceValidator.verify(body.licenceKey)
+            if (submitted == null) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "Invalid licence key")
+                )
+            }
+
+            // 2. Comparer avec la licence active sur ce serveur.
+            // Empêche un attaquant qui aurait n'importe quelle licence
+            // valide de reset l'admin de notre serveur.
+            val active = LicenceValidator.getLicenceInfo()
+            if (active == null || !LicenceValidator.isActivated()) {
+                return@post call.respond(
+                    HttpStatusCode.Conflict,
+                    mapOf("error" to "No active licence on this server")
+                )
+            }
+            if (submitted.id != active.id) {
+                return@post call.respond(
+                    HttpStatusCode.Forbidden,
+                    mapOf("error" to "Licence does not match this server")
+                )
+            }
+
+            // 3. Reset le password admin à licence.id (= default original)
+            val admin = userRepository.findByUsername("admin")
+            if (admin == null) {
+                return@post call.respond(
+                    HttpStatusCode.NotFound,
+                    mapOf("error" to "Admin user not found")
+                )
+            }
+            val newHash = BCrypt.hashpw(active.id, BCrypt.gensalt())
+            userRepository.updatePassword(admin.id, newHash)
+            LoggerFactory.getLogger("InstantIoT").info(
+                "Admin password reset via forgot-password (licence id prefix={})",
+                active.id.take(8)
+            )
+
+            call.respond(HttpStatusCode.OK)
+        }
+    }
+}
+
+// ============================================================
 // 🔐 AUTH ROUTES COMPLÈTES — login + register
 // Rate limited par IP — 10 requêtes / minute
 // ============================================================
@@ -576,6 +633,7 @@ fun Route.authRoutes(
 ) {
     licenceRoute(userRepository)
     welcomeRoute(userRepository, setupStateStore)
+    forgotPasswordRoute(userRepository)
 
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)

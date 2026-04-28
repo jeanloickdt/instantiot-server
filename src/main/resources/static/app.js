@@ -224,6 +224,33 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    // ── Forgot password (V1 first-launch) ───────────────────
+    async submitForgot() {
+      this.forgotForm.error = '';
+      const key = this.forgotForm.key.trim();
+      if (!key) {
+        this.forgotForm.error = this.t('forgot.empty');
+        return;
+      }
+      try {
+        const res = await fetch('/api/setup/forgot-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ licenceKey: key })
+        });
+        if (res.ok) {
+          this.forgotForm.success = true;
+          this.forgotForm.key = '';
+        } else {
+          let msg = this.t('forgot.invalid');
+          try { msg = (await res.json()).error || msg; } catch (_) {}
+          this.forgotForm.error = msg;
+        }
+      } catch (_) {
+        this.forgotForm.error = this.t('forgot.error');
+      }
+    },
+
     // ── Welcome (V1 first-launch) ──────────────────────────
     async submitWelcome(action) {
       if (this.welcomeForm.submitting) return;

@@ -506,3 +506,29 @@ td code {
   flex: 1;
   margin: 0;
 }
+
+/* ============================================================ */
+/* FORGOT PASSWORD                                              */
+/* ============================================================ */
+.forgot-link {
+  text-align: center;
+  margin-top: 12px;
+  font-size: 0.85em;
+}
+.forgot-link a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.forgot-link a:hover {
+  text-decoration: underline;
+}
+
+.forgot-success {
+  background: var(--input-bg);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px;
+  margin: 16px 0;
+  font-size: 0.9em;
+  line-height: 1.5;
+}

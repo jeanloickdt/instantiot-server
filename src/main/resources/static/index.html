@@ -101,6 +101,49 @@
       <button type="submit" x-text="t('login.submit')"></button>
       <p class="error" x-text="loginForm.error"></p>
     </form>
+    <p class="forgot-link">
+      <a href="#" @click.prevent="view = 'forgot'" x-text="t('login.forgot')"></a>
+    </p>
+    <div class="lang-switch">
+      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- FORGOT PASSWORD — reset via licence                          -->
+<!-- ============================================================ -->
+<div class="view view-center" x-show="view === 'forgot'">
+  <div class="card login-card">
+    <div class="logo">InstantIoT</div>
+    <p class="subtitle" x-text="t('forgot.subtitle')"></p>
+
+    <template x-if="!forgotForm.success">
+      <form @submit.prevent="submitForgot()">
+        <textarea x-model="forgotForm.key"
+                  :placeholder="t('forgot.placeholder')"
+                  rows="4" required
+                  style="width:100%; padding:12px; background:var(--input-bg); border:1px solid var(--border); border-radius:10px; color:var(--text); font-family:monospace; font-size:0.8em; resize:vertical; outline:none;"></textarea>
+        <div class="welcome-actions">
+          <button type="button"
+                  class="btn-cancel"
+                  @click="view = 'login'; forgotForm = { key: '', error: '', success: false }"
+                  x-text="t('forgot.back')"></button>
+          <button type="submit" x-text="t('forgot.submit')"></button>
+        </div>
+        <p class="error" x-text="forgotForm.error"></p>
+      </form>
+    </template>
+
+    <template x-if="forgotForm.success">
+      <div>
+        <p class="forgot-success" x-text="t('forgot.success')"></p>
+        <button @click="view = 'login'; forgotForm = { key: '', error: '', success: false }"
+                x-text="t('forgot.backToLogin')"></button>
+      </div>
+    </template>
+
     <div class="lang-switch">
       <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
       <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>

@@ -120,6 +120,14 @@ object LicenceValidator {
     fun getLicenceInfo(): LicenceInfo? = cachedLicence
 
     /**
+     * Vérifie un JWT licence sans side-effect (ne modifie pas l'état
+     * du serveur, ne stocke rien sur disque). Utilisé par le flow
+     * forgot-password pour valider qu'un user présente bien la
+     * licence du serveur, sans écraser le fichier licence.key.
+     */
+    fun verify(jwtToken: String): LicenceInfo? = verifyJwt(jwtToken.trim())
+
+    /**
      * Verifier un JWT licence avec la cle publique RSA.
      * Retourne LicenceInfo si valide, null si invalide/expire/signature incorrecte.
      */

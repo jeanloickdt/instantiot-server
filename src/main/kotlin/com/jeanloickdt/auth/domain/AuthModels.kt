@@ -76,6 +76,17 @@ data class LicenceResponse(
 )
 
 /**
+ * Body de POST /api/setup/forgot-password.
+ * L'user présente sa clé licence pour prouver qu'il est bien le
+ * propriétaire du serveur. Si la clé matche celle activée, on reset
+ * le password de l'user "admin" à `licence.id` (le default original).
+ */
+@Serializable
+data class ForgotPasswordRequest(
+    val licenceKey: String
+)
+
+/**
  * Body de POST /api/setup/welcome (V1 first-launch flow).
  *
  *   action = "renew" : update credentials admin (au moins un de
