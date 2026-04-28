@@ -18,6 +18,7 @@ interface UserRepository {
 
     fun findByUsername(username: String): UserRow?
     fun findById(id: String): UserRow?
+    fun findAll(): List<UserRow>
     fun updatePassword(id: String, newHash: String)
 
     /**

@@ -184,3 +184,25 @@ data class RestoreBackupResponse(
     val message: String,             // ex: "Restart required to load restored DB"
     val safetyNetFilename: String    // ancien DB renommé
 )
+
+// ============================================================
+// USERS — admin panel V1
+// ============================================================
+
+@Serializable
+data class AdminUserEntry(
+    val id: String,
+    val username: String,
+    val role: String,
+    val createdAtMs: Long
+)
+
+@Serializable
+data class AdminUserListResponse(
+    val users: List<AdminUserEntry>
+)
+
+@Serializable
+data class ResetUserPasswordRequest(
+    val newPassword: String
+)

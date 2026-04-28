@@ -417,6 +417,74 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
+// 👥 ADMIN USERS — liste read-only + reset password (V1 Phase 4)
+// L'admin peut voir tous les comptes sur le serveur et reset le
+// password de n'importe lequel (sa femme/copain qui a oublié, etc.).
+// Pas d'email dans V1 — l'admin communique le nouveau password à
+// l'user out-of-band (SMS, IRL, etc.).
+// ============================================================
+fun Route.adminUsersRoute(userRepository: UserRepository) {
+
+    suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
+        val userId = call.principal<JWTPrincipal>()?.subject
+        if (userId == null) {
+            call.respond(HttpStatusCode.Unauthorized)
+            return false
+        }
+        val user = userRepository.findById(userId)
+        if (user == null || user.role != "admin") {
+            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
+            return false
+        }
+        return true
+    }
+
+    // ── Liste (read-only) ──────────────────────────────────
+    get("/api/admin/users") {
+        if (!checkAdmin(call)) return@get
+        val list = userRepository.findAll().map { row ->
+            AdminUserEntry(
+                id          = row.id,
+                username    = row.username,
+                role        = row.role,
+                createdAtMs = row.createdAt
+            )
+        }
+        call.respond(HttpStatusCode.OK, AdminUserListResponse(list))
+    }
+
+    // ── Reset password d'un user (par l'admin) ─────────────
+    // L'user reste connecté avec son ancien token JWT (pas de
+    // revoke session V1). Au prochain logout/expiry, il devra
+    // utiliser le nouveau password.
+    post("/api/admin/users/{id}/reset-password") {
+        if (!checkAdmin(call)) return@post
+        val targetId = call.parameters["id"]
+            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing user id"))
+
+        val target = userRepository.findById(targetId)
+            ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "User not found"))
+
+        val body = call.receive<ResetUserPasswordRequest>()
+        val newPassword = body.newPassword
+        if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH) {
+            return@post call.respond(
+                HttpStatusCode.BadRequest,
+                mapOf("error" to "Password must be $PASSWORD_MIN_LENGTH-$PASSWORD_MAX_LENGTH characters")
+            )
+        }
+
+        val newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt())
+        userRepository.updatePassword(targetId, newHash)
+        LoggerFactory.getLogger("InstantIoT").info(
+            "Admin reset password for user '{}' (id prefix={})",
+            target.username, targetId.take(8)
+        )
+        call.respond(HttpStatusCode.OK)
+    }
+}
+
+// ============================================================
 // 💾 ADMIN BACKUP — admin only — snapshots SQLite (V1 Phase 4)
 // ============================================================
 fun Route.adminBackupRoute(userRepository: UserRepository) {
@@ -791,6 +859,7 @@ fun Route.authRoutes(
         adminConfigRoute(userRepository)
         adminHistoryConfigRoute(userRepository)
         adminBackupRoute(userRepository)
+        adminUsersRoute(userRepository)
         adminRestartRoute(userRepository)
     }
 }

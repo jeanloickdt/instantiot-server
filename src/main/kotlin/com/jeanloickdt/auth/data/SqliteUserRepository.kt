@@ -52,6 +52,14 @@ class SqliteUserRepository : UserRepository {
         }
     }
 
+    override fun findAll(): List<UserRow> {
+        return transaction {
+            UserTable.selectAll()
+                .orderBy(UserTable.createdAt to SortOrder.ASC)
+                .map { it.toUserRow() }
+        }
+    }
+
     override fun updatePassword(id: String, newHash: String) {
         transaction {
             UserTable.update({ UserTable.id eq id }) {

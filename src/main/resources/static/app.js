@@ -73,6 +73,20 @@ document.addEventListener('alpine:init', () => {
       version: '-', dbSizeBytes: 0, javaVersion: '-', osName: '-'
     },
     devices: [],
+    users: [],
+    licenceInfo: null,   // { id, expiresAt } ou null si non activée
+    resetUserForm: {
+      targetUser: null,
+      newPassword: '',
+      busy: false,
+      error: ''
+    },
+    resetAdminForm: {
+      confirmOpen: false,
+      busy: false,
+      msg: '',
+      msgType: ''
+    },
 
     // ── Computed ────────────────────────────────────────────
     get themeIcon() {
@@ -405,6 +419,120 @@ document.addEventListener('alpine:init', () => {
       this.loadHistoryConfig();
       this.loadBackupConfig();
       this.loadBackupList();
+      this.loadLicenceInfo();
+    },
+
+    async loadLicenceInfo() {
+      try {
+        const res = await fetch('/api/licence');
+        if (res.ok) {
+          this.licenceInfo = await res.json();
+        } else {
+          this.licenceInfo = null;
+        }
+      } catch (_) {
+        this.licenceInfo = null;
+      }
+    },
+
+    formatLicenceExpiry(ms) {
+      if (!ms || ms === 0) return this.t('licence.lifetime');
+      const d = new Date(ms);
+      return this.t('licence.expiresAt') + ' ' + d.toLocaleDateString();
+    },
+
+    async loadUsers() {
+      const res = await this.api('/api/admin/users');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.users = data.users || [];
+    },
+
+    askResetUserPassword(user) {
+      this.resetUserForm.targetUser = user;
+      this.resetUserForm.newPassword = '';
+      this.resetUserForm.error = '';
+    },
+
+    cancelResetUserPassword() {
+      this.resetUserForm.targetUser = null;
+      this.resetUserForm.newPassword = '';
+      this.resetUserForm.error = '';
+    },
+
+    async confirmResetUserPassword() {
+      const user = this.resetUserForm.targetUser;
+      if (!user || this.resetUserForm.busy) return;
+      const pwd = this.resetUserForm.newPassword;
+      if (!pwd || pwd.length < 8) {
+        this.resetUserForm.error = this.t('users.passwordTooShort');
+        return;
+      }
+      this.resetUserForm.busy = true;
+      try {
+        const res = await this.api(`/api/admin/users/${user.id}/reset-password`, {
+          method: 'POST',
+          body: JSON.stringify({ newPassword: pwd })
+        });
+        if (res && res.ok) {
+          this.cancelResetUserPassword();
+        } else if (res) {
+          const data = await res.json().catch(() => null);
+          this.resetUserForm.error = data?.error || this.t('users.resetError');
+        }
+      } finally {
+        this.resetUserForm.busy = false;
+      }
+    },
+
+    askResetAdminToLicence() {
+      this.resetAdminForm.confirmOpen = true;
+      this.resetAdminForm.msg = '';
+      this.resetAdminForm.msgType = '';
+    },
+
+    async confirmResetAdminToLicence() {
+      if (!this.licenceInfo || this.resetAdminForm.busy) return;
+      this.resetAdminForm.busy = true;
+      try {
+        // L'admin connecté connaît la licence id depuis /api/licence,
+        // mais le forgot-password endpoint exige la clé JWT entière.
+        // On a pas accès à la JWT depuis le panel (seul le serveur la
+        // stocke). Solution V1 : on appelle le reset via admin/users,
+        // qui ne nécessite que le token JWT (qu'on a déjà).
+        // L'admin user a son id stocké côté serveur, on récupère via
+        // la liste users + match sur username "admin" (par défaut).
+        // Si l'user a renamed l'admin via Renew, ça reste son id —
+        // qu'on retrouve via /api/admin/users.
+        const usersRes = await this.api('/api/admin/users');
+        if (!usersRes || !usersRes.ok) {
+          this.resetAdminForm.msg = this.t('licence.resetAdminError');
+          this.resetAdminForm.msgType = 'error';
+          return;
+        }
+        const data = await usersRes.json();
+        const adminUser = (data.users || []).find(u => u.role === 'admin');
+        if (!adminUser) {
+          this.resetAdminForm.msg = this.t('licence.resetAdminError');
+          this.resetAdminForm.msgType = 'error';
+          return;
+        }
+        const res = await this.api(`/api/admin/users/${adminUser.id}/reset-password`, {
+          method: 'POST',
+          body: JSON.stringify({ newPassword: this.licenceInfo.id })
+        });
+        if (res && res.ok) {
+          this.resetAdminForm.confirmOpen = false;
+          this.resetAdminForm.msg = this.t('licence.resetAdminOk');
+          this.resetAdminForm.msgType = 'success';
+        } else if (res) {
+          const err = await res.json().catch(() => null);
+          this.resetAdminForm.msg = err?.error || this.t('licence.resetAdminError');
+          this.resetAdminForm.msgType = 'error';
+        }
+      } finally {
+        this.resetAdminForm.busy = false;
+      }
     },
 
     async loadStats() {
@@ -630,6 +758,7 @@ document.addEventListener('alpine:init', () => {
       this.view = target;
       if (target === 'dashboard') this.loadDashboard();
       if (target === 'devices') this.loadDevices();
+      if (target === 'users') this.loadUsers();
     },
 
     // ── Utils ──────────────────────────────────────────────

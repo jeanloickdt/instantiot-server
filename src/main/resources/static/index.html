@@ -178,6 +178,7 @@
         <span class="nav-logo">InstantIoT</span>
         <a href="#" class="nav-link active" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
         <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+        <a href="#" class="nav-link" :class="{ active: view === 'users' }" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
       </div>
       <div class="nav-right">
         <span class="nav-user">admin</span>
@@ -405,6 +406,33 @@
           </div>
         </div>
 
+        <!-- LICENCE -->
+        <div class="section">
+          <h2 class="section-title" x-text="t('licence.panelTitle')"></h2>
+          <div x-show="licenceInfo">
+            <div class="info-list">
+              <div class="info-item">
+                <span class="info-label" x-text="t('licence.id')"></span>
+                <span class="info-value" x-text="licenceInfo?.id" x-ref="licenceIdValue"></span>
+                <button class="copy-btn" @click="copyText(licenceInfo?.id, $el)">&#128203;</button>
+              </div>
+              <div class="info-item">
+                <span class="info-label" x-text="t('licence.type')"></span>
+                <span class="info-value" x-text="formatLicenceExpiry(licenceInfo?.expiresAt)"></span>
+              </div>
+            </div>
+            <p class="config-note" x-text="t('licence.resetHint')"></p>
+            <button type="button"
+                    class="btn-cancel"
+                    @click="askResetAdminToLicence()"
+                    :disabled="resetAdminForm.busy"
+                    style="margin-top:8px;"
+                    x-text="t('licence.resetAdminButton')"></button>
+            <p class="config-msg" :class="resetAdminForm.msgType" x-text="resetAdminForm.msg"></p>
+          </div>
+          <p x-show="!licenceInfo" class="empty-msg" x-text="t('licence.noActive')"></p>
+        </div>
+
       </div>
     </div>
 
@@ -461,6 +489,107 @@
     </template>
 
     <p class="empty-msg" x-show="devices.length === 0" x-text="t('devices.empty')"></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- USERS                                                        -->
+<!-- ============================================================ -->
+<div class="view" x-show="view === 'users'">
+  <nav>
+    <div class="nav-left">
+      <span class="nav-logo">InstantIoT</span>
+      <a href="#" class="nav-link" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
+      <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+      <a href="#" class="nav-link active" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
+    </div>
+    <div class="nav-right">
+      <span class="nav-user">admin</span>
+      <div class="lang-switch-nav">
+        <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
+        <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
+      </div>
+      <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
+      <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h1 x-text="t('users.title')"></h1>
+    <p class="config-note" x-text="t('users.intro')"></p>
+
+    <template x-if="users.length > 0">
+      <table>
+        <thead><tr>
+          <th x-text="t('users.colUsername')"></th>
+          <th x-text="t('users.colRole')"></th>
+          <th x-text="t('users.colCreated')"></th>
+          <th></th>
+        </tr></thead>
+        <tbody>
+          <template x-for="u in users" :key="u.id">
+            <tr>
+              <td x-text="u.username"></td>
+              <td>
+                <span class="badge-online" x-show="u.role === 'admin'" x-text="u.role"></span>
+                <span x-show="u.role !== 'admin'" x-text="u.role"></span>
+              </td>
+              <td x-text="formatDate(u.createdAtMs)"></td>
+              <td>
+                <button class="btn-cancel"
+                        @click="askResetUserPassword(u)"
+                        x-text="t('users.reset')"></button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </template>
+
+    <p class="empty-msg" x-show="users.length === 0" x-text="t('users.empty')"></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- RESET ADMIN TO LICENCE CONFIRM MODAL                         -->
+<!-- ============================================================ -->
+<div class="modal-overlay" x-show="resetAdminForm.confirmOpen"
+     x-transition.opacity @click.self="resetAdminForm.confirmOpen = false">
+  <div class="modal-card">
+    <h3 x-text="t('licence.resetAdminModalTitle')"></h3>
+    <p x-text="t('licence.resetAdminModalMessage')"></p>
+    <div class="modal-actions">
+      <button class="btn-cancel" @click="resetAdminForm.confirmOpen = false"
+              :disabled="resetAdminForm.busy" x-text="t('restart.cancel')"></button>
+      <button class="btn-danger" @click="confirmResetAdminToLicence()"
+              :disabled="resetAdminForm.busy" x-text="t('licence.resetAdminConfirm')"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- RESET USER PASSWORD MODAL                                    -->
+<!-- ============================================================ -->
+<div class="modal-overlay" x-show="resetUserForm.targetUser !== null"
+     x-transition.opacity @click.self="cancelResetUserPassword()">
+  <div class="modal-card">
+    <h3 x-text="t('users.resetModalTitle')"></h3>
+    <p>
+      <span x-text="t('users.resetModalMessage')"></span>
+      <code x-show="resetUserForm.targetUser" x-text="resetUserForm.targetUser?.username"></code>
+    </p>
+    <input type="password" x-model="resetUserForm.newPassword"
+           :placeholder="t('users.newPasswordPlaceholder')"
+           autocomplete="new-password"
+           style="width:100%; margin-top:12px;">
+    <p class="error" x-text="resetUserForm.error"></p>
+    <p class="config-note" x-text="t('users.resetModalWarning')"></p>
+    <div class="modal-actions">
+      <button class="btn-cancel" @click="cancelResetUserPassword()"
+              :disabled="resetUserForm.busy" x-text="t('restart.cancel')"></button>
+      <button class="btn-danger" @click="confirmResetUserPassword()"
+              :disabled="resetUserForm.busy" x-text="t('users.resetConfirm')"></button>
+    </div>
   </div>
 </div>
 
