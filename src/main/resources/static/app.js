@@ -460,31 +460,6 @@ document.addEventListener('alpine:init', () => {
       this.resetUserForm.error = '';
     },
 
-    async confirmResetUserPassword() {
-      const user = this.resetUserForm.targetUser;
-      if (!user || this.resetUserForm.busy) return;
-      const pwd = this.resetUserForm.newPassword;
-      if (!pwd || pwd.length < 8) {
-        this.resetUserForm.error = this.t('users.passwordTooShort');
-        return;
-      }
-      this.resetUserForm.busy = true;
-      try {
-        const res = await this.api(`/api/admin/users/${user.id}/reset-password`, {
-          method: 'POST',
-          body: JSON.stringify({ newPassword: pwd })
-        });
-        if (res && res.ok) {
-          this.cancelResetUserPassword();
-        } else if (res) {
-          const data = await res.json().catch(() => null);
-          this.resetUserForm.error = data?.error || this.t('users.resetError');
-        }
-      } finally {
-        this.resetUserForm.busy = false;
-      }
-    },
-
     askResetAdminToLicence() {
       this.resetAdminForm.confirmOpen = true;
       this.resetAdminForm.msg = '';
@@ -495,15 +470,9 @@ document.addEventListener('alpine:init', () => {
       if (!this.licenceInfo || this.resetAdminForm.busy) return;
       this.resetAdminForm.busy = true;
       try {
-        // L'admin connecté connaît la licence id depuis /api/licence,
-        // mais le forgot-password endpoint exige la clé JWT entière.
-        // On a pas accès à la JWT depuis le panel (seul le serveur la
-        // stocke). Solution V1 : on appelle le reset via admin/users,
-        // qui ne nécessite que le token JWT (qu'on a déjà).
-        // L'admin user a son id stocké côté serveur, on récupère via
-        // la liste users + match sur username "admin" (par défaut).
-        // Si l'user a renamed l'admin via Renew, ça reste son id —
-        // qu'on retrouve via /api/admin/users.
+        // L'admin connecté veut reset au default (licence ID).
+        // On récupère l'admin user (peut avoir été renommé via Renew),
+        // puis appelle le reset-password endpoint avec licence.id.
         const usersRes = await this.api('/api/admin/users');
         if (!usersRes || !usersRes.ok) {
           this.resetAdminForm.msg = this.t('licence.resetAdminError');
@@ -534,6 +503,32 @@ document.addEventListener('alpine:init', () => {
         this.resetAdminForm.busy = false;
       }
     },
+
+    async confirmResetUserPassword() {
+      const user = this.resetUserForm.targetUser;
+      if (!user || this.resetUserForm.busy) return;
+      const pwd = this.resetUserForm.newPassword;
+      if (!pwd || pwd.length < 8) {
+        this.resetUserForm.error = this.t('users.passwordTooShort');
+        return;
+      }
+      this.resetUserForm.busy = true;
+      try {
+        const res = await this.api(`/api/admin/users/${user.id}/reset-password`, {
+          method: 'POST',
+          body: JSON.stringify({ newPassword: pwd })
+        });
+        if (res && res.ok) {
+          this.cancelResetUserPassword();
+        } else if (res) {
+          const data = await res.json().catch(() => null);
+          this.resetUserForm.error = data?.error || this.t('users.resetError');
+        }
+      } finally {
+        this.resetUserForm.busy = false;
+      }
+    },
+
 
     async loadStats() {
       const res = await this.api('/api/admin/stats');

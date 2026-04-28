@@ -173,6 +173,7 @@ const I18N = {
     'licence.resetAdminConfirm':     'Yes, reset',
     'licence.resetAdminOk':          'Admin password reset to your licence ID',
     'licence.resetAdminError':       'Could not reset admin password',
+    'licence.forgotHint':            'If you ever lose your admin password, you can also reset it from the login screen using your full licence key.',
 
     'restart.title':       'Restart server?',
     'restart.message':     'The server will shut down. If a process manager (systemd, etc.) is configured, it will restart automatically. Otherwise you will need to start it manually.',
@@ -351,6 +352,7 @@ const I18N = {
     'licence.resetAdminConfirm':     'Oui, reinitialiser',
     'licence.resetAdminOk':          'Mot de passe admin remis a votre ID de licence',
     'licence.resetAdminError':       'Impossible de reinitialiser le mot de passe admin',
+    'licence.forgotHint':            'Si vous perdez votre mot de passe admin, vous pouvez aussi le reinitialiser depuis l\'ecran de connexion en utilisant votre cle de licence complete.',
 
     'restart.title':       'Redemarrer le serveur ?',
     'restart.message':     'Le serveur va s\'arreter. Si un gestionnaire de processus (systemd, etc.) est configure, il redemarrera automatiquement. Sinon vous devrez le relancer manuellement.',

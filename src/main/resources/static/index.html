@@ -429,6 +429,8 @@
                     style="margin-top:8px;"
                     x-text="t('licence.resetAdminButton')"></button>
             <p class="config-msg" :class="resetAdminForm.msgType" x-text="resetAdminForm.msg"></p>
+            <p class="config-note" style="margin-top:12px; opacity:0.75;"
+               x-text="t('licence.forgotHint')"></p>
           </div>
           <p x-show="!licenceInfo" class="empty-msg" x-text="t('licence.noActive')"></p>
         </div>
