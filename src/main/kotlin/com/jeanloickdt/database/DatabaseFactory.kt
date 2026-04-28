@@ -8,7 +8,11 @@ import java.sql.DriverManager
 
 object DatabaseFactory {
     fun init(vararg tables: Table) {
-        val url = "jdbc:sqlite:./instantiot.db"
+        // DB stockée dans ~/.instantiot/ (à côté de licence.key, secret.key,
+        // setup.done) — single source of truth pour tous les fichiers d'état
+        // serveur. Évite que le CWD du process (systemd, jpackage, gradlew run
+        // depuis n'importe où) influence la position de la DB.
+        val url = "jdbc:sqlite:${com.jeanloickdt.common.ServerConfig.dbFile.absolutePath}"
 
         DriverManager.getConnection(url).use { conn ->
             conn.createStatement().use { stmt ->

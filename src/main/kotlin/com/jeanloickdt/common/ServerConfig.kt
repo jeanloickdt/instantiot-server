@@ -16,7 +16,16 @@ object ServerConfig {
 
     private const val VERSION = "0.0.1"
 
-    private val configFile = File("${System.getProperty("user.home")}/.instantiot/server.properties")
+    /** Répertoire racine de tous les fichiers d'état du serveur. */
+    val instantiotDir: File = File("${System.getProperty("user.home")}/.instantiot").apply {
+        mkdirs()
+    }
+
+    /** Chemin de la DB SQLite. Centralisé ici pour qu'une migration jpackage
+     *  / systemd ne perde pas la DB selon le CWD. */
+    val dbFile: File = File(instantiotDir, "instantiot.db")
+
+    private val configFile = File(instantiotDir, "server.properties")
 
     var httpPort: Int = 8080
         private set
@@ -92,7 +101,7 @@ object ServerConfig {
     }
 
     val dbSizeBytes: Long get() = try {
-        File("./instantiot.db").length()
+        dbFile.length()
     } catch (_: Exception) {
         0L
     }
