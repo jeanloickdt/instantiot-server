@@ -197,6 +197,7 @@
       <span class="nav-logo">InstantIoT</span>
       <a href="#" class="nav-link active" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
       <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+      <a href="#" class="nav-link" :class="{ active: view === 'users' }" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
     </div>
     <div class="nav-right">
       <span class="nav-user">admin</span>
@@ -451,6 +452,7 @@
       <span class="nav-logo">InstantIoT</span>
       <a href="#" class="nav-link" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
       <a href="#" class="nav-link active" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
+      <a href="#" class="nav-link" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
     </div>
     <div class="nav-right">
       <span class="nav-user">admin</span>
