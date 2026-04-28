@@ -40,6 +40,17 @@ object ServerConfig {
     var runningTcpPort: Int = 9001
         private set
 
+    /**
+     * Appelé par Application.main après l'auto-bind ports — synchronise
+     * les "running ports" avec ce qui est réellement bindé. Utilisé par
+     * mDNS, tray, /api/status pour annoncer la bonne URL aux clients
+     * même si on a fallback sur 8081/9002 etc.
+     */
+    fun markRunningPorts(http: Int, tcp: Int) {
+        runningHttpPort = http
+        runningTcpPort = tcp
+    }
+
     // ============================================================
     // HISTORIQUE — Phase 1 (raw numeric)
     // ============================================================
