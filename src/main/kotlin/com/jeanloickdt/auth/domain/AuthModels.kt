@@ -62,7 +62,9 @@ data class LicenceRequest(
 @Serializable
 data class LicenceResponse(
     val id: String,
-    val plan: String,
+    /**
+     * 0 = lifetime (claim `exp` absent du JWT). Sinon timestamp ms epoch.
+     */
     val expiresAt: Long,
     /**
      * Token JWT auto-login généré uniquement quand l'activation

@@ -71,7 +71,8 @@ object LicenceValidator {
             val info = verifyJwt(jwt)
             if (info != null) {
                 cachedLicence = info
-                logger.info("Licence loaded — id=${info.id} plan=${info.plan} expires=${Date(info.expiresAt)}")
+                val expiryStr = if (info.expiresAt == 0L) "lifetime" else Date(info.expiresAt).toString()
+                logger.info("Licence loaded — id=${info.id} expires=$expiryStr")
             } else {
                 logger.warn("Licence file is invalid or expired — licence required")
                 cachedLicence = null
@@ -83,10 +84,16 @@ object LicenceValidator {
     }
 
     /**
-     * La licence est-elle valide et non expiree ?
+     * La licence est-elle valide ?
+     *
+     * V1 : `expiresAt = 0L` signifie lifetime (claim `exp` absent du JWT).
+     * Le générateur de licence (chez InstantIoT) émet par défaut des
+     * licences sans expiration. Les licences avec exp > 0 sont
+     * supportées pour des cas spéciaux (trial, beta tests, etc).
      */
     fun isActivated(): Boolean {
         val licence = cachedLicence ?: return false
+        if (licence.expiresAt == 0L) return true   // lifetime
         return licence.expiresAt > System.currentTimeMillis()
     }
 
@@ -102,7 +109,8 @@ object LicenceValidator {
         licenceFile.writeText(jwtToken.trim())
 
         cachedLicence = info
-        logger.info("Licence activated — id=${info.id} plan=${info.plan} expires=${Date(info.expiresAt)}")
+        val expiryStr = if (info.expiresAt == 0L) "lifetime" else Date(info.expiresAt).toString()
+        logger.info("Licence activated — id=${info.id} expires=$expiryStr")
         return info
     }
 
@@ -131,8 +139,7 @@ object LicenceValidator {
 
             LicenceInfo(
                 id        = decoded.subject ?: "unknown",
-                plan      = decoded.getClaim("plan").asString() ?: "unknown",
-                expiresAt = decoded.expiresAt?.time ?: 0L
+                expiresAt = decoded.expiresAt?.time ?: 0L  // 0 = lifetime
             )
         } catch (e: Exception) {
             logger.warn("Licence JWT verification failed — ${e.message}")
@@ -143,9 +150,13 @@ object LicenceValidator {
 
 /**
  * Info licence — donnees extraites du JWT.
+ *
+ * V1 : pas de `plan` — toutes les licences sont equivalentes
+ * (tous les acheteurs ont le meme produit complet). Les "tiers"
+ * Personal/Maker/Business sur le landing sont des price points
+ * (donation tiers), pas des feature gates.
  */
 data class LicenceInfo(
     val id: String,        // ex: "INST-A7K2-M9X1-P3B8"
-    val plan: String,      // ex: "beta", "pro", "enterprise"
     val expiresAt: Long    // timestamp ms
 )

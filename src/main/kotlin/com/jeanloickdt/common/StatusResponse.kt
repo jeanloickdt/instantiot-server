@@ -33,10 +33,12 @@ data class StatusResponse(
 /**
  * Résumé licence inclus dans /api/status quand activée.
  * Plus léger que LicenceResponse (pas de token notamment).
+ *
+ * V1 : pas de `plan` — toutes les licences sont équivalentes.
+ * `expiresAt = 0` signifie lifetime.
  */
 @Serializable
 data class LicenceSummary(
     val id: String,
-    val plan: String,
     val expiresAt: Long
 )

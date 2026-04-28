@@ -422,7 +422,6 @@ fun Route.licenceRoute(userRepository: UserRepository) {
         if (info != null && LicenceValidator.isActivated()) {
             call.respond(HttpStatusCode.OK, LicenceResponse(
                 id        = info.id,
-                plan      = info.plan,
                 expiresAt = info.expiresAt
             ))
         } else {
@@ -463,7 +462,6 @@ fun Route.licenceRoute(userRepository: UserRepository) {
             }
             call.respond(HttpStatusCode.OK, LicenceResponse(
                 id        = info.id,
-                plan      = info.plan,
                 expiresAt = info.expiresAt,
                 token     = bootstrapToken
             ))

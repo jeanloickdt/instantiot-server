@@ -349,7 +349,6 @@ fun Application.module() {
                 licence          = if (info != null && LicenceValidator.isActivated()) {
                     com.jeanloickdt.common.LicenceSummary(
                         id        = info.id,
-                        plan      = info.plan,
                         expiresAt = info.expiresAt
                     )
                 } else null,
