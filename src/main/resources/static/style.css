@@ -532,3 +532,37 @@ td code {
   font-size: 0.9em;
   line-height: 1.5;
 }
+
+/* ============================================================ */
+/* BACKUP                                                       */
+/* ============================================================ */
+.backup-meta {
+  margin: 12px 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.backup-meta-sep {
+  margin: 0 8px;
+  opacity: 0.5;
+}
+
+.backup-list-title {
+  margin-top: 24px;
+  margin-bottom: 8px;
+  font-size: 0.95em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.backup-table {
+  width: 100%;
+}
+.backup-table code {
+  font-size: 0.8em;
+  word-break: break-all;
+}
+.backup-date-sub {
+  font-size: 0.75em;
+  color: var(--text-muted);
+  margin-top: 2px;
+}

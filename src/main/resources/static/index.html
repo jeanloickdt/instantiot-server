@@ -292,6 +292,69 @@
           <p class="config-note" x-text="t('history.note')"></p>
         </div>
 
+        <!-- BACKUP -->
+        <div class="section">
+          <h2 class="section-title" x-text="t('backup.title')"></h2>
+          <p class="config-note" x-text="t('backup.intro')"></p>
+
+          <form class="config-form" @submit.prevent="saveBackupConfig()">
+            <div class="config-row">
+              <label x-text="t('backup.enabled')"></label>
+              <input type="checkbox" x-model="backupForm.enabled">
+            </div>
+            <div class="config-row">
+              <label x-text="t('backup.intervalHours')"></label>
+              <input type="number" x-model.number="backupForm.intervalHours" min="1" required>
+            </div>
+            <div class="config-row">
+              <label x-text="t('backup.retentionCount')"></label>
+              <input type="number" x-model.number="backupForm.retentionCount" min="1" required>
+            </div>
+            <div class="config-actions">
+              <button type="submit" x-text="t('backup.save')"></button>
+              <button type="button" @click="backupNow()"
+                      :disabled="backupForm.busy"
+                      x-text="t('backup.now')"></button>
+              <p class="config-msg" :class="backupForm.msgType" x-text="backupForm.msg"></p>
+            </div>
+          </form>
+
+          <div class="backup-meta">
+            <span x-text="t('backup.lastBackup') + ' ' + formatBackupDate(backupForm.lastBackupAtMs)"></span>
+            <span class="backup-meta-sep">•</span>
+            <span x-text="backupForm.backupCount + ' ' + t('backup.snapshots')"></span>
+          </div>
+
+          <h3 class="backup-list-title" x-show="backupForm.backups.length > 0"
+              x-text="t('backup.listTitle')"></h3>
+          <table x-show="backupForm.backups.length > 0" class="backup-table">
+            <thead><tr>
+              <th x-text="t('backup.colDate')"></th>
+              <th x-text="t('backup.colSize')"></th>
+              <th></th>
+            </tr></thead>
+            <tbody>
+              <template x-for="b in backupForm.backups" :key="b.filename">
+                <tr>
+                  <td>
+                    <code x-text="b.filename"></code>
+                    <div class="backup-date-sub" x-text="b.createdAtFormatted"></div>
+                  </td>
+                  <td x-text="formatBackupSize(b.sizeBytes)"></td>
+                  <td>
+                    <button class="btn-cancel"
+                            @click="askRestore(b.filename)"
+                            :disabled="backupForm.busy"
+                            x-text="t('backup.restore')"></button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+
+          <p class="config-note" x-text="t('backup.dirHint') + ' ' + backupForm.backupDirPath"></p>
+        </div>
+
       </div>
 
       <div class="col-side">
@@ -392,6 +455,27 @@
     </template>
 
     <p class="empty-msg" x-show="devices.length === 0" x-text="t('devices.empty')"></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!-- RESTORE BACKUP CONFIRM MODAL                                 -->
+<!-- ============================================================ -->
+<div class="modal-overlay" x-show="backupForm.restoreModalFor !== null"
+     x-transition.opacity @click.self="cancelRestore()">
+  <div class="modal-card">
+    <h3 x-text="t('backup.restoreModalTitle')"></h3>
+    <p>
+      <span x-text="t('backup.restoreModalMessage')"></span>
+      <code x-text="backupForm.restoreModalFor"></code>
+    </p>
+    <p class="config-note" x-text="t('backup.restoreModalWarning')"></p>
+    <div class="modal-actions">
+      <button class="btn-cancel" @click="cancelRestore()"
+              :disabled="backupForm.busy" x-text="t('restart.cancel')"></button>
+      <button class="btn-danger" @click="confirmRestore()"
+              :disabled="backupForm.busy" x-text="t('backup.restoreConfirm')"></button>
+    </div>
   </div>
 </div>
 

@@ -44,6 +44,18 @@ document.addEventListener('alpine:init', () => {
       downsampleIntervalMinutes: 60,
       msg: '', msgType: ''
     },
+    backupForm: {
+      enabled: true,
+      intervalHours: 24,
+      retentionCount: 30,
+      lastBackupAtMs: 0,
+      backupCount: 0,
+      backupDirPath: '',
+      backups: [],
+      busy: false,           // disable controls during snapshot/restore
+      msg: '', msgType: '',
+      restoreModalFor: null  // filename in modal, null = closed
+    },
 
     // ── Data ───────────────────────────────────────────────
     stats: {
@@ -385,6 +397,8 @@ document.addEventListener('alpine:init', () => {
       this.loadStats();
       this.loadServerInfo();
       this.loadHistoryConfig();
+      this.loadBackupConfig();
+      this.loadBackupList();
     },
 
     async loadStats() {
@@ -465,6 +479,116 @@ document.addEventListener('alpine:init', () => {
         this.historyForm.msg = data?.error || this.t('history.saveError');
         this.historyForm.msgType = 'error';
       }
+    },
+
+    // ── Backup config ──────────────────────────────────────
+    async loadBackupConfig() {
+      const res = await this.api('/api/admin/backup/config');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.backupForm.enabled        = data.enabled;
+      this.backupForm.intervalHours  = data.intervalHours;
+      this.backupForm.retentionCount = data.retentionCount;
+      this.backupForm.lastBackupAtMs = data.lastBackupAtMs;
+      this.backupForm.backupCount    = data.backupCount;
+      this.backupForm.backupDirPath  = data.backupDirPath;
+    },
+
+    async loadBackupList() {
+      const res = await this.api('/api/admin/backup/list');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.backupForm.backups = data.backups || [];
+    },
+
+    async saveBackupConfig() {
+      this.backupForm.msg = '';
+      this.backupForm.msgType = '';
+      const res = await this.api('/api/admin/backup/config', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          enabled:        this.backupForm.enabled,
+          intervalHours:  this.backupForm.intervalHours,
+          retentionCount: this.backupForm.retentionCount
+        })
+      });
+      if (res && res.ok) {
+        this.backupForm.msg = this.t('backup.saved');
+        this.backupForm.msgType = 'success';
+      } else if (res) {
+        const data = await res.json().catch(() => null);
+        this.backupForm.msg = data?.error || this.t('backup.saveError');
+        this.backupForm.msgType = 'error';
+      }
+    },
+
+    async backupNow() {
+      if (this.backupForm.busy) return;
+      this.backupForm.busy = true;
+      this.backupForm.msg = this.t('backup.snapshotting');
+      this.backupForm.msgType = 'success';
+      try {
+        const res = await this.api('/api/admin/backup/now', { method: 'POST' });
+        if (res && res.ok) {
+          this.backupForm.msg = this.t('backup.snapshotOk');
+          await this.loadBackupConfig();
+          await this.loadBackupList();
+        } else if (res) {
+          const data = await res.json().catch(() => null);
+          this.backupForm.msg = data?.error || this.t('backup.snapshotFail');
+          this.backupForm.msgType = 'error';
+        }
+      } finally {
+        this.backupForm.busy = false;
+      }
+    },
+
+    askRestore(filename) {
+      this.backupForm.restoreModalFor = filename;
+    },
+
+    cancelRestore() {
+      this.backupForm.restoreModalFor = null;
+    },
+
+    async confirmRestore() {
+      const filename = this.backupForm.restoreModalFor;
+      if (!filename || this.backupForm.busy) return;
+      this.backupForm.busy = true;
+      this.backupForm.msg = this.t('backup.restoring');
+      this.backupForm.msgType = 'success';
+      try {
+        const res = await this.api('/api/admin/backup/restore', {
+          method: 'POST',
+          body: JSON.stringify({ filename })
+        });
+        if (res && res.ok) {
+          const data = await res.json();
+          this.backupForm.msg = data.message ||
+            this.t('backup.restoreOk');
+          // Force le user à restart maintenant
+          this.backupForm.restoreModalFor = null;
+          this.showRestartModal = true;
+        } else if (res) {
+          const data = await res.json().catch(() => null);
+          this.backupForm.msg = data?.error || this.t('backup.restoreFail');
+          this.backupForm.msgType = 'error';
+        }
+      } finally {
+        this.backupForm.busy = false;
+      }
+    },
+
+    formatBackupSize(bytes) {
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+      return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+    },
+
+    formatBackupDate(ms) {
+      if (!ms) return this.t('backup.never');
+      const d = new Date(ms);
+      return d.toLocaleString();
     },
 
     // ── Restart ────────────────────────────────────────────
