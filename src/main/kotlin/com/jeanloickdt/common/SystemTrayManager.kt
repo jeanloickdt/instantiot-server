@@ -3,6 +3,7 @@ package com.jeanloickdt.common
 import org.slf4j.LoggerFactory
 import java.awt.*
 import java.awt.image.BufferedImage
+import java.net.NetworkInterface
 import java.net.URI
 
 /**
@@ -48,6 +49,15 @@ object SystemTrayManager {
             // ouvrir le navigateur automatiquement au premier lancement
             openBrowser(httpPort)
 
+            // notification systeme post-boot — utile sur Pi headless
+            // ou serveur lancé via systemd où l'user ne voit pas la
+            // console. Cliquer dessus ouvre aussi l'admin panel.
+            trayIcon?.displayMessage(
+                "InstantIoT Server",
+                "Server ready on http://localhost:$httpPort\nClick the tray icon to manage.",
+                TrayIcon.MessageType.INFO
+            )
+
             return true
         } catch (e: Exception) {
             logger.warn("Failed to initialize system tray — ${e.message}")
@@ -78,9 +88,14 @@ object SystemTrayManager {
         openItem.addActionListener { openBrowser(httpPort) }
         popup.add(openItem)
 
+        // afficher les infos serveur (IP, ports, version) en notif système
+        val infoItem = MenuItem("Show Server Info")
+        infoItem.addActionListener { showServerInfo(httpPort) }
+        popup.add(infoItem)
+
         popup.addSeparator()
 
-        // restart
+        // restart — `Restart=always` côté systemd / process manager re-lance
         val restartItem = MenuItem("Restart Server")
         restartItem.addActionListener {
             logger.info("Restart requested from system tray")
@@ -97,6 +112,50 @@ object SystemTrayManager {
         popup.add(quitItem)
 
         return popup
+    }
+
+    /**
+     * Affiche les infos serveur en notification système.
+     * Inclut l'IP locale (utile pour configurer un device ESP),
+     * les ports HTTP+TCP, la version, et l'état de la licence.
+     */
+    private fun showServerInfo(httpPort: Int) {
+        val ip = detectLocalIp()
+        val tcpPort = ServerConfig.tcpPort
+        val version = ServerConfig.version
+        val licenceStatus = if (com.jeanloickdt.auth.LicenceValidator.isActivated())
+            "activated" else "not activated"
+
+        val text = buildString {
+            append("Local IP: $ip\n")
+            append("HTTP: $httpPort  •  TCP: $tcpPort\n")
+            append("Version: $version  •  Licence: $licenceStatus")
+        }
+
+        trayIcon?.displayMessage(
+            "InstantIoT Server",
+            text,
+            TrayIcon.MessageType.INFO
+        )
+        logger.info("Server info shown via tray notification")
+    }
+
+    /**
+     * Détecte l'IP locale du LAN en cherchant la première interface
+     * réseau active non-loopback avec IPv4. Fallback "localhost" si
+     * échec (cas docker isolé, etc.).
+     */
+    private fun detectLocalIp(): String {
+        return try {
+            NetworkInterface.getNetworkInterfaces().toList()
+                .filter { it.isUp && !it.isLoopback && !it.isVirtual }
+                .flatMap { it.inetAddresses.toList() }
+                .firstOrNull { !it.isLoopbackAddress && it.address.size == 4 }
+                ?.hostAddress
+                ?: "localhost"
+        } catch (_: Exception) {
+            "localhost"
+        }
     }
 
     /**
