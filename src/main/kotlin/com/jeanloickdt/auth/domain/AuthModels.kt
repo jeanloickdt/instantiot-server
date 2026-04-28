@@ -45,13 +45,16 @@ data class ServerInfoResponse(
     val dbSizeBytes: Long,
     val javaVersion: String,
     val osName: String,
-    val localIp: String
+    val localIp: String,
+    val serverDisplayName: String,         // valeur configurée (vide = auto)
+    val effectiveDisplayName: String       // valeur réellement utilisée par mDNS
 )
 
 @Serializable
 data class UpdateConfigRequest(
     val httpPort: Int? = null,
-    val tcpPort: Int? = null
+    val tcpPort: Int? = null,
+    val serverDisplayName: String? = null
 )
 
 @Serializable
@@ -108,7 +111,8 @@ data class WelcomeRequest(
 data class UpdateConfigResponse(
     val message: String,
     val httpPort: Int,
-    val tcpPort: Int
+    val tcpPort: Int,
+    val serverDisplayName: String
 )
 
 // ============================================================

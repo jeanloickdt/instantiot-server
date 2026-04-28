@@ -225,6 +225,11 @@ fun Route.adminServerInfoRoute(userRepository: UserRepository) {
             return@get
         }
 
+        val configured = ServerConfig.serverDisplayName
+        val effective = configured.takeIf { it.isNotBlank() }
+            ?: System.getenv("HOSTNAME")
+            ?: System.getenv("COMPUTERNAME")
+            ?: "InstantIoT Server"
         call.respond(ServerInfoResponse(
             version     = ServerConfig.version,
             httpPort    = ServerConfig.httpPort,
@@ -233,7 +238,9 @@ fun Route.adminServerInfoRoute(userRepository: UserRepository) {
             dbSizeBytes = ServerConfig.dbSizeBytes,
             javaVersion = System.getProperty("java.version") ?: "unknown",
             osName      = System.getProperty("os.name") ?: "unknown",
-            localIp     = ServerConfig.localIp
+            localIp     = ServerConfig.localIp,
+            serverDisplayName = configured,
+            effectiveDisplayName = effective
         ))
     }
 }
@@ -283,12 +290,36 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
             return@patch
         }
 
-        ServerConfig.save(newHttpPort = httpPort, newTcpPort = tcpPort)
+        // Validation server display name : 1-64 chars, sans control chars,
+        // sans @/. au début (mDNS friendly)
+        val displayName = body.serverDisplayName?.trim()
+        if (displayName != null && displayName.isNotEmpty()) {
+            if (displayName.length > 64) {
+                return@patch call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "serverDisplayName must be <= 64 characters")
+                )
+            }
+            // Reject control chars
+            if (displayName.any { it.code < 32 }) {
+                return@patch call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "serverDisplayName cannot contain control characters")
+                )
+            }
+        }
+
+        ServerConfig.save(
+            newHttpPort = httpPort,
+            newTcpPort = tcpPort,
+            newServerDisplayName = displayName
+        )
 
         call.respond(HttpStatusCode.OK, UpdateConfigResponse(
             message  = "Configuration saved — restart server to apply",
             httpPort = ServerConfig.httpPort,
-            tcpPort  = ServerConfig.tcpPort
+            tcpPort  = ServerConfig.tcpPort,
+            serverDisplayName = ServerConfig.serverDisplayName
         ))
     }
 }

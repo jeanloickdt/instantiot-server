@@ -33,6 +33,17 @@ object ServerConfig {
     var tcpPort: Int = 9001
         private set
 
+    /**
+     * Nom d'affichage du serveur — visible dans l'app mDNS Discovery.
+     * Permet à l'user qui a 2 serveurs sur le même LAN (Pi du salon,
+     * Pi du garage…) de les distinguer dans la liste de l'app.
+     *
+     * Vide ou null → fallback HOSTNAME / "InstantIoT Server" au boot.
+     * Restart requis pour appliquer (le mDNS est publié au boot).
+     */
+    var serverDisplayName: String = ""
+        private set
+
     // ports réellement utilisés par le serveur au démarrage
     // (ne changent pas après un save — seulement après restart)
     var runningHttpPort: Int = 8080
@@ -250,6 +261,7 @@ object ServerConfig {
                 .toIntOrNull() ?: -1
             historyDownsampleIntervalMinutes = props.getProperty("history.downsample.intervalMinutes", "60")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 60
+            serverDisplayName = props.getProperty("server.displayName", "").trim()
             backupEnabled = props.getProperty("backup.enabled", "true")
                 .toBooleanStrictOrNull() ?: true
             backupIntervalHours = props.getProperty("backup.interval.hours", "24")
@@ -268,9 +280,14 @@ object ServerConfig {
      * Sauvegarder les ports dans le fichier properties.
      * Le serveur doit etre redemarre pour appliquer les changements.
      */
-    fun save(newHttpPort: Int? = null, newTcpPort: Int? = null) {
+    fun save(
+        newHttpPort: Int? = null,
+        newTcpPort: Int? = null,
+        newServerDisplayName: String? = null
+    ) {
         if (newHttpPort != null) httpPort = newHttpPort
         if (newTcpPort != null) tcpPort = newTcpPort
+        if (newServerDisplayName != null) serverDisplayName = newServerDisplayName.trim()
         writeProperties()
     }
 
@@ -310,6 +327,7 @@ object ServerConfig {
         props.setProperty("history.retention.hour.days", historyRetentionHourDays.toString())
         props.setProperty("history.retention.day.days", historyRetentionDayDays.toString())
         props.setProperty("history.downsample.intervalMinutes", historyDownsampleIntervalMinutes.toString())
+        props.setProperty("server.displayName", serverDisplayName)
         props.setProperty("backup.enabled", backupEnabled.toString())
         props.setProperty("backup.interval.hours", backupIntervalHours.toString())
         props.setProperty("backup.retention.count", backupRetentionCount.toString())

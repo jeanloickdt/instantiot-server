@@ -274,9 +274,14 @@ fun Application.module() {
     // Échec non-fatal : si JmDNS ne se lance pas, l'app peut toujours
     // ajouter le serveur manuellement.
     // ============================================================
-    val displayName = (System.getenv("HOSTNAME")
+    // V1 : nom configurable via admin panel (sinon fallback HOSTNAME).
+    // Permet à l'user qui a 2+ serveurs sur le même LAN de les
+    // distinguer dans l'app mDNS Discovery (Pi du salon, etc.).
+    val displayName = com.jeanloickdt.common.ServerConfig.serverDisplayName
+        .takeIf { it.isNotBlank() }
+        ?: System.getenv("HOSTNAME")
         ?: System.getenv("COMPUTERNAME")
-        ?: "InstantIoT Server")
+        ?: "InstantIoT Server"
     com.jeanloickdt.discovery.MdnsPublisher.start(displayName = displayName)
 
     // ============================================================

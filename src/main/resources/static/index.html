@@ -232,6 +232,12 @@
           <h2 class="section-title" x-text="t('config.title')"></h2>
           <form class="config-form" @submit.prevent="saveConfig()">
             <div class="config-row">
+              <label x-text="t('config.serverName')" :title="t('config.serverNameHelp')"></label>
+              <input type="text" x-model="configForm.serverDisplayName"
+                     :placeholder="configForm.effectiveDisplayName || t('config.serverNamePlaceholder')"
+                     maxlength="64">
+            </div>
+            <div class="config-row">
               <label x-text="t('config.httpPort')"></label>
               <input type="number" x-model.number="configForm.httpPort" min="1" max="65535" required>
             </div>

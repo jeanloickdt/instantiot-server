@@ -33,7 +33,13 @@ document.addEventListener('alpine:init', () => {
 
     // ── Forgot password ─────────────────────────────────────
     forgotForm: { key: '', error: '', success: false },
-    configForm: { httpPort: 8080, tcpPort: 9001, msg: '', msgType: '' },
+    configForm: {
+      httpPort: 8080,
+      tcpPort: 9001,
+      serverDisplayName: '',
+      effectiveDisplayName: '',  // shown as placeholder when blank
+      msg: '', msgType: ''
+    },
     historyForm: {
       retentionRawDays: 7,
       retentionOpaqueDays: 1,
@@ -413,6 +419,8 @@ document.addEventListener('alpine:init', () => {
       this.serverInfo = await res.json();
       this.configForm.httpPort = this.serverInfo.httpPort;
       this.configForm.tcpPort = this.serverInfo.tcpPort;
+      this.configForm.serverDisplayName = this.serverInfo.serverDisplayName || '';
+      this.configForm.effectiveDisplayName = this.serverInfo.effectiveDisplayName || '';
     },
 
     // ── Config ─────────────────────────────────────────────
@@ -424,7 +432,8 @@ document.addEventListener('alpine:init', () => {
         method: 'PATCH',
         body: JSON.stringify({
           httpPort: this.configForm.httpPort,
-          tcpPort: this.configForm.tcpPort
+          tcpPort: this.configForm.tcpPort,
+          serverDisplayName: this.configForm.serverDisplayName
         })
       });
 
