@@ -32,6 +32,17 @@ object MdnsPublisher {
     private var serviceInfo: ServiceInfo? = null
 
     fun start(displayName: String) {
+        // ─── macOS : déléguer à dns-sd natif ──────────────────
+        // JmDNS lutte contre mDNSResponder + Chrome + ADB +
+        // Arduino mdns-discovery pour le port 5353 et finit par
+        // échouer ("NoRouteToHostException"). dns-sd dialogue
+        // directement avec mDNSResponder, pas de conflit.
+        // Linux (avahi) et Windows : JmDNS marche bien.
+        if (isMacOs()) {
+            DnsSdPublisher.start(displayName)
+            return
+        }
+
         if (jmdns != null) {
             log.warn("mDNS publisher already running — stopping previous instance first")
             stop()
@@ -93,6 +104,11 @@ object MdnsPublisher {
     }
 
     fun stop() {
+        if (isMacOs()) {
+            DnsSdPublisher.stop()
+            return
+        }
+
         val info = serviceInfo
         val instance = jmdns
         serviceInfo = null
@@ -107,6 +123,9 @@ object MdnsPublisher {
             }
         }
     }
+
+    private fun isMacOs(): Boolean =
+        System.getProperty("os.name").lowercase().contains("mac")
 
     /**
      * Résout l'adresse IPv4 LAN pour le bind JmDNS. Utilise le scoring
