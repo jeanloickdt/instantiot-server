@@ -47,3 +47,6 @@ build/jpackage-input/
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Python venv pour generate-licence.py
+doc-and-test/.venv/
