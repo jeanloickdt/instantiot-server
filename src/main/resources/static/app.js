@@ -20,6 +20,13 @@ document.addEventListener('alpine:init', () => {
     refreshInterval: null,
     showRestartModal: false,
 
+    // ── Sidebar / mobile drawer ────────────────────────────
+    sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true',
+    mobileMenuOpen: false,
+
+    // ── Backups list display (Show all / Show less) ───────
+    showAllBackups: false,
+
     // ── Forms ──────────────────────────────────────────────
     licenceForm: { key: '', error: '' },
     loginForm: { username: '', password: '', error: '' },
@@ -91,8 +98,13 @@ document.addEventListener('alpine:init', () => {
     // ── Computed ────────────────────────────────────────────
     get themeIcon() {
       const effective = this.theme
-        || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       return effective === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+    },
+
+    get effectiveTheme() {
+      return this.theme
+          || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
     },
 
     // ── i18n ───────────────────────────────────────────────
@@ -107,10 +119,16 @@ document.addEventListener('alpine:init', () => {
     // ── Theme ──────────────────────────────────────────────
     toggleTheme() {
       const current = this.theme
-        || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+          || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
       this.theme = current === 'dark' ? 'light' : 'dark';
       document.documentElement.setAttribute('data-theme', this.theme);
       localStorage.setItem('theme', this.theme);
+    },
+
+    // ── Sidebar ────────────────────────────────────────────
+    toggleSidebar() {
+      this.sidebarCollapsed = !this.sidebarCollapsed;
+      localStorage.setItem('sidebarCollapsed', String(this.sidebarCollapsed));
     },
 
     // ── Init ───────────────────────────────────────────────
@@ -697,7 +715,7 @@ document.addEventListener('alpine:init', () => {
         if (res && res.ok) {
           const data = await res.json();
           this.backupForm.msg = data.message ||
-            this.t('backup.restoreOk');
+              this.t('backup.restoreOk');
           // Force le user à restart maintenant
           this.backupForm.restoreModalFor = null;
           this.showRestartModal = true;
@@ -751,9 +769,30 @@ document.addEventListener('alpine:init', () => {
     // ── Navigation ─────────────────────────────────────────
     navigate(target) {
       this.view = target;
-      if (target === 'dashboard') this.loadDashboard();
-      if (target === 'devices') this.loadDevices();
-      if (target === 'users') this.loadUsers();
+      switch (target) {
+        case 'dashboard':
+          this.loadDashboard();
+          break;
+        case 'devices':
+          this.loadDevices();
+          break;
+        case 'users':
+          this.loadUsers();
+          break;
+        case 'settings':
+          this.loadServerInfo();
+          break;
+        case 'retention':
+          this.loadHistoryConfig();
+          break;
+        case 'backups':
+          this.loadBackupConfig();
+          this.loadBackupList();
+          break;
+        case 'licence-info':
+          this.loadLicenceInfo();
+          break;
+      }
     },
 
     // ── Utils ──────────────────────────────────────────────
@@ -761,7 +800,7 @@ document.addEventListener('alpine:init', () => {
       if (!ts) return '-';
       const d = new Date(ts);
       return d.toLocaleDateString(this.lang === 'fr' ? 'fr-FR' : 'en-US')
-        + ' ' + d.toLocaleTimeString(this.lang === 'fr' ? 'fr-FR' : 'en-US');
+          + ' ' + d.toLocaleTimeString(this.lang === 'fr' ? 'fr-FR' : 'en-US');
     },
 
     formatUptime(ms) {
@@ -787,10 +826,32 @@ document.addEventListener('alpine:init', () => {
     },
 
     async copyText(text, btn) {
-      await navigator.clipboard.writeText(text);
-      const original = btn.textContent;
-      btn.textContent = '\u2705';
-      setTimeout(() => btn.textContent = original, 1500);
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (_) { return; }
+
+      // Si le bouton contient un <svg> (nouveau design), on swap l'icône
+      // vers #icon-check temporairement. Sinon (ancien fallback), on
+      // remplace textContent comme avant.
+      const useEl = btn.querySelector('svg use');
+      if (useEl) {
+        const original = useEl.getAttribute('href') || useEl.getAttribute('xlink:href');
+        const setHref = (h) => {
+          useEl.setAttribute('href', h);
+          useEl.setAttribute('xlink:href', h);
+        };
+        btn.classList.add('copied');
+        setHref('#icon-check');
+        setTimeout(() => {
+          btn.classList.remove('copied');
+          if (original) setHref(original);
+        }, 1500);
+      } else {
+        const original = btn.textContent;
+        btn.textContent = '\u2705';
+        setTimeout(() => { btn.textContent = original; }, 1500);
+      }
     }
 
   }));

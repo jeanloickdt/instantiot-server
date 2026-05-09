@@ -1,26 +1,133 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>InstantIoT Server — Admin</title>
-<link rel="stylesheet" href="style.css">
-<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-<script src="i18n.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>InstantIoT Server — Admin</title>
+  <link rel="stylesheet" href="style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="i18n.js"></script>
 </head>
 <body x-data="app" x-init="init()" x-cloak>
 
 <!-- ============================================================ -->
-<!-- LICENCE                                                      -->
+<!-- INLINE SVG ICONS                                             -->
 <!-- ============================================================ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="icon-overview" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/>
+      <rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>
+    </symbol>
+    <symbol id="icon-devices" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="6" width="14" height="12" rx="2"/><path d="M16 10h4a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-4"/>
+      <line x1="6" y1="22" x2="12" y2="22"/><line x1="9" y1="18" x2="9" y2="22"/>
+    </symbol>
+    <symbol id="icon-users" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/>
+      <path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+    </symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="15 18 9 12 15 6"/>
+    </symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="6 9 12 15 18 9"/>
+    </symbol>
+    <symbol id="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>
+    </symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+    </symbol>
+    <symbol id="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+    </symbol>
+    <symbol id="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+    </symbol>
+    <symbol id="icon-logout" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>
+    </symbol>
+    <symbol id="icon-account" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>
+    </symbol>
+    <symbol id="icon-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+    </symbol>
+    <symbol id="icon-cpu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/>
+      <line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/>
+      <line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/>
+      <line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/>
+      <line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>
+    </symbol>
+    <symbol id="icon-wifi" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M5 12.55a11 11 0 0 1 14.08 0"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/>
+      <path d="M8.53 16.11a6 6 0 0 1 6.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/>
+    </symbol>
+    <symbol id="icon-phone" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>
+    </symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+    </symbol>
+    <symbol id="icon-server" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/>
+      <line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>
+    </symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+    </symbol>
+    <symbol id="icon-archive" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/>
+      <line x1="10" y1="12" x2="14" y2="12"/>
+    </symbol>
+    <symbol id="icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+    </symbol>
+    <symbol id="icon-key" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M21 2l-2 2m-7.61 7.61a5.5 5.5 0 1 1-7.778 7.778 5.5 5.5 0 0 1 7.777-7.777zm0 0L15.5 7.5m0 0l3 3L22 7l-3-3m-3.5 3.5L19 4"/>
+    </symbol>
+    <symbol id="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+    </symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="20 6 9 17 4 12"/>
+    </symbol>
+    <symbol id="icon-refresh" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/>
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+    </symbol>
+    <symbol id="icon-power" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18.36 6.64a9 9 0 1 1-12.73 0"/><line x1="12" y1="2" x2="12" y2="12"/>
+    </symbol>
+    <symbol id="icon-alert-triangle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+      <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </symbol>
+    <symbol id="icon-help-circle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+    </symbol>
+  </defs>
+</svg>
+
+<!-- ============================================================ -->
+<!-- AUTH SCREENS                                                 -->
+<!-- ============================================================ -->
+
 <div class="view view-center" x-show="view === 'licence'">
   <div class="card login-card">
     <div class="logo">InstantIoT</div>
     <p class="subtitle" x-text="t('licence.subtitle')"></p>
     <form @submit.prevent="activateLicence()">
-      <textarea x-model="licenceForm.key" :placeholder="t('licence.placeholder')" rows="4" required
-        style="width:100%; padding:12px; background:var(--input-bg); border:1px solid var(--border); border-radius:10px; color:var(--text); font-family:monospace; font-size:0.8em; resize:vertical; outline:none;"></textarea>
-      <button type="submit" x-text="t('licence.submit')" style="margin-top:12px;"></button>
+      <textarea class="auth-textarea" x-model="licenceForm.key" :placeholder="t('licence.placeholder')" rows="4" required></textarea>
+      <button type="submit" x-text="t('licence.submit')"></button>
       <p class="error" x-text="licenceForm.error"></p>
     </form>
     <div class="lang-switch">
@@ -30,15 +137,11 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- WELCOME — V1 first-launch flow                               -->
-<!-- ============================================================ -->
 <div class="view view-center" x-show="view === 'welcome'">
   <div class="card login-card welcome-card">
     <div class="logo">InstantIoT</div>
     <p class="subtitle" x-text="t('welcome.subtitle')"></p>
 
-    <!-- Bloc default credentials (lecture seule) -->
     <div class="welcome-defaults">
       <div class="welcome-defaults-title" x-text="t('welcome.defaultsTitle')"></div>
       <div class="welcome-cred-row">
@@ -48,28 +151,26 @@
       <div class="welcome-cred-row">
         <span class="welcome-cred-label" x-text="t('welcome.password')"></span>
         <code class="welcome-cred-value" x-text="bootstrapLicenceId"></code>
-        <button class="copy-btn" @click="copyText(bootstrapLicenceId, $el)" title="Copy">&#128203;</button>
+        <button class="copy-btn" @click="copyText(bootstrapLicenceId, $el)" :title="t('a11y.copy')">
+          <svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>
+        </button>
       </div>
       <p class="welcome-defaults-hint" x-text="t('welcome.defaultsHint')"></p>
     </div>
 
-    <!-- Bloc Renew (optionnel) -->
     <div class="welcome-renew">
       <div class="welcome-renew-title" x-text="t('welcome.renewTitle')"></div>
-      <input type="text"
-             x-model="welcomeForm.username"
+      <input type="text" x-model="welcomeForm.username"
              :placeholder="t('welcome.newUsername')"
              autocomplete="username"
              :disabled="welcomeForm.submitting">
-      <input type="password"
-             x-model="welcomeForm.password"
+      <input type="password" x-model="welcomeForm.password"
              :placeholder="t('welcome.newPassword')"
              autocomplete="new-password"
              :disabled="welcomeForm.submitting">
 
       <div class="welcome-actions">
-        <button type="button"
-                class="btn-cancel"
+        <button type="button" class="btn-cancel"
                 @click="submitWelcome('skip')"
                 :disabled="welcomeForm.submitting"
                 x-text="t('welcome.skip')"></button>
@@ -88,9 +189,6 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- LOGIN                                                        -->
-<!-- ============================================================ -->
 <div class="view view-center" x-show="view === 'login'">
   <div class="card login-card">
     <div class="logo">InstantIoT</div>
@@ -111,9 +209,6 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- FORGOT PASSWORD — reset via licence                          -->
-<!-- ============================================================ -->
 <div class="view view-center" x-show="view === 'forgot'">
   <div class="card login-card">
     <div class="logo">InstantIoT</div>
@@ -121,13 +216,11 @@
 
     <template x-if="!forgotForm.success">
       <form @submit.prevent="submitForgot()">
-        <textarea x-model="forgotForm.key"
+        <textarea class="auth-textarea" x-model="forgotForm.key"
                   :placeholder="t('forgot.placeholder')"
-                  rows="4" required
-                  style="width:100%; padding:12px; background:var(--input-bg); border:1px solid var(--border); border-radius:10px; color:var(--text); font-family:monospace; font-size:0.8em; resize:vertical; outline:none;"></textarea>
+                  rows="4" required></textarea>
         <div class="welcome-actions">
-          <button type="button"
-                  class="btn-cancel"
+          <button type="button" class="btn-cancel"
                   @click="view = 'login'; forgotForm = { key: '', error: '', success: false }"
                   x-text="t('forgot.back')"></button>
           <button type="submit" x-text="t('forgot.submit')"></button>
@@ -151,9 +244,6 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- CHANGE PASSWORD                                              -->
-<!-- ============================================================ -->
 <div class="view view-center" x-show="view === 'setup'">
   <div class="card login-card">
     <div class="logo">InstantIoT</div>
@@ -169,394 +259,593 @@
 </div>
 
 <!-- ============================================================ -->
-<!-- DASHBOARD                                                    -->
+<!-- APP SHELL                                                    -->
 <!-- ============================================================ -->
-<div class="view" x-show="view === 'dashboard'">
-  <template x-ref="navDashboard">
-    <nav>
-      <div class="nav-left">
-        <span class="nav-logo">InstantIoT</span>
-        <a href="#" class="nav-link active" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
-        <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
-        <a href="#" class="nav-link" :class="{ active: view === 'users' }" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
+<div class="app-shell"
+     :class="{ 'sidebar-collapsed': sidebarCollapsed, 'mobile-menu-open': mobileMenuOpen }"
+     x-show="['dashboard','devices','users','settings','retention','backups','licence-info'].includes(view)">
+
+  <header class="mobile-topbar">
+    <button class="burger-btn" @click="mobileMenuOpen = true" :title="t('a11y.openMenu')" :aria-label="t('a11y.openMenu')">
+      <svg class="icon" aria-hidden="true"><use href="#icon-menu"/></svg>
+    </button>
+    <span class="mobile-topbar-logo">InstantIoT</span>
+    <span class="mobile-topbar-spacer"></span>
+  </header>
+
+  <div class="drawer-overlay"
+       x-show="mobileMenuOpen"
+       x-transition.opacity
+       @click="mobileMenuOpen = false"
+       aria-hidden="true"></div>
+
+  <aside class="sidebar" :class="{ 'mobile-open': mobileMenuOpen }" :aria-label="t('a11y.sidebar')">
+
+    <div class="sidebar-header">
+      <span class="sidebar-logo-full">InstantIoT</span>
+      <span class="sidebar-logo-mini" aria-hidden="true">I</span>
+      <button class="sidebar-mobile-close"
+              @click="mobileMenuOpen = false"
+              :title="t('a11y.closeMenu')"
+              :aria-label="t('a11y.closeMenu')">
+        <svg class="icon" aria-hidden="true"><use href="#icon-close"/></svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav" :aria-label="t('a11y.primaryNav')">
+      <a href="#" class="sidebar-link" :class="{ active: view === 'dashboard' }"
+         @click.prevent="navigate('dashboard'); mobileMenuOpen = false" :title="t('nav.overview')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-overview"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.overview')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'devices' }"
+         @click.prevent="navigate('devices'); mobileMenuOpen = false" :title="t('nav.devices')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-devices"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.devices')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'users' }"
+         @click.prevent="navigate('users'); mobileMenuOpen = false" :title="t('nav.users')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-users"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.users')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'settings' }"
+         @click.prevent="navigate('settings'); mobileMenuOpen = false" :title="t('nav.settings')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-settings"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.settings')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'retention' }"
+         @click.prevent="navigate('retention'); mobileMenuOpen = false" :title="t('nav.retention')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-clock"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.retention')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'backups' }"
+         @click.prevent="navigate('backups'); mobileMenuOpen = false" :title="t('nav.backups')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-archive"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.backups')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'licence-info' }"
+         @click.prevent="navigate('licence-info'); mobileMenuOpen = false" :title="t('nav.licence')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-key"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.licence')"></span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="sidebar-user-row">
+        <div class="sidebar-user-avatar" aria-hidden="true">A</div>
+        <span class="sidebar-user-name">admin</span>
       </div>
-      <div class="nav-right">
-        <span class="nav-user">admin</span>
+
+      <div class="sidebar-controls">
         <div class="lang-switch-nav">
           <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
           <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
         </div>
-        <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
-        <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
+        <button class="theme-toggle"
+                @click="toggleTheme()"
+                :title="t('a11y.toggleTheme')"
+                :aria-label="t('a11y.toggleTheme')">
+          <svg class="icon" aria-hidden="true">
+            <use :href="effectiveTheme === 'dark' ? '#icon-sun' : '#icon-moon'"/>
+          </svg>
+        </button>
+        <button class="logout-btn"
+                @click="logout()"
+                :title="t('nav.logout')"
+                :aria-label="t('nav.logout')">
+          <svg class="icon" aria-hidden="true"><use href="#icon-logout"/></svg>
+        </button>
       </div>
-    </nav>
-  </template>
 
-  <nav>
-    <div class="nav-left">
-      <span class="nav-logo">InstantIoT</span>
-      <a href="#" class="nav-link active" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
-      <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
-      <a href="#" class="nav-link" :class="{ active: view === 'users' }" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
+      <button class="sidebar-collapse-btn"
+              @click="toggleSidebar()"
+              :title="sidebarCollapsed ? t('a11y.expandSidebar') : t('a11y.collapseSidebar')"
+              :aria-label="sidebarCollapsed ? t('a11y.expandSidebar') : t('a11y.collapseSidebar')">
+        <svg class="icon collapse-chevron" aria-hidden="true"><use href="#icon-chevron-left"/></svg>
+      </button>
     </div>
-    <div class="nav-right">
-      <span class="nav-user">admin</span>
-      <div class="lang-switch-nav">
-        <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
-        <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
-      </div>
-      <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
-      <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
-    </div>
-  </nav>
+  </aside>
 
-  <div class="container">
-    <h1 x-text="t('dashboard.title')"></h1>
+  <main class="main-content">
 
-    <div class="dashboard-grid">
-      <div class="col-main">
-
-        <!-- STATS -->
-        <div class="section">
-          <h2 class="section-title" x-text="t('dashboard.serverStatus')"></h2>
-          <div class="stats-grid">
-            <div class="stat-card"><div class="stat-value" x-text="stats.users"></div><div class="stat-label" x-text="t('stats.accounts')"></div></div>
-            <div class="stat-card"><div class="stat-value" x-text="stats.projects"></div><div class="stat-label" x-text="t('stats.projects')"></div></div>
-            <div class="stat-card"><div class="stat-value" x-text="stats.devicesTotal"></div><div class="stat-label" x-text="t('stats.devices')"></div></div>
-            <div class="stat-card accent"><div class="stat-value" x-text="stats.devicesOnline"></div><div class="stat-label" x-text="t('stats.online')"></div></div>
-            <div class="stat-card"><div class="stat-value" x-text="stats.appSessionsActive"></div><div class="stat-label" x-text="t('stats.appSessions')"></div></div>
-            <div class="stat-card"><div class="stat-value" x-text="stats.deviceSessionsActive"></div><div class="stat-label" x-text="t('stats.tcpConnections')"></div></div>
-          </div>
+    <!-- OVERVIEW -->
+    <div class="page" x-show="view === 'dashboard'">
+      <div class="container">
+        <div class="page-header">
+          <h1 x-text="t('dashboard.title')"></h1>
+          <span class="page-header-meta">
+            <svg class="icon page-header-icon" aria-hidden="true"><use href="#icon-refresh"/></svg>
+            <span x-text="t('dashboard.autoRefresh')"></span>
+          </span>
         </div>
 
-        <!-- CONFIG PORTS -->
-        <div class="section">
-          <h2 class="section-title" x-text="t('config.title')"></h2>
-          <form class="config-form" @submit.prevent="saveConfig()">
-            <div class="config-row">
-              <label x-text="t('config.serverName')" :title="t('config.serverNameHelp')"></label>
-              <input type="text" x-model="configForm.serverDisplayName"
-                     :placeholder="configForm.effectiveDisplayName || t('config.serverNamePlaceholder')"
-                     maxlength="64">
+        <div class="overview-grid">
+          <div class="overview-main">
+            <h2 class="section-title">
+              <svg class="section-title-icon" aria-hidden="true"><use href="#icon-server"/></svg>
+              <span x-text="t('dashboard.serverStatus')"></span>
+            </h2>
+            <div class="stats-grid">
+              <div class="stat-card">
+                <div class="stat-icon" aria-hidden="true"><svg class="icon"><use href="#icon-account"/></svg></div>
+                <div class="stat-body">
+                  <div class="stat-value" x-text="stats.users"></div>
+                  <div class="stat-label" x-text="t('stats.accounts')"></div>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-icon" aria-hidden="true"><svg class="icon"><use href="#icon-folder"/></svg></div>
+                <div class="stat-body">
+                  <div class="stat-value" x-text="stats.projects"></div>
+                  <div class="stat-label" x-text="t('stats.projects')"></div>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-icon" aria-hidden="true"><svg class="icon"><use href="#icon-cpu"/></svg></div>
+                <div class="stat-body">
+                  <div class="stat-value" x-text="stats.devicesTotal"></div>
+                  <div class="stat-label" x-text="t('stats.devices')"></div>
+                </div>
+              </div>
+              <div class="stat-card accent">
+                <div class="stat-icon" aria-hidden="true"><svg class="icon"><use href="#icon-wifi"/></svg></div>
+                <div class="stat-body">
+                  <div class="stat-value" x-text="stats.devicesOnline"></div>
+                  <div class="stat-label" x-text="t('stats.online')"></div>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-icon" aria-hidden="true"><svg class="icon"><use href="#icon-phone"/></svg></div>
+                <div class="stat-body">
+                  <div class="stat-value" x-text="stats.appSessionsActive"></div>
+                  <div class="stat-label" x-text="t('stats.appSessions')"></div>
+                </div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-icon" aria-hidden="true"><svg class="icon"><use href="#icon-link"/></svg></div>
+                <div class="stat-body">
+                  <div class="stat-value" x-text="stats.deviceSessionsActive"></div>
+                  <div class="stat-label" x-text="t('stats.tcpConnections')"></div>
+                </div>
+              </div>
             </div>
-            <div class="config-row">
-              <label x-text="t('config.httpPort')"></label>
-              <input type="number" x-model.number="configForm.httpPort" min="1" max="65535" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('config.tcpPort')"></label>
-              <input type="number" x-model.number="configForm.tcpPort" min="1" max="65535" required>
-            </div>
-            <div class="config-actions">
-              <button type="submit" x-text="t('config.save')"></button>
-              <button type="button" class="btn-restart" @click="restartServer()" x-text="t('config.restart')"></button>
-              <p class="config-msg" :class="configForm.msgType" x-text="configForm.msg"></p>
-            </div>
-          </form>
-          <p class="config-note" x-text="t('config.restartNote')"></p>
-        </div>
-
-        <!-- HISTORY RETENTION / DOWNSAMPLE -->
-        <div class="section">
-          <h2 class="section-title" x-text="t('history.title')"></h2>
-          <p class="config-note" x-text="t('history.intro')"></p>
-          <form class="config-form" @submit.prevent="saveHistoryConfig()">
-
-            <div class="config-row">
-              <label x-text="t('history.retentionRaw')" :title="t('history.retentionRawHelp')"></label>
-              <input type="number" x-model.number="historyForm.retentionRawDays" min="1" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('history.retentionOpaque')" :title="t('history.retentionOpaqueHelp')"></label>
-              <input type="number" x-model.number="historyForm.retentionOpaqueDays" min="1" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('history.throttle')" :title="t('history.throttleHelp')"></label>
-              <input type="number" x-model.number="historyForm.throttleRawIntervalSeconds" min="0" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('history.retentionMin')" :title="t('history.retentionMinHelp')"></label>
-              <input type="number" x-model.number="historyForm.retentionMinDays" min="1" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('history.retentionHour')" :title="t('history.retentionHourHelp')"></label>
-              <input type="number" x-model.number="historyForm.retentionHourDays" min="1" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('history.retentionDay')" :title="t('history.retentionDayHelp')"></label>
-              <input type="number" x-model.number="historyForm.retentionDayDays" min="-1" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('history.downsampleInterval')" :title="t('history.downsampleIntervalHelp')"></label>
-              <input type="number" x-model.number="historyForm.downsampleIntervalMinutes" min="1" required>
-            </div>
-
-            <div class="config-actions">
-              <button type="submit" x-text="t('history.save')"></button>
-              <button type="button" class="btn-cancel" @click="loadHistoryConfig()" x-text="t('history.reset')"></button>
-              <p class="config-msg" :class="historyForm.msgType" x-text="historyForm.msg"></p>
-            </div>
-          </form>
-          <p class="config-note" x-text="t('history.note')"></p>
-        </div>
-
-        <!-- BACKUP -->
-        <div class="section">
-          <h2 class="section-title" x-text="t('backup.title')"></h2>
-          <p class="config-note" x-text="t('backup.intro')"></p>
-
-          <form class="config-form" @submit.prevent="saveBackupConfig()">
-            <div class="config-row">
-              <label x-text="t('backup.enabled')"></label>
-              <input type="checkbox" x-model="backupForm.enabled">
-            </div>
-            <div class="config-row">
-              <label x-text="t('backup.intervalHours')"></label>
-              <input type="number" x-model.number="backupForm.intervalHours" min="1" required>
-            </div>
-            <div class="config-row">
-              <label x-text="t('backup.retentionCount')"></label>
-              <input type="number" x-model.number="backupForm.retentionCount" min="1" required>
-            </div>
-            <div class="config-actions">
-              <button type="submit" x-text="t('backup.save')"></button>
-              <button type="button" @click="backupNow()"
-                      :disabled="backupForm.busy"
-                      x-text="t('backup.now')"></button>
-              <p class="config-msg" :class="backupForm.msgType" x-text="backupForm.msg"></p>
-            </div>
-          </form>
-
-          <div class="backup-meta">
-            <span x-text="t('backup.lastBackup') + ' ' + formatBackupDate(backupForm.lastBackupAtMs)"></span>
-            <span class="backup-meta-sep">•</span>
-            <span x-text="backupForm.backupCount + ' ' + t('backup.snapshots')"></span>
           </div>
 
-          <h3 class="backup-list-title" x-show="backupForm.backups.length > 0"
-              x-text="t('backup.listTitle')"></h3>
-          <table x-show="backupForm.backups.length > 0" class="backup-table">
+          <div class="overview-side">
+            <h2 class="section-title">
+              <svg class="section-title-icon" aria-hidden="true"><use href="#icon-info"/></svg>
+              <span x-text="t('info.title')"></span>
+            </h2>
+            <div class="info-list">
+              <div class="info-item">
+                <span class="info-label" x-text="t('info.localIp')"></span>
+                <span class="info-value" x-text="serverInfo.localIp" x-ref="ipValue"></span>
+                <button class="copy-btn" @click="copyText(serverInfo.localIp, $el)" :title="t('a11y.copy')">
+                  <svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>
+                </button>
+              </div>
+              <div class="info-item">
+                <span class="info-label">HTTP</span>
+                <span class="info-value" x-text="serverInfo.httpPort"></span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">TCP</span>
+                <span class="info-value" x-text="serverInfo.tcpPort"></span>
+              </div>
+              <div class="info-item">
+                <span class="info-label" x-text="t('info.uptime')"></span>
+                <span class="info-value" x-text="formatUptime(serverInfo.uptimeMs)"></span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Version</span>
+                <span class="info-value" x-text="'v' + serverInfo.version"></span>
+              </div>
+              <div class="info-item">
+                <span class="info-label" x-text="t('info.database')"></span>
+                <span class="info-value" x-text="formatBytes(serverInfo.dbSizeBytes)"></span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">Java</span>
+                <span class="info-value" x-text="serverInfo.javaVersion"></span>
+              </div>
+              <div class="info-item">
+                <span class="info-label">OS</span>
+                <span class="info-value" x-text="serverInfo.osName"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DEVICES -->
+    <div class="page" x-show="view === 'devices'">
+      <div class="container">
+        <div class="page-header">
+          <h1 x-text="t('devices.title')"></h1>
+        </div>
+
+        <template x-if="devices.length > 0">
+          <div class="card-panel">
+            <table class="data-table">
+              <thead><tr>
+                <th x-text="t('devices.name')"></th>
+                <th x-text="t('devices.projectId')"></th>
+                <th x-text="t('devices.status')"></th>
+                <th x-text="t('devices.lastSeen')"></th>
+              </tr></thead>
+              <tbody>
+              <template x-for="d in devices" :key="d.id">
+                <tr>
+                  <td :data-label="t('devices.name')" x-text="d.name"></td>
+                  <td :data-label="t('devices.projectId')"><code x-text="d.projectId.substring(0, 8) + '...'"></code></td>
+                  <td :data-label="t('devices.status')">
+                    <span x-show="d.isOnline" class="badge-online" x-text="t('devices.online')"></span>
+                    <span x-show="!d.isOnline" class="badge-offline" x-text="t('devices.offline')"></span>
+                  </td>
+                  <td :data-label="t('devices.lastSeen')" x-text="formatDate(d.lastSeen)"></td>
+                </tr>
+              </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <p class="empty-msg" x-show="devices.length === 0" x-text="t('devices.empty')"></p>
+      </div>
+    </div>
+
+    <!-- USERS -->
+    <div class="page" x-show="view === 'users'">
+      <div class="container">
+        <div class="page-header">
+          <h1 x-text="t('users.title')"></h1>
+          <p class="page-header-desc" x-text="t('users.intro')"></p>
+        </div>
+
+        <template x-if="users.length > 0">
+          <div class="card-panel">
+            <table class="data-table">
+              <thead><tr>
+                <th x-text="t('users.colUsername')"></th>
+                <th x-text="t('users.colRole')"></th>
+                <th x-text="t('users.colCreated')"></th>
+                <th></th>
+              </tr></thead>
+              <tbody>
+              <template x-for="u in users" :key="u.id">
+                <tr>
+                  <td :data-label="t('users.colUsername')" x-text="u.username"></td>
+                  <td :data-label="t('users.colRole')">
+                    <span class="badge-online" x-show="u.role === 'admin'" x-text="u.role"></span>
+                    <span x-show="u.role !== 'admin'" x-text="u.role"></span>
+                  </td>
+                  <td :data-label="t('users.colCreated')" x-text="formatDate(u.createdAtMs)"></td>
+                  <td class="td-actions">
+                    <button class="btn-cancel"
+                            @click="askResetUserPassword(u)"
+                            x-text="t('users.reset')"></button>
+                  </td>
+                </tr>
+              </template>
+              </tbody>
+            </table>
+          </div>
+        </template>
+
+        <p class="empty-msg" x-show="users.length === 0" x-text="t('users.empty')"></p>
+      </div>
+    </div>
+
+    <!-- SETTINGS -->
+    <div class="page" x-show="view === 'settings'">
+      <div class="container container-narrow">
+        <div class="page-header">
+          <h1 x-text="t('config.title')"></h1>
+          <p class="page-header-desc" x-text="t('settings.intro')"></p>
+        </div>
+
+        <form class="form-card" @submit.prevent="saveConfig()">
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('config.serverName')"></span>
+              <span class="form-help" x-text="t('config.serverNameHelp')"></span>
+            </label>
+            <input type="text" class="form-input"
+                   x-model="configForm.serverDisplayName"
+                   :placeholder="configForm.effectiveDisplayName || t('config.serverNamePlaceholder')"
+                   maxlength="64">
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('config.httpPort')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="configForm.httpPort" min="1" max="65535" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('config.tcpPort')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="configForm.tcpPort" min="1" max="65535" required>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary" x-text="t('config.save')"></button>
+            <button type="button" class="btn-danger-outline" @click="restartServer()">
+              <svg class="icon" aria-hidden="true"><use href="#icon-power"/></svg>
+              <span x-text="t('config.restart')"></span>
+            </button>
+            <p class="form-msg" :class="configForm.msgType" x-text="configForm.msg"></p>
+          </div>
+        </form>
+
+        <p class="page-note">
+          <svg class="icon" aria-hidden="true"><use href="#icon-alert-triangle"/></svg>
+          <span x-text="t('config.restartNote')"></span>
+        </p>
+      </div>
+    </div>
+
+    <!-- DATA RETENTION -->
+    <div class="page" x-show="view === 'retention'">
+      <div class="container container-narrow">
+        <div class="page-header">
+          <h1 x-text="t('history.title')"></h1>
+          <p class="page-header-desc" x-text="t('history.intro')"></p>
+        </div>
+
+        <form class="form-card" @submit.prevent="saveHistoryConfig()">
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.retentionRaw')"></span>
+              <span class="form-help" x-text="t('history.retentionRawHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.retentionRawDays" min="1" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.retentionOpaque')"></span>
+              <span class="form-help" x-text="t('history.retentionOpaqueHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.retentionOpaqueDays" min="1" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.throttle')"></span>
+              <span class="form-help" x-text="t('history.throttleHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.throttleRawIntervalSeconds" min="0" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.retentionMin')"></span>
+              <span class="form-help" x-text="t('history.retentionMinHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.retentionMinDays" min="1" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.retentionHour')"></span>
+              <span class="form-help" x-text="t('history.retentionHourHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.retentionHourDays" min="1" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.retentionDay')"></span>
+              <span class="form-help" x-text="t('history.retentionDayHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.retentionDayDays" min="-1" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('history.downsampleInterval')"></span>
+              <span class="form-help" x-text="t('history.downsampleIntervalHelp')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="historyForm.downsampleIntervalMinutes" min="1" required>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary" x-text="t('history.save')"></button>
+            <button type="button" class="btn-cancel" @click="loadHistoryConfig()" x-text="t('history.reset')"></button>
+            <p class="form-msg" :class="historyForm.msgType" x-text="historyForm.msg"></p>
+          </div>
+        </form>
+
+        <p class="page-note">
+          <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
+          <span x-text="t('history.note')"></span>
+        </p>
+      </div>
+    </div>
+
+    <!-- BACKUPS -->
+    <div class="page" x-show="view === 'backups'">
+      <div class="container container-narrow">
+        <div class="page-header">
+          <h1 x-text="t('backup.title')"></h1>
+          <p class="page-header-desc" x-text="t('backup.intro')"></p>
+        </div>
+
+        <form class="form-card" @submit.prevent="saveBackupConfig()">
+          <div class="form-row form-row-checkbox">
+            <input type="checkbox" id="backup-enabled" class="form-checkbox" x-model="backupForm.enabled">
+            <label for="backup-enabled" class="form-label-inline" x-text="t('backup.enabled')"></label>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('backup.intervalHours')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="backupForm.intervalHours" min="1" required>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('backup.retentionCount')"></span>
+            </label>
+            <input type="number" class="form-input form-input-num"
+                   x-model.number="backupForm.retentionCount" min="1" required>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary" x-text="t('backup.save')"></button>
+            <button type="button" class="btn-secondary"
+                    @click="backupNow()"
+                    :disabled="backupForm.busy">
+              <svg class="icon" aria-hidden="true"><use href="#icon-archive"/></svg>
+              <span x-text="t('backup.now')"></span>
+            </button>
+            <p class="form-msg" :class="backupForm.msgType" x-text="backupForm.msg"></p>
+          </div>
+        </form>
+
+        <div class="backup-meta-row">
+          <span class="backup-meta-item">
+            <span class="backup-meta-key" x-text="t('backup.lastBackup')"></span>
+            <span class="backup-meta-value" x-text="formatBackupDate(backupForm.lastBackupAtMs)"></span>
+          </span>
+          <span class="backup-meta-item">
+            <span class="backup-meta-value backup-meta-strong" x-text="backupForm.backupCount"></span>
+            <span class="backup-meta-key" x-text="t('backup.snapshots')"></span>
+          </span>
+        </div>
+
+        <h3 class="section-title-page" x-show="backupForm.backups.length > 0"
+            x-text="t('backup.listTitle')"></h3>
+
+        <div class="card-panel" x-show="backupForm.backups.length > 0">
+          <table class="data-table">
             <thead><tr>
               <th x-text="t('backup.colDate')"></th>
               <th x-text="t('backup.colSize')"></th>
               <th></th>
             </tr></thead>
             <tbody>
-              <template x-for="b in backupForm.backups" :key="b.filename">
-                <tr>
-                  <td>
-                    <code x-text="b.filename"></code>
-                    <div class="backup-date-sub" x-text="b.createdAtFormatted"></div>
-                  </td>
-                  <td x-text="formatBackupSize(b.sizeBytes)"></td>
-                  <td>
-                    <button class="btn-cancel"
-                            @click="askRestore(b.filename)"
-                            :disabled="backupForm.busy"
-                            x-text="t('backup.restore')"></button>
-                  </td>
-                </tr>
-              </template>
+            <template x-for="(b, idx) in backupForm.backups" :key="b.filename">
+              <tr x-show="showAllBackups || idx < 5">
+                <td :data-label="t('backup.colDate')">
+                  <code x-text="b.filename"></code>
+                  <div class="backup-date-sub" x-text="b.createdAtFormatted"></div>
+                </td>
+                <td :data-label="t('backup.colSize')" x-text="formatBackupSize(b.sizeBytes)"></td>
+                <td class="td-actions">
+                  <button class="btn-cancel"
+                          @click="askRestore(b.filename)"
+                          :disabled="backupForm.busy"
+                          x-text="t('backup.restore')"></button>
+                </td>
+              </tr>
+            </template>
             </tbody>
           </table>
-
-          <p class="config-note" x-text="t('backup.dirHint') + ' ' + backupForm.backupDirPath"></p>
         </div>
 
+        <div class="show-more-row" x-show="backupForm.backups.length > 5">
+          <button class="btn-ghost" @click="showAllBackups = !showAllBackups">
+            <svg class="icon show-more-chevron" :class="{ flipped: showAllBackups }" aria-hidden="true">
+              <use href="#icon-chevron-down"/>
+            </svg>
+            <span x-show="!showAllBackups" x-text="t('common.showAll') + ' (' + backupForm.backups.length + ')'"></span>
+            <span x-show="showAllBackups" x-text="t('common.showLess')"></span>
+          </button>
+        </div>
+
+        <p class="page-note">
+          <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
+          <span x-text="t('backup.dirHint') + ' ' + backupForm.backupDirPath"></span>
+        </p>
       </div>
+    </div>
 
-      <div class="col-side">
+    <!-- LICENCE INFO -->
+    <div class="page" x-show="view === 'licence-info'">
+      <div class="container container-narrow">
+        <div class="page-header">
+          <h1 x-text="t('licence.panelTitle')"></h1>
+        </div>
 
-        <!-- SERVER INFO -->
-        <div class="section">
-          <h2 class="section-title" x-text="t('info.title')"></h2>
+        <div x-show="licenceInfo">
           <div class="info-list">
             <div class="info-item">
-              <span class="info-label" x-text="t('info.localIp')"></span>
-              <span class="info-value" x-text="serverInfo.localIp" x-ref="ipValue"></span>
-              <button class="copy-btn" @click="copyText(serverInfo.localIp, $el)">&#128203;</button>
+              <span class="info-label" x-text="t('licence.id')"></span>
+              <span class="info-value" x-text="licenceInfo?.id" x-ref="licenceIdValue"></span>
+              <button class="copy-btn" @click="copyText(licenceInfo?.id, $el)" :title="t('a11y.copy')">
+                <svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>
+              </button>
             </div>
             <div class="info-item">
-              <span class="info-label">HTTP</span>
-              <span class="info-value" x-text="serverInfo.httpPort"></span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">TCP</span>
-              <span class="info-value" x-text="serverInfo.tcpPort"></span>
-            </div>
-            <div class="info-item">
-              <span class="info-label" x-text="t('info.uptime')"></span>
-              <span class="info-value" x-text="formatUptime(serverInfo.uptimeMs)"></span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">Version</span>
-              <span class="info-value" x-text="'v' + serverInfo.version"></span>
-            </div>
-            <div class="info-item">
-              <span class="info-label" x-text="t('info.database')"></span>
-              <span class="info-value" x-text="formatBytes(serverInfo.dbSizeBytes)"></span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">Java</span>
-              <span class="info-value" x-text="serverInfo.javaVersion"></span>
-            </div>
-            <div class="info-item">
-              <span class="info-label">OS</span>
-              <span class="info-value" x-text="serverInfo.osName"></span>
+              <span class="info-label" x-text="t('licence.type')"></span>
+              <span class="info-value" x-text="formatLicenceExpiry(licenceInfo?.expiresAt)"></span>
             </div>
           </div>
-        </div>
 
-        <!-- LICENCE -->
-        <div class="section">
-          <h2 class="section-title" x-text="t('licence.panelTitle')"></h2>
-          <div x-show="licenceInfo">
-            <div class="info-list">
-              <div class="info-item">
-                <span class="info-label" x-text="t('licence.id')"></span>
-                <span class="info-value" x-text="licenceInfo?.id" x-ref="licenceIdValue"></span>
-                <button class="copy-btn" @click="copyText(licenceInfo?.id, $el)">&#128203;</button>
-              </div>
-              <div class="info-item">
-                <span class="info-label" x-text="t('licence.type')"></span>
-                <span class="info-value" x-text="formatLicenceExpiry(licenceInfo?.expiresAt)"></span>
-              </div>
-            </div>
-            <p class="config-note" x-text="t('licence.resetHint')"></p>
+          <div class="danger-zone">
+            <h3 class="danger-zone-title" x-text="t('licence.resetHint')"></h3>
             <button type="button"
-                    class="btn-cancel"
+                    class="btn-danger-outline"
                     @click="askResetAdminToLicence()"
-                    :disabled="resetAdminForm.busy"
-                    style="margin-top:8px;"
-                    x-text="t('licence.resetAdminButton')"></button>
-            <p class="config-msg" :class="resetAdminForm.msgType" x-text="resetAdminForm.msg"></p>
-            <p class="config-note" style="margin-top:12px; opacity:0.75;"
-               x-text="t('licence.forgotHint')"></p>
+                    :disabled="resetAdminForm.busy">
+              <svg class="icon" aria-hidden="true"><use href="#icon-alert-triangle"/></svg>
+              <span x-text="t('licence.resetAdminButton')"></span>
+            </button>
+            <p class="form-msg" :class="resetAdminForm.msgType" x-text="resetAdminForm.msg"></p>
+            <p class="page-note licence-forgot-hint">
+              <svg class="icon" aria-hidden="true"><use href="#icon-help-circle"/></svg>
+              <span x-text="t('licence.forgotHint')"></span>
+            </p>
           </div>
-          <p x-show="!licenceInfo" class="empty-msg" x-text="t('licence.noActive')"></p>
         </div>
 
+        <p x-show="!licenceInfo" class="empty-msg" x-text="t('licence.noActive')"></p>
       </div>
     </div>
 
-    <p class="refresh-info" x-text="t('dashboard.autoRefresh')"></p>
-  </div>
+  </main>
 </div>
 
 <!-- ============================================================ -->
-<!-- DEVICES                                                      -->
+<!-- MODALS                                                       -->
 <!-- ============================================================ -->
-<div class="view" x-show="view === 'devices'">
-  <nav>
-    <div class="nav-left">
-      <span class="nav-logo">InstantIoT</span>
-      <a href="#" class="nav-link" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
-      <a href="#" class="nav-link active" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
-      <a href="#" class="nav-link" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
-    </div>
-    <div class="nav-right">
-      <span class="nav-user">admin</span>
-      <div class="lang-switch-nav">
-        <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
-        <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
-      </div>
-      <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
-      <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
-    </div>
-  </nav>
 
-  <div class="container">
-    <h1 x-text="t('devices.title')"></h1>
-
-    <template x-if="devices.length > 0">
-      <table>
-        <thead><tr>
-          <th x-text="t('devices.name')"></th>
-          <th x-text="t('devices.projectId')"></th>
-          <th x-text="t('devices.status')"></th>
-          <th x-text="t('devices.lastSeen')"></th>
-        </tr></thead>
-        <tbody>
-          <template x-for="d in devices" :key="d.id">
-            <tr>
-              <td x-text="d.name"></td>
-              <td><code x-text="d.projectId.substring(0, 8) + '...'"></code></td>
-              <td>
-                <span x-show="d.isOnline" class="badge-online" x-text="t('devices.online')"></span>
-                <span x-show="!d.isOnline" class="badge-offline" x-text="t('devices.offline')"></span>
-              </td>
-              <td x-text="formatDate(d.lastSeen)"></td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </template>
-
-    <p class="empty-msg" x-show="devices.length === 0" x-text="t('devices.empty')"></p>
-  </div>
-</div>
-
-<!-- ============================================================ -->
-<!-- USERS                                                        -->
-<!-- ============================================================ -->
-<div class="view" x-show="view === 'users'">
-  <nav>
-    <div class="nav-left">
-      <span class="nav-logo">InstantIoT</span>
-      <a href="#" class="nav-link" @click.prevent="navigate('dashboard')" x-text="t('nav.overview')"></a>
-      <a href="#" class="nav-link" @click.prevent="navigate('devices')" x-text="t('nav.devices')"></a>
-      <a href="#" class="nav-link active" @click.prevent="navigate('users')" x-text="t('nav.users')"></a>
-    </div>
-    <div class="nav-right">
-      <span class="nav-user">admin</span>
-      <div class="lang-switch-nav">
-        <button class="lang-btn-sm" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
-        <button class="lang-btn-sm" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
-      </div>
-      <button class="theme-toggle" @click="toggleTheme()" x-text="themeIcon"></button>
-      <a href="#" class="nav-link logout" @click.prevent="logout()" x-text="t('nav.logout')"></a>
-    </div>
-  </nav>
-
-  <div class="container">
-    <h1 x-text="t('users.title')"></h1>
-    <p class="config-note" x-text="t('users.intro')"></p>
-
-    <template x-if="users.length > 0">
-      <table>
-        <thead><tr>
-          <th x-text="t('users.colUsername')"></th>
-          <th x-text="t('users.colRole')"></th>
-          <th x-text="t('users.colCreated')"></th>
-          <th></th>
-        </tr></thead>
-        <tbody>
-          <template x-for="u in users" :key="u.id">
-            <tr>
-              <td x-text="u.username"></td>
-              <td>
-                <span class="badge-online" x-show="u.role === 'admin'" x-text="u.role"></span>
-                <span x-show="u.role !== 'admin'" x-text="u.role"></span>
-              </td>
-              <td x-text="formatDate(u.createdAtMs)"></td>
-              <td>
-                <button class="btn-cancel"
-                        @click="askResetUserPassword(u)"
-                        x-text="t('users.reset')"></button>
-              </td>
-            </tr>
-          </template>
-        </tbody>
-      </table>
-    </template>
-
-    <p class="empty-msg" x-show="users.length === 0" x-text="t('users.empty')"></p>
-  </div>
-</div>
-
-<!-- ============================================================ -->
-<!-- RESET ADMIN TO LICENCE CONFIRM MODAL                         -->
-<!-- ============================================================ -->
 <div class="modal-overlay" x-show="resetAdminForm.confirmOpen"
      x-transition.opacity @click.self="resetAdminForm.confirmOpen = false">
   <div class="modal-card">
@@ -571,9 +860,6 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- RESET USER PASSWORD MODAL                                    -->
-<!-- ============================================================ -->
 <div class="modal-overlay" x-show="resetUserForm.targetUser !== null"
      x-transition.opacity @click.self="cancelResetUserPassword()">
   <div class="modal-card">
@@ -585,7 +871,7 @@
     <input type="password" x-model="resetUserForm.newPassword"
            :placeholder="t('users.newPasswordPlaceholder')"
            autocomplete="new-password"
-           style="width:100%; margin-top:12px;">
+           class="modal-input">
     <p class="error" x-text="resetUserForm.error"></p>
     <p class="config-note" x-text="t('users.resetModalWarning')"></p>
     <div class="modal-actions">
@@ -597,9 +883,6 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- RESTORE BACKUP CONFIRM MODAL                                 -->
-<!-- ============================================================ -->
 <div class="modal-overlay" x-show="backupForm.restoreModalFor !== null"
      x-transition.opacity @click.self="cancelRestore()">
   <div class="modal-card">
@@ -618,9 +901,6 @@
   </div>
 </div>
 
-<!-- ============================================================ -->
-<!-- RESTART CONFIRM MODAL                                        -->
-<!-- ============================================================ -->
 <div class="modal-overlay" x-show="showRestartModal" x-transition.opacity @click.self="showRestartModal = false">
   <div class="modal-card">
     <h3 x-text="t('restart.title')"></h3>

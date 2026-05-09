@@ -13,11 +13,15 @@ application {
 
 ktor{
     docker {
-        jreVersion.set(JavaVersion.VERSION_22)
+        jreVersion.set(JavaVersion.VERSION_21)
     }
 }
 kotlin {
-    jvmToolchain(22)
+    // Java 21 — LTS, dispo dans apt sur Debian Trixie / Ubuntu 24.04 et
+    // partout ailleurs (Homebrew, SDKMAN, jpackage, runners CI). Évite
+    // les soucis de Java 22 (non-LTS, pas dans apt) au moment du
+    // packaging .deb pour Raspberry Pi.
+    jvmToolchain(21)
 }
 
 dependencies {
