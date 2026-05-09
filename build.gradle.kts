@@ -149,19 +149,32 @@ val packageInstaller by tasks.registering(Exec::class) {
                 // jpackage --resource-dir n'embarque PAS les fichiers
                 // d'un sous-dossier lib/ dans le .deb final ; on injecte
                 // donc le contenu du .service directement dans le postinst
-                // via un placeholder __SERVICE_FILE_CONTENT__. À l'install,
-                // le postinst écrit le fichier dans /etc/systemd/system/
-                // avec un cat <<EOF. Source-of-truth unique : le .service
-                // dans src/main/packaging/linux/ reste lisible/versionné.
+                // via un marqueur unique. À l'install, le postinst écrit
+                // le fichier dans /etc/systemd/system/ avec un cat <<EOF.
+                // Source-of-truth unique : le .service dans
+                // src/main/packaging/linux/ reste lisible/versionné.
+                //
+                // ⚠️ Le marqueur "@@SERVICE_INLINE_MARKER@@" doit être
+                // unique dans le postinst — ne JAMAIS l'utiliser dans
+                // un commentaire car String.replace() est global et
+                // toute occurrence sera substituée (bug subtil : si
+                // marqueur dans un commentaire shell, le contenu .service
+                // est injecté HORS du heredoc → bash exécute chaque ligne).
                 val serviceContent = file("src/main/packaging/linux/instantiot-server.service").readText()
+                val marker = "@@SERVICE_INLINE_MARKER@@"
 
                 listOf("postinst", "prerm").forEach { name ->
                     val src = file("src/main/packaging/linux/$name")
                     val dst = linuxResourceDir.resolve(name)
-                    val content = src.readText().replace(
-                        "__SERVICE_FILE_CONTENT__",
-                        serviceContent.trimEnd()
-                    )
+                    val srcText = src.readText()
+                    // Garde-fou : on s'attend à exactement 1 occurrence du marqueur
+                    // dans le postinst, 0 dans le prerm. Plus = bug à corriger.
+                    val occurrences = srcText.split(marker).size - 1
+                    val expected = if (name == "postinst") 1 else 0
+                    require(occurrences == expected) {
+                        "$name: expected $expected occurrence(s) of $marker, found $occurrences"
+                    }
+                    val content = srcText.replace(marker, serviceContent.trimEnd())
                     dst.writeText(content)
                     dst.setExecutable(true, false)
                 }
