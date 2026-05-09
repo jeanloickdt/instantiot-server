@@ -156,9 +156,13 @@ val packageInstaller by tasks.registering(Exec::class) {
                     dst.setExecutable(true, false)
                 }
             }
+            // ⚠️ PAS de --linux-shortcut : un server headless (cas
+            // typique sur Raspberry Pi sans desktop) n'a aucun usage
+            // d'un raccourci .desktop, et cette flag ajoute une dep
+            // sur xdg-utils qui n'est PAS pré-installé sur Raspberry
+            // Pi OS Lite → install bloque avec "depends on xdg-utils".
+            // Pareil pour --linux-menu-group qui implique aussi xdg.
             baseArgs += listOf(
-                "--linux-shortcut",
-                "--linux-menu-group", "Network",
                 "--linux-app-category", "utils",
                 "--linux-package-name", "instantiot-server",
                 "--resource-dir", linuxResourceDir.absolutePath
