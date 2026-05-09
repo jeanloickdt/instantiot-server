@@ -23,10 +23,17 @@ fi
 # 2. Home / data directory
 install -d -o instantiot -g instantiot -m 0750 /var/lib/instantiot
 
-# 3. Service systemd
-install -o root -g root -m 0644 \
-    /opt/instantiot-server/lib/instantiot-server.service \
-    /etc/systemd/system/instantiot-server.service
+# 3. Service systemd — contenu inliné à build-time par la task Gradle
+#    `packageInstaller` (placeholder __SERVICE_FILE_CONTENT__ remplacé
+#    par le contenu réel de src/main/packaging/linux/instantiot-server.service).
+#    On évite ainsi de devoir bundler un fichier séparé dans le .deb que
+#    jpackage --resource-dir ne sait pas embarquer.
+cat > /etc/systemd/system/instantiot-server.service <<'__INSTANTIOT_SERVICE_EOF__'
+__SERVICE_FILE_CONTENT__
+__INSTANTIOT_SERVICE_EOF__
+
+chown root:root /etc/systemd/system/instantiot-server.service
+chmod 0644      /etc/systemd/system/instantiot-server.service
 
 systemctl daemon-reload
 

@@ -144,15 +144,25 @@ val packageInstaller by tasks.registering(Exec::class) {
             doFirst {
                 linuxResourceDir.deleteRecursively()
                 linuxResourceDir.mkdirs()
-                // Copy le .service dans lib/ (sera installé dans /opt/instantiot-server/lib/)
-                val libDir = linuxResourceDir.resolve("lib").apply { mkdirs() }
-                file("src/main/packaging/linux/instantiot-server.service")
-                    .copyTo(libDir.resolve("instantiot-server.service"), overwrite = true)
-                // Scripts dpkg à la racine
+
+                // ─── Service systemd : INLINÉ dans le postinst ───
+                // jpackage --resource-dir n'embarque PAS les fichiers
+                // d'un sous-dossier lib/ dans le .deb final ; on injecte
+                // donc le contenu du .service directement dans le postinst
+                // via un placeholder __SERVICE_FILE_CONTENT__. À l'install,
+                // le postinst écrit le fichier dans /etc/systemd/system/
+                // avec un cat <<EOF. Source-of-truth unique : le .service
+                // dans src/main/packaging/linux/ reste lisible/versionné.
+                val serviceContent = file("src/main/packaging/linux/instantiot-server.service").readText()
+
                 listOf("postinst", "prerm").forEach { name ->
                     val src = file("src/main/packaging/linux/$name")
                     val dst = linuxResourceDir.resolve(name)
-                    src.copyTo(dst, overwrite = true)
+                    val content = src.readText().replace(
+                        "__SERVICE_FILE_CONTENT__",
+                        serviceContent.trimEnd()
+                    )
+                    dst.writeText(content)
                     dst.setExecutable(true, false)
                 }
             }
