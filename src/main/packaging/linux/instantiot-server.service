@@ -1,6 +1,6 @@
 [Unit]
 Description=InstantIoT Server — Self-hosted IoT dashboard backend
-Documentation=https://instantiot.io/docs
+Documentation=https://docs.instantiot.io
 After=network-online.target
 Wants=network-online.target
 
