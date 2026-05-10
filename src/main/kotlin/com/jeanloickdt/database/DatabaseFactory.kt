@@ -26,14 +26,48 @@ object DatabaseFactory {
         Database.connect(url = url, driver = "org.sqlite.JDBC")
 
         transaction {
-            SchemaUtils.create(*tables)
+            // ─── Auto-migration des nouvelles colonnes/tables ───
+            // `createMissingTablesAndColumns` :
+            //   1. Crée les tables manquantes (comme l'ancien `create`)
+            //   2. ALTER TABLE ... ADD COLUMN pour les colonnes nouvelles
+            //      ajoutées dans le code mais absentes de la DB existante
+            //
+            // → Quand on ajoute une feature (ex: tags sur widgets, config
+            //   notifications) qui requiert une nouvelle colonne dans une
+            //   `Table` Exposed, l'upgrade des users existants migre tout
+            //   seul au premier boot. Aucun script manuel à écrire.
+            //
+            // ⚠️ Règles de safety à respecter dans le code des `Table` :
+            //   - Toute nouvelle colonne doit être `.nullable()` ou avoir
+            //     un `.default(...)` (sinon ALTER échoue sur les rows
+            //     existantes qui n'auraient pas la valeur).
+            //   - Ne JAMAIS rename une colonne (Exposed ne le détecte
+            //     pas → orphan column dans la DB). Préférer :
+            //     ajout nouvelle colonne → migration manuelle des données
+            //     → drop ancienne colonne (manuel, plus tard).
+            //   - Ne jamais changer le type d'une colonne existante
+            //     (idem, non détecté).
+            //
+            // Pour les changements destructifs/renames, écrire un bloc
+            // `runCatching { exec("ALTER TABLE ...") }` ci-dessous (cf.
+            // les ALTER legacy sur `devices` conservés en no-op pour les
+            // DBs déjà migrées).
+            //
+            // Note : `createMissingTablesAndColumns` est deprecated par
+            // Exposed qui pousse vers Flyway pour les setups prod. Pour
+            // un server self-hosted avec des migrations simples additives,
+            // cette fonction reste le bon outil. On suppress le warning
+            // explicitement plutôt que de surcharger le projet d'un
+            // migration tool externe.
+            @Suppress("DEPRECATION")
+            SchemaUtils.createMissingTablesAndColumns(*tables)
 
-            // ─── Migration : device_type + connectivity sur `devices` ───
-            // SchemaUtils.create utilise CREATE TABLE IF NOT EXISTS et
-            // n'ALTER jamais une table existante. On tente donc l'ajout
-            // des colonnes manquantes et on ignore l'erreur "duplicate
-            // column" si la DB est déjà à jour (SQLite < 3.35 n'a pas
-            // ADD COLUMN IF NOT EXISTS).
+            // ─── Migrations legacy (devices) ──────────────────
+            // Conservés pour les DBs qui ont été migrées manuellement à
+            // l'époque où `SchemaUtils.create()` était utilisé. No-op
+            // sur les nouvelles installs (la colonne existe déjà via
+            // createMissingTablesAndColumns) et sur les DBs déjà
+            // migrées (duplicate column → caught silencieusement).
             runCatching { exec("ALTER TABLE devices ADD COLUMN device_type TEXT") }
             runCatching { exec("ALTER TABLE devices ADD COLUMN connectivity TEXT") }
 
