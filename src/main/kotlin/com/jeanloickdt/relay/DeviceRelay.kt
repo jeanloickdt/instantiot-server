@@ -4,6 +4,7 @@ package com.jeanloickdt.relay
 import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceRow
+import com.jeanloickdt.widget.data.HistoryAggregators
 import com.jeanloickdt.widget.domain.WidgetRepository
 import io.ktor.server.application.*
 import io.ktor.websocket.*
@@ -284,13 +285,21 @@ private suspend fun handleDeviceFrame(
     )
 
     // historique NUMÉRIQUE — décoder la valeur si le widget est analogique
-    // (gauge/metric/level/slider/chart). Throttle par (widgetId, seriesId).
+    // (gauge/metric/level/slider/chart).
+    //
+    // Architecture Blynk-style (refonte historique iWidgets) :
+    //  - Tier raw (widget_history_numeric) : OPT-IN via admin. Si activé,
+    //    chaque sample est buffered sans throttle (fidélité parfaite).
+    //  - Tiers min/hour/day : TOUJOURS alimentés en parallèle via les
+    //    agrégateurs RAM. Pas de cascade SQL différée, chaque tier
+    //    consomme directement les samples bruts.
+    //
+    // Plus de throttle : c'est au sketch device de ne pas spammer en
+    // boucle libre (recommandation documentée). Si raw est activé, on
+    // écrit tout.
     FrameParser.extractNumericValue(frameBytes)?.let { sample ->
-        val throttleKey = widgetId + "|" + (sample.seriesId ?: "")
-        val lastWriteAt = SessionRegistry.numericThrottleMap[throttleKey]
-        val intervalMs  = ServerConfig.historyThrottleRawIntervalMs
-        if (lastWriteAt == null || (now - lastWriteAt) >= intervalMs) {
-            SessionRegistry.numericThrottleMap[throttleKey] = now
+        // Tier raw : opt-in seulement (off par défaut)
+        if (ServerConfig.historyRawEnabled) {
             SessionRegistry.numericHistoryBuffer.add(
                 NumericHistoryEntry(
                     widgetId   = widgetId,
@@ -302,6 +311,34 @@ private suspend fun handleDeviceFrame(
                 )
             )
         }
+
+        // Tiers agrégés : toujours alimentés (1 min / 1 h / 1 j).
+        // Les buckets accumulent min/max/sum/count en RAM et seront
+        // flushés par le job 5s dans Application.kt.
+        HistoryAggregators.minute.collect(
+            widgetId  = widgetId,
+            seriesId  = sample.seriesId,
+            ts        = now,
+            value     = sample.value,
+            projectId = device.projectId,
+            ownerId   = device.ownerId
+        )
+        HistoryAggregators.hour.collect(
+            widgetId  = widgetId,
+            seriesId  = sample.seriesId,
+            ts        = now,
+            value     = sample.value,
+            projectId = device.projectId,
+            ownerId   = device.ownerId
+        )
+        HistoryAggregators.day.collect(
+            widgetId  = widgetId,
+            seriesId  = sample.seriesId,
+            ts        = now,
+            value     = sample.value,
+            projectId = device.projectId,
+            ownerId   = device.ownerId
+        )
     }
 
     // mettre à jour last_payload en DB — asynchrone non-bloquant

@@ -65,15 +65,17 @@ object SessionRegistry {
     // buffer history — flush toutes les 5s vers SQLite WAL batch
     val historyBuffer = ConcurrentLinkedQueue<HistoryEntry>()
 
-    // buffer history numérique — même cadence flush, mais throttle en amont
-    // (cf. numericThrottleMap + ServerConfig.historyThrottleRawIntervalMs)
+    // buffer history numérique — alimenté SEULEMENT si l'admin a activé
+    // le tier raw (ServerConfig.historyRawEnabled). Flush 5s vers
+    // widget_history_numeric.
+    //
+    // Plus de throttle : depuis la refonte historique iWidgets, on
+    // privilégie une architecture Blynk-style où les tiers min/hour/day
+    // (toujours actifs via les agrégateurs RAM) suffisent pour
+    // visualiser l'enveloppe du signal. Le tier raw, quand activé,
+    // garde TOUS les samples sans filtre serveur — la protection
+    // contre l'abus côté sketch est documentée, pas imposée.
     val numericHistoryBuffer = ConcurrentLinkedQueue<NumericHistoryEntry>()
-
-    // Throttle map pour le numeric buffer : clé = "widgetId|seriesId" (seriesId peut
-    // être vide pour les widgets non-chart), valeur = timestamp ms du dernier append.
-    // Permet d'imposer 1 point / N secondes par (widget, série) dans la DB.
-    // N'affecte PAS le relay temps réel — seulement la persistance.
-    val numericThrottleMap = ConcurrentHashMap<String, Long>()
 
     // Cache RAM des widgetId (= protocolId) déjà connus en DB.
     // Utilisé par l'auto-register dans DeviceRelay : un widgetId déjà dans

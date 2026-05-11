@@ -619,13 +619,21 @@
         </div>
 
         <form class="form-card" @submit.prevent="saveHistoryConfig()">
-          <div class="form-row">
+          <!-- Raw enabled toggle — off by default, on enables tier raw (every sample) -->
+          <div class="form-row form-row-checkbox">
+            <input type="checkbox" id="history-raw-enabled" class="form-checkbox" x-model="historyForm.rawEnabled">
+            <label for="history-raw-enabled" class="form-label-inline" x-text="t('history.rawEnabled')"></label>
+          </div>
+          <p class="form-help" x-text="t('history.rawEnabledHelp')"></p>
+
+          <!-- Retention raw — only relevant when raw is enabled -->
+          <div class="form-row" x-show="historyForm.rawEnabled">
             <label class="form-label">
               <span class="form-label-text" x-text="t('history.retentionRaw')"></span>
               <span class="form-help" x-text="t('history.retentionRawHelp')"></span>
             </label>
             <input type="number" class="form-input form-input-num"
-                   x-model.number="historyForm.retentionRawDays" min="1" required>
+                   x-model.number="historyForm.retentionRawDays" min="1">
           </div>
 
           <div class="form-row">
@@ -635,15 +643,6 @@
             </label>
             <input type="number" class="form-input form-input-num"
                    x-model.number="historyForm.retentionOpaqueDays" min="1" required>
-          </div>
-
-          <div class="form-row">
-            <label class="form-label">
-              <span class="form-label-text" x-text="t('history.throttle')"></span>
-              <span class="form-help" x-text="t('history.throttleHelp')"></span>
-            </label>
-            <input type="number" class="form-input form-input-num"
-                   x-model.number="historyForm.throttleRawIntervalSeconds" min="0" required>
           </div>
 
           <div class="form-row">
@@ -671,15 +670,6 @@
             </label>
             <input type="number" class="form-input form-input-num"
                    x-model.number="historyForm.retentionDayDays" min="-1" required>
-          </div>
-
-          <div class="form-row">
-            <label class="form-label">
-              <span class="form-label-text" x-text="t('history.downsampleInterval')"></span>
-              <span class="form-help" x-text="t('history.downsampleIntervalHelp')"></span>
-            </label>
-            <input type="number" class="form-input form-input-num"
-                   x-model.number="historyForm.downsampleIntervalMinutes" min="1" required>
           </div>
 
           <div class="form-actions">

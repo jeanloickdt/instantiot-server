@@ -121,24 +121,26 @@ data class UpdateConfigResponse(
 
 @Serializable
 data class HistoryConfigResponse(
+    /**
+     * Active le tier RAW (fidélité parfaite, off par défaut).
+     * Quand off, les courbes utilisent les tiers agrégés (min/hour/day).
+     */
+    val rawEnabled: Boolean,
     val retentionRawDays: Int,
     val retentionOpaqueDays: Int,
-    val throttleRawIntervalSeconds: Long,
     val retentionMinDays: Int,
     val retentionHourDays: Int,
-    val retentionDayDays: Int,     // -1 = infini
-    val downsampleIntervalMinutes: Int
+    val retentionDayDays: Int     // -1 = infini
 )
 
 @Serializable
 data class UpdateHistoryConfigRequest(
+    val rawEnabled: Boolean? = null,
     val retentionRawDays: Int? = null,
     val retentionOpaqueDays: Int? = null,
-    val throttleRawIntervalSeconds: Long? = null,
     val retentionMinDays: Int? = null,
     val retentionHourDays: Int? = null,
-    val retentionDayDays: Int? = null,
-    val downsampleIntervalMinutes: Int? = null
+    val retentionDayDays: Int? = null
 )
 // ============================================================
 // BACKUP — admin panel V1

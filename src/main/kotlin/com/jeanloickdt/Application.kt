@@ -21,7 +21,7 @@ import com.jeanloickdt.relay.NumericHistoryEntry
 import com.jeanloickdt.relay.SessionRegistry
 import com.jeanloickdt.relay.configureAppRelay
 import com.jeanloickdt.relay.startDeviceRelay
-import com.jeanloickdt.widget.data.HistoryAggregator
+import com.jeanloickdt.widget.data.HistoryAggregators
 import com.jeanloickdt.widget.data.SqliteWidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.data.SqliteWidgetHistoryNumericRepository
 import com.jeanloickdt.widget.data.SqliteWidgetHistoryRepository
@@ -185,10 +185,18 @@ fun Application.module() {
     deviceRepository.markAllOffline()
 
     // flush final au shutdown — aucune donnée du buffer perdue
+    // Refonte iWidgets : on flushe AUSSI tous les buckets RAM (y compris
+    // les buckets en cours non encore fermés) → zéro perte au restart
+    // contrôlé. Au crash brutal, on perd au pire 1 min/h/24h selon tier.
     monitor.subscribe(ApplicationStopping) {
         kotlinx.coroutines.runBlocking {
             flushHistoryBuffer(widgetHistoryRepository)
             flushNumericHistoryBuffer(widgetHistoryNumericRepository)
+            flushAllAggregatorBuckets(
+                minRepo  = widgetHistoryMinRepository,
+                hourRepo = widgetHistoryHourRepository,
+                dayRepo  = widgetHistoryDayRepository
+            )
         }
     }
 
@@ -286,33 +294,51 @@ fun Application.module() {
 
     // ============================================================
     // Flush history buffer → SQLite WAL batch toutes les 5s
-    // La DB n'est jamais dans le chemin critique du relay
+    //
+    // Refonte iWidgets (architecture Blynk-style) : un seul job 5s
+    // drain les 5 sources et persiste en batch :
+    //   - historyBuffer        → widget_history (opaque events)
+    //   - numericHistoryBuffer → widget_history_numeric (raw, opt-in)
+    //   - HistoryAggregators.minute closed → widget_history_min
+    //   - HistoryAggregators.hour  closed → widget_history_hour
+    //   - HistoryAggregators.day   closed → widget_history_day
+    //
+    // La DB n'est JAMAIS dans le chemin critique du relay device.
     // ============================================================
     launch(Dispatchers.IO) {
         while (true) {
             delay(5_000)
             flushHistoryBuffer(widgetHistoryRepository)
             flushNumericHistoryBuffer(widgetHistoryNumericRepository)
+            flushClosedAggregatorBuckets(
+                minRepo  = widgetHistoryMinRepository,
+                hourRepo = widgetHistoryHourRepository,
+                dayRepo  = widgetHistoryDayRepository
+            )
         }
     }
 
-    // downsample raw → min → hour → day + cleanup tous les tiers
+    // ============================================================
+    // Cleanup périodique par tier (rétention configurable)
+    //
+    // Plus de downsampling SQL différé — les agrégateurs RAM
+    // alimentent les tables agrégées en temps réel. Seul reste le
+    // cleanup des vieux buckets selon la rétention de chaque tier.
+    //
+    // Tourne 1× par heure (la rétention est en jours, pas besoin de
+    // précision minute-par-minute pour purger).
+    // ============================================================
     launch(Dispatchers.IO) {
         while (true) {
-            delay(com.jeanloickdt.common.ServerConfig.historyDownsampleIntervalMinutes.toLong().minutes)
+            delay(60.minutes)
             val now = System.currentTimeMillis()
-
-            // Étape 1 — agrégation (Phase 2)
-            HistoryAggregator.runAll(now)
-
-            // Étape 2 — cleanup par tier
             val dayMs = 24L * 3600_000L
 
             // opaque (widget_history) — événements non-numériques
             val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * dayMs
             widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
 
-            // raw numérique (widget_history_numeric)
+            // raw numérique (widget_history_numeric) — opt-in
             val rawCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * dayMs
             widgetHistoryNumericRepository.deleteOlderThan(rawCutoff)
 
@@ -468,5 +494,63 @@ private suspend fun flushNumericHistoryBuffer(repo: WidgetHistoryNumericReposito
         )
     }
 
+    repo.insertBatch(rows)
+}
+
+// ============================================================
+// Flush des buckets FERMÉS des agrégateurs RAM (job 5s)
+//
+// Un bucket est "fermé" quand sa fenêtre (bucketAt + bucketSizeMs)
+// est ≤ now. Le bucket courant reste en RAM pour continuer à
+// accumuler les samples qui arrivent pendant sa fenêtre.
+// ============================================================
+private suspend fun flushClosedAggregatorBuckets(
+    minRepo: WidgetHistoryAggregateRepository,
+    hourRepo: WidgetHistoryAggregateRepository,
+    dayRepo: WidgetHistoryAggregateRepository
+) {
+    val now = System.currentTimeMillis()
+    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractClosedBuckets(now))
+    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractClosedBuckets(now))
+    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractClosedBuckets(now))
+}
+
+// ============================================================
+// Flush TOUS les buckets des agrégateurs (y compris en cours)
+//
+// Appelé UNIQUEMENT au shutdown propre via ApplicationStopping
+// pour ne rien perdre lors d'un restart contrôlé. Une fois flushé,
+// les agrégateurs sont vides — les samples qui arriveraient après
+// ce point ne sont plus collectés (le server s'arrête).
+// ============================================================
+private suspend fun flushAllAggregatorBuckets(
+    minRepo: WidgetHistoryAggregateRepository,
+    hourRepo: WidgetHistoryAggregateRepository,
+    dayRepo: WidgetHistoryAggregateRepository
+) {
+    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractAllBuckets())
+    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractAllBuckets())
+    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractAllBuckets())
+}
+
+/** Convertit les snapshots en `AggregateInsertRow` + insertBatch. */
+private fun flushAggregatorTier(
+    repo: WidgetHistoryAggregateRepository,
+    snapshots: List<com.jeanloickdt.widget.data.BucketAccumulator.Snapshot>
+) {
+    if (snapshots.isEmpty()) return
+    val rows = snapshots.map { snap ->
+        WidgetHistoryAggregateRepository.AggregateInsertRow(
+            widgetId    = snap.widgetId,
+            projectId   = snap.projectId,
+            ownerId     = snap.ownerId,
+            seriesId    = snap.seriesId,
+            avgValue    = snap.avgValue,
+            minValue    = snap.minValue,
+            maxValue    = snap.maxValue,
+            sampleCount = snap.sampleCount,
+            bucketAt    = snap.bucketAt
+        )
+    }
     repo.insertBatch(rows)
 }

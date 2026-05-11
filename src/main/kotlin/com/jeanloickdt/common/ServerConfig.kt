@@ -102,6 +102,18 @@ object ServerConfig {
         writeProperties()
     }
 
+    /**
+     * Active le tier RAW (`widget_history_numeric`). Off par défaut :
+     * les agrégateurs RAM (min/hour/day) suffisent à 90% des cas et
+     * évitent un disque qui explose avec des capteurs rapides.
+     *
+     * Quand activé : chaque sample numérique est buffered et écrit
+     * tel quel — pas de throttle, fidélité parfaite pour les fenêtres
+     * 1h/6h en mode "live" prolongé.
+     */
+    var historyRawEnabled: Boolean = false
+        private set
+
     /** Retention des rows RAW dans `widget_history_numeric` (jours). */
     var historyRetentionRawDays: Int = 7
         private set
@@ -110,17 +122,12 @@ object ServerConfig {
     var historyRetentionOpaqueDays: Int = 1
         private set
 
-    /**
-     * Throttle d'écriture en RAM → DB par (widgetId, seriesId).
-     * 5s par défaut = max 17280 rows/jour/série pour des capteurs rapides.
-     * Le relay temps réel n'est **pas** affecté — c'est purement la cadence
-     * de persistance.
-     */
-    var historyThrottleRawIntervalMs: Long = 5_000L
-        private set
-
     // ============================================================
-    // HISTORIQUE — Phase 2 (downsampling)
+    // HISTORIQUE — Tiers agrégés (alimentés en RAM, flush 5s)
+    //
+    // Architecture Blynk-style : les 3 tiers consomment directement
+    // les samples bruts via les TierAggregator RAM, pas de cascade
+    // SQL différée. Toujours à jour en temps réel (lag ≤ 5s).
     // ============================================================
 
     /** Rétention des buckets MINUTE (jours). */
@@ -136,10 +143,6 @@ object ServerConfig {
      * `-1` = infini (jamais purgé).
      */
     var historyRetentionDayDays: Int = -1
-        private set
-
-    /** Intervalle entre deux runs du downsampler (minutes). */
-    var historyDownsampleIntervalMinutes: Int = 60
         private set
 
     val version: String get() = VERSION
@@ -244,23 +247,21 @@ object ServerConfig {
             httpPort = props.getProperty("http.port", "8080").toIntOrNull() ?: 8080
             tcpPort = props.getProperty("tcp.port", "9001").toIntOrNull() ?: 9001
 
-            // Historique — Phase 1
+            // Historique — refonte iWidgets (architecture Blynk-style)
+            historyRawEnabled = props.getProperty("history.raw.enabled", "false")
+                .toBooleanStrictOrNull() ?: false
             historyRetentionRawDays = props.getProperty("history.retention.raw.days", "7")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 7
             historyRetentionOpaqueDays = props.getProperty("history.retention.opaque.days", "1")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 1
-            historyThrottleRawIntervalMs = (props.getProperty("history.throttle.raw.intervalSeconds", "5")
-                .toLongOrNull()?.coerceAtLeast(0L) ?: 5L) * 1000L
 
-            // Phase 2 — downsampling
+            // Tiers agrégés
             historyRetentionMinDays = props.getProperty("history.retention.min.days", "90")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 90
             historyRetentionHourDays = props.getProperty("history.retention.hour.days", "365")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 365
             historyRetentionDayDays = props.getProperty("history.retention.day.days", "-1")
                 .toIntOrNull() ?: -1
-            historyDownsampleIntervalMinutes = props.getProperty("history.downsample.intervalMinutes", "60")
-                .toIntOrNull()?.coerceAtLeast(1) ?: 60
             serverDisplayName = props.getProperty("server.displayName", "").trim()
             backupEnabled = props.getProperty("backup.enabled", "true")
                 .toBooleanStrictOrNull() ?: true
@@ -294,24 +295,22 @@ object ServerConfig {
     /**
      * Sauvegarder les paramètres d'historique. Tout `null` est ignoré
      * (partial update). Pas de redémarrage nécessaire — les valeurs
-     * sont relues à chaque cycle de cleanup / downsample / write.
+     * sont relues à chaque cycle de cleanup / write par l'iter suivante.
      */
     fun saveHistoryConfig(
+        rawEnabled: Boolean? = null,
         retentionRawDays: Int? = null,
         retentionOpaqueDays: Int? = null,
-        throttleRawIntervalSeconds: Long? = null,
         retentionMinDays: Int? = null,
         retentionHourDays: Int? = null,
-        retentionDayDays: Int? = null,
-        downsampleIntervalMinutes: Int? = null
+        retentionDayDays: Int? = null
     ) {
-        if (retentionRawDays != null)          historyRetentionRawDays          = retentionRawDays.coerceAtLeast(1)
-        if (retentionOpaqueDays != null)       historyRetentionOpaqueDays       = retentionOpaqueDays.coerceAtLeast(1)
-        if (throttleRawIntervalSeconds != null) historyThrottleRawIntervalMs    = throttleRawIntervalSeconds.coerceAtLeast(0L) * 1000L
-        if (retentionMinDays != null)          historyRetentionMinDays          = retentionMinDays.coerceAtLeast(1)
-        if (retentionHourDays != null)         historyRetentionHourDays         = retentionHourDays.coerceAtLeast(1)
-        if (retentionDayDays != null)          historyRetentionDayDays          = retentionDayDays // -1 autorisé = infini
-        if (downsampleIntervalMinutes != null) historyDownsampleIntervalMinutes = downsampleIntervalMinutes.coerceAtLeast(1)
+        if (rawEnabled != null)          historyRawEnabled          = rawEnabled
+        if (retentionRawDays != null)    historyRetentionRawDays    = retentionRawDays.coerceAtLeast(1)
+        if (retentionOpaqueDays != null) historyRetentionOpaqueDays = retentionOpaqueDays.coerceAtLeast(1)
+        if (retentionMinDays != null)    historyRetentionMinDays    = retentionMinDays.coerceAtLeast(1)
+        if (retentionHourDays != null)   historyRetentionHourDays   = retentionHourDays.coerceAtLeast(1)
+        if (retentionDayDays != null)    historyRetentionDayDays    = retentionDayDays // -1 autorisé = infini
         writeProperties()
     }
 
@@ -320,13 +319,12 @@ object ServerConfig {
         val props = Properties()
         props.setProperty("http.port", httpPort.toString())
         props.setProperty("tcp.port", tcpPort.toString())
+        props.setProperty("history.raw.enabled", historyRawEnabled.toString())
         props.setProperty("history.retention.raw.days", historyRetentionRawDays.toString())
         props.setProperty("history.retention.opaque.days", historyRetentionOpaqueDays.toString())
-        props.setProperty("history.throttle.raw.intervalSeconds", (historyThrottleRawIntervalMs / 1000L).toString())
         props.setProperty("history.retention.min.days", historyRetentionMinDays.toString())
         props.setProperty("history.retention.hour.days", historyRetentionHourDays.toString())
         props.setProperty("history.retention.day.days", historyRetentionDayDays.toString())
-        props.setProperty("history.downsample.intervalMinutes", historyDownsampleIntervalMinutes.toString())
         props.setProperty("server.displayName", serverDisplayName)
         props.setProperty("backup.enabled", backupEnabled.toString())
         props.setProperty("backup.interval.hours", backupIntervalHours.toString())

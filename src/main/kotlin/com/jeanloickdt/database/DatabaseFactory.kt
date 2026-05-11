@@ -81,8 +81,9 @@ object DatabaseFactory {
             exec("CREATE INDEX IF NOT EXISTS idx_history_numeric_project ON widget_history_numeric (project_id, recorded_at)")
 
             // INDEX UNIQUE pour les tables d'agrégation — idempotence via
-            // INSERT OR IGNORE dans HistoryAggregator. COALESCE série → ''
-            // pour matcher les null (série absente côté gauge/metric/etc).
+            // INSERT OR IGNORE dans SqliteWidgetHistoryAggregateRepository.
+            // COALESCE série → '' pour matcher les null (série absente côté
+            // gauge/metric/etc).
             exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_min  ON widget_history_min  (widget_id, COALESCE(series_id, ''), bucket_at)")
             exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_hour ON widget_history_hour (widget_id, COALESCE(series_id, ''), bucket_at)")
             exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_day  ON widget_history_day  (widget_id, COALESCE(series_id, ''), bucket_at)")

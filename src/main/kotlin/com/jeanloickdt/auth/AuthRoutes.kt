@@ -347,15 +347,7 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
 
     get("/api/admin/history-config") {
         if (!checkAdmin(call)) return@get
-        call.respond(HttpStatusCode.OK, HistoryConfigResponse(
-            retentionRawDays          = ServerConfig.historyRetentionRawDays,
-            retentionOpaqueDays       = ServerConfig.historyRetentionOpaqueDays,
-            throttleRawIntervalSeconds = ServerConfig.historyThrottleRawIntervalMs / 1000L,
-            retentionMinDays          = ServerConfig.historyRetentionMinDays,
-            retentionHourDays         = ServerConfig.historyRetentionHourDays,
-            retentionDayDays          = ServerConfig.historyRetentionDayDays,
-            downsampleIntervalMinutes = ServerConfig.historyDownsampleIntervalMinutes
-        ))
+        call.respond(HttpStatusCode.OK, currentHistoryConfig())
     }
 
     patch("/api/admin/history-config") {
@@ -372,10 +364,6 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
                 mapOf("error" to "retentionOpaqueDays must be >= 1"))
         }
-        body.throttleRawIntervalSeconds?.let {
-            if (it < 0) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "throttleRawIntervalSeconds must be >= 0"))
-        }
         body.retentionMinDays?.let {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
                 mapOf("error" to "retentionMinDays must be >= 1"))
@@ -389,32 +377,29 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
             if (it != -1 && it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
                 mapOf("error" to "retentionDayDays must be >= 1 or -1 for unlimited"))
         }
-        body.downsampleIntervalMinutes?.let {
-            if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "downsampleIntervalMinutes must be >= 1"))
-        }
 
         ServerConfig.saveHistoryConfig(
-            retentionRawDays          = body.retentionRawDays,
-            retentionOpaqueDays       = body.retentionOpaqueDays,
-            throttleRawIntervalSeconds = body.throttleRawIntervalSeconds,
-            retentionMinDays          = body.retentionMinDays,
-            retentionHourDays         = body.retentionHourDays,
-            retentionDayDays          = body.retentionDayDays,
-            downsampleIntervalMinutes = body.downsampleIntervalMinutes
+            rawEnabled          = body.rawEnabled,
+            retentionRawDays    = body.retentionRawDays,
+            retentionOpaqueDays = body.retentionOpaqueDays,
+            retentionMinDays    = body.retentionMinDays,
+            retentionHourDays   = body.retentionHourDays,
+            retentionDayDays    = body.retentionDayDays
         )
 
-        call.respond(HttpStatusCode.OK, HistoryConfigResponse(
-            retentionRawDays          = ServerConfig.historyRetentionRawDays,
-            retentionOpaqueDays       = ServerConfig.historyRetentionOpaqueDays,
-            throttleRawIntervalSeconds = ServerConfig.historyThrottleRawIntervalMs / 1000L,
-            retentionMinDays          = ServerConfig.historyRetentionMinDays,
-            retentionHourDays         = ServerConfig.historyRetentionHourDays,
-            retentionDayDays          = ServerConfig.historyRetentionDayDays,
-            downsampleIntervalMinutes = ServerConfig.historyDownsampleIntervalMinutes
-        ))
+        call.respond(HttpStatusCode.OK, currentHistoryConfig())
     }
 }
+
+/** Snapshot DTO de la config historique courante. */
+private fun currentHistoryConfig(): HistoryConfigResponse = HistoryConfigResponse(
+    rawEnabled          = ServerConfig.historyRawEnabled,
+    retentionRawDays    = ServerConfig.historyRetentionRawDays,
+    retentionOpaqueDays = ServerConfig.historyRetentionOpaqueDays,
+    retentionMinDays    = ServerConfig.historyRetentionMinDays,
+    retentionHourDays   = ServerConfig.historyRetentionHourDays,
+    retentionDayDays    = ServerConfig.historyRetentionDayDays
+)
 
 // ============================================================
 // 👥 ADMIN USERS — liste read-only + reset password (V1 Phase 4)

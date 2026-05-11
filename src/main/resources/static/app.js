@@ -48,13 +48,12 @@ document.addEventListener('alpine:init', () => {
       msg: '', msgType: ''
     },
     historyForm: {
+      rawEnabled: false,
       retentionRawDays: 7,
       retentionOpaqueDays: 1,
-      throttleRawIntervalSeconds: 5,
       retentionMinDays: 90,
       retentionHourDays: 365,
       retentionDayDays: -1,
-      downsampleIntervalMinutes: 60,
       msg: '', msgType: ''
     },
     backupForm: {
@@ -593,13 +592,12 @@ document.addEventListener('alpine:init', () => {
       const res = await this.api('/api/admin/history-config');
       if (!res || !res.ok) return;
       const data = await res.json();
-      this.historyForm.retentionRawDays           = data.retentionRawDays;
-      this.historyForm.retentionOpaqueDays        = data.retentionOpaqueDays;
-      this.historyForm.throttleRawIntervalSeconds = data.throttleRawIntervalSeconds;
-      this.historyForm.retentionMinDays           = data.retentionMinDays;
-      this.historyForm.retentionHourDays          = data.retentionHourDays;
-      this.historyForm.retentionDayDays           = data.retentionDayDays;
-      this.historyForm.downsampleIntervalMinutes  = data.downsampleIntervalMinutes;
+      this.historyForm.rawEnabled          = !!data.rawEnabled;
+      this.historyForm.retentionRawDays    = data.retentionRawDays;
+      this.historyForm.retentionOpaqueDays = data.retentionOpaqueDays;
+      this.historyForm.retentionMinDays    = data.retentionMinDays;
+      this.historyForm.retentionHourDays   = data.retentionHourDays;
+      this.historyForm.retentionDayDays    = data.retentionDayDays;
       this.historyForm.msg = '';
       this.historyForm.msgType = '';
     },
@@ -611,13 +609,12 @@ document.addEventListener('alpine:init', () => {
       const res = await this.api('/api/admin/history-config', {
         method: 'PATCH',
         body: JSON.stringify({
-          retentionRawDays:           this.historyForm.retentionRawDays,
-          retentionOpaqueDays:        this.historyForm.retentionOpaqueDays,
-          throttleRawIntervalSeconds: this.historyForm.throttleRawIntervalSeconds,
-          retentionMinDays:           this.historyForm.retentionMinDays,
-          retentionHourDays:          this.historyForm.retentionHourDays,
-          retentionDayDays:           this.historyForm.retentionDayDays,
-          downsampleIntervalMinutes:  this.historyForm.downsampleIntervalMinutes
+          rawEnabled:          this.historyForm.rawEnabled,
+          retentionRawDays:    this.historyForm.retentionRawDays,
+          retentionOpaqueDays: this.historyForm.retentionOpaqueDays,
+          retentionMinDays:    this.historyForm.retentionMinDays,
+          retentionHourDays:   this.historyForm.retentionHourDays,
+          retentionDayDays:    this.historyForm.retentionDayDays
         })
       });
 
