@@ -18,7 +18,18 @@ typealias WidgetId = String
 data class AppSession(
     val userId: UserId,
     val session: WebSocketSession,
-    var activeProjectId: String? = null  // projet actuellement ouvert — change dynamiquement
+    var activeProjectId: String? = null,  // projet actuellement ouvert — change dynamiquement
+    // Subscriptions historique : map widgetId → granularité ("minute" | "hour" | "day").
+    // Set par l'app via message {"type":"subscribe_history","widgets":[...]}. Filtré
+    // par le broadcaster bucket_updated pour ne diffuser que les buckets que l'app
+    // a explicitement demandés (= charts en mode preset avec source FromWidget +
+    // bottom sheets d'historique ouverts). Évite le gaspillage réseau quand des
+    // widgets n'ont aucun chart actif côté UI.
+    //
+    // Thread-safe : Map mutable accédée depuis le read loop (write) et le bucket
+    // broadcaster (read). Garde-fou : on encapsule dans synchronized blocks ou on
+    // utilise ConcurrentHashMap. Choix : ConcurrentHashMap pour rester simple.
+    val historySubs: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap()
 )
 
 // Session device — une session TCP par device connecté

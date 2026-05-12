@@ -7,10 +7,44 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.seconds
 
 private val logger = LoggerFactory.getLogger("AppRelay")
+
+/**
+ * Message inbound app → server pour s'abonner aux bucket_updated d'un set
+ * de widgets. L'app envoie le set COMPLET à chaque changement (mount/dispose
+ * de chart, ouverture/fermeture de bottom sheet, toggle "Enable history"). Pas
+ * de delta — le server replace le set à chaque message reçu.
+ *
+ * Exemple :
+ * ```json
+ * {"type":"subscribe_history","widgets":[
+ *   {"widgetId":"gauge1","granularity":"minute"},
+ *   {"widgetId":"level1","granularity":"minute"}
+ * ]}
+ * ```
+ *
+ * Empty array = unsubscribe de tout (= server n'émet plus de bucket_updated
+ * vers cette session).
+ */
+@Serializable
+private data class AppInboundMessage(
+    val type: String,
+    val widgets: List<HistorySubscriptionDto>? = null
+)
+
+@Serializable
+private data class HistorySubscriptionDto(
+    val widgetId: String,
+    val granularity: String   // "minute" | "hour" | "day"
+)
+
+private val appInboundJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 /**
  * WebSocket relay — connexions app Android.
@@ -70,26 +104,30 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                 logger.info("App connected — userId=$userId projectId=$projectId")
 
                 try {
-                    // écouter les trames binaires — seulement des trames iWidgets v1 après le handshake.
+                    // Le dispatch est **séquentiel** (pas de `launch` par frame) :
+                    // chaque device a son `DeviceOutbox` qui serialize les writes
+                    // TCP + applique la backpressure. Lancer une coroutine par
+                    // frame casserait cette backpressure.
                     //
-                    // ⚠️ Le dispatch est **séquentiel** (pas de `launch` par frame).
-                    // Chaque device a son propre `DeviceOutbox` (cf. SessionRegistry)
-                    // qui sérialise en interne les writes TCP + applique la
-                    // backpressure (drop streaming si plein). Lancer une coroutine
-                    // par frame casserait cette backpressure et ferait revenir le
-                    // bug initial (50 writes parallèles bloqués → 5 min de drain).
+                    // Deux types de frames acceptés après le handshake :
+                    //   - Frame.Binary : trames iWidgets v1 (commandes app → device)
+                    //   - Frame.Text   : control messages (subscribe_history, ...)
                     for (incomingFrame in incoming) {
 
-                        if (incomingFrame !is Frame.Binary) continue
-
-                        val frameBytes = incomingFrame.data
-
-                        if (!FrameParser.isValid(frameBytes)) {
-                            logger.warn("Invalid frame received from app userId=$userId — ignored")
-                            continue
+                        when (incomingFrame) {
+                            is Frame.Binary -> {
+                                val frameBytes = incomingFrame.data
+                                if (!FrameParser.isValid(frameBytes)) {
+                                    logger.warn("Invalid frame received from app userId=$userId — ignored")
+                                    continue
+                                }
+                                relayFrameToDevices(this@webSocket, userId, frameBytes)
+                            }
+                            is Frame.Text -> {
+                                handleAppTextMessage(appSession, incomingFrame.readText())
+                            }
+                            else -> { /* ping/pong/close handled by Ktor */ }
                         }
-
-                        relayFrameToDevices(this@webSocket, userId, frameBytes)
                     }
                 } finally {
                     // déconnexion — retirer cette session spécifique
@@ -98,6 +136,33 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Parse et applique un message inbound texte de l'app.
+ *
+ * Aujourd'hui un seul type : `subscribe_history` — met à jour le set
+ * de widgets dont l'app veut recevoir les bucket_updated. Replace
+ * l'ensemble (pas de delta) à chaque message.
+ */
+private fun handleAppTextMessage(appSession: AppSession, text: String) {
+    val msg = try {
+        appInboundJson.decodeFromString<AppInboundMessage>(text)
+    } catch (e: SerializationException) {
+        logger.warn("Invalid inbound text from app userId=${appSession.userId}: ${e.message}")
+        return
+    }
+
+    when (msg.type) {
+        "subscribe_history" -> {
+            val newSubs = msg.widgets.orEmpty()
+                .associate { it.widgetId to it.granularity }
+            appSession.historySubs.clear()
+            appSession.historySubs.putAll(newSubs)
+            logger.info("History subscriptions updated — userId=${appSession.userId} count=${newSubs.size}")
+        }
+        else -> logger.warn("Unknown inbound text type from app userId=${appSession.userId}: ${msg.type}")
     }
 }
 

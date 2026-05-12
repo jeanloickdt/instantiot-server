@@ -71,14 +71,21 @@ object ControlEventBroadcaster {
 
     /**
      * Un bucket d'agregation vient de fermer cote serveur (RAM aggregator
-     * → DB). Broadcast a toutes les apps du projet pour que les charts
-     * en mode preset historique puissent ajouter ce bucket a leur
-     * fenetre sans re-fetch HTTP.
+     * → DB). Broadcast aux apps qui ont **explicitement souscrit** au
+     * widget via le message inbound "subscribe_history".
      *
-     * Volume : un message par bucket ferme × tier × widget. Pour un
-     * projet avec 10 widgets et 3 tiers, c'est ~30 messages/min cote
-     * minute, 30 messages/h cote hour, 30 messages/j cote day. Total
-     * largement gerable.
+     * Filtrage en 2 niveaux :
+     *  1. Project match : la session doit avoir activeProjectId == projectId.
+     *  2. Subscription match : la session doit avoir (widgetId → granularity)
+     *     dans son set `historySubs`.
+     *
+     * → Une app qui n'a aucun chart actif pour ce widget ne recoit pas
+     *   ce message. Bande passante zero quand inutile.
+     *
+     * Volume nominal (10 widgets souscrits, 3 tiers) :
+     *  - ~10 msg/min cote minute
+     *  - ~10 msg/h cote hour
+     *  - ~10 msg/jour cote day
      */
     suspend fun bucketClosed(
         projectId: String,
@@ -102,7 +109,19 @@ object ControlEventBroadcaster {
             count       = count,
             granularity = granularity
         )
-        broadcastToProject(projectId, event)
+        val jsonText = json.encodeToString(event)
+        val targetSessions = SessionRegistry.getAppSessionsForProject(projectId)
+            .filter { it.historySubs[widgetId] == granularity }
+        if (targetSessions.isEmpty()) return
+
+        targetSessions.forEach { appSession ->
+            try {
+                appSession.session.send(Frame.Text(jsonText))
+            } catch (e: Exception) {
+                logger.warn("Failed to send bucket_updated to userId=${appSession.userId} — removing session")
+                SessionRegistry.unregisterApp(appSession.userId, appSession.session)
+            }
+        }
     }
 
     // ────────────────────────────────────────────────────────────
