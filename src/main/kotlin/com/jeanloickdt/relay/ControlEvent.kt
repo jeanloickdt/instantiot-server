@@ -8,7 +8,7 @@ import kotlinx.serialization.Serializable
  *
  * Protocole WS app :
  *   - Frame.Text handshake : projectId (1er message)
- *   - Frame.Binary : trames iWidgets v1 (data devices)
+ *   - Frame.Binary : trames iWidgets v1 (data devices, 5-100 Hz)
  *   - Frame.Text {"type": "..."} : control events (apres handshake)
  *
  * L'app distingue text vs binary pour router entre parser iWidgets et parser events.
@@ -17,13 +17,26 @@ import kotlinx.serialization.Serializable
  *   - "device_online"   : un device ESP vient de se connecter en TCP
  *   - "device_offline"  : un device ESP est deconnecte (disconnect / token_renewed / deleted)
  *   - "command_failed"  : une commande App->Device a echoue (device_offline / forbidden / relay_error)
+ *   - "bucket_updated"  : un bucket d'agregation vient de se fermer (min/hour/day),
+ *                         emis quand l'aggregator RAM flush vers DB. Permet aux charts
+ *                         en mode preset historique de mettre a jour leur fenetre sans
+ *                         re-fetch HTTP (pattern Blynk SuperChart).
  */
 @Serializable
 data class ControlEvent(
     val type: String,
     val deviceId: String? = null,
     val deviceName: String? = null,
-    val reason: String? = null   // motif pour device_offline et command_failed
+    val reason: String? = null,           // motif pour device_offline et command_failed
+    // ─── Champs BUCKET_UPDATED ─────────────────────────────
+    val widgetId: String? = null,
+    val seriesId: String? = null,
+    val bucketAt: Long? = null,           // ms epoch, debut du bucket
+    val avg: Double? = null,              // moyenne ponderee du bucket
+    val min: Double? = null,              // valeur min du bucket
+    val max: Double? = null,              // valeur max du bucket
+    val count: Int? = null,               // nombre de samples agreges
+    val granularity: String? = null       // "minute" | "hour" | "day"
 )
 
 /**
@@ -33,6 +46,16 @@ object ControlEventType {
     const val DEVICE_ONLINE   = "device_online"
     const val DEVICE_OFFLINE  = "device_offline"
     const val COMMAND_FAILED  = "command_failed"
+    const val BUCKET_UPDATED  = "bucket_updated"
+}
+
+/**
+ * Granularites d'un bucket — alignees sur les tiers HistoryAggregators.
+ */
+object BucketGranularity {
+    const val MINUTE = "minute"
+    const val HOUR   = "hour"
+    const val DAY    = "day"
 }
 
 /**

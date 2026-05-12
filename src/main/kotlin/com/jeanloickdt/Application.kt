@@ -510,9 +510,9 @@ private suspend fun flushClosedAggregatorBuckets(
     dayRepo: WidgetHistoryAggregateRepository
 ) {
     val now = System.currentTimeMillis()
-    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractClosedBuckets(now))
-    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractClosedBuckets(now))
-    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractClosedBuckets(now))
+    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractClosedBuckets(now), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = true)
+    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractClosedBuckets(now),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = true)
+    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractClosedBuckets(now),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = true)
 }
 
 // ============================================================
@@ -522,21 +522,33 @@ private suspend fun flushClosedAggregatorBuckets(
 // pour ne rien perdre lors d'un restart contrôlé. Une fois flushé,
 // les agrégateurs sont vides — les samples qui arriveraient après
 // ce point ne sont plus collectés (le server s'arrête).
+//
+// Pas de broadcast WS au shutdown : les apps sont en train de perdre
+// leur connexion de toute façon (et re-fetcheront leur historique
+// complet au prochain open).
 // ============================================================
 private suspend fun flushAllAggregatorBuckets(
     minRepo: WidgetHistoryAggregateRepository,
     hourRepo: WidgetHistoryAggregateRepository,
     dayRepo: WidgetHistoryAggregateRepository
 ) {
-    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractAllBuckets())
-    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractAllBuckets())
-    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractAllBuckets())
+    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractAllBuckets(), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = false)
+    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractAllBuckets(),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = false)
+    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractAllBuckets(),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = false)
 }
 
-/** Convertit les snapshots en `AggregateInsertRow` + insertBatch. */
-private fun flushAggregatorTier(
+/**
+ * Convertit les snapshots en `AggregateInsertRow` + insertBatch.
+ * Si [broadcast] = true, emet un control event "bucket_updated" pour
+ * chaque snapshot apres l'insert DB reussi. Permet aux charts cote
+ * app en mode preset historique de mettre a jour leur fenetre sans
+ * re-fetch HTTP.
+ */
+private suspend fun flushAggregatorTier(
     repo: WidgetHistoryAggregateRepository,
-    snapshots: List<com.jeanloickdt.widget.data.BucketAccumulator.Snapshot>
+    snapshots: List<com.jeanloickdt.widget.data.BucketAccumulator.Snapshot>,
+    granularity: String,
+    broadcast: Boolean
 ) {
     if (snapshots.isEmpty()) return
     val rows = snapshots.map { snap ->
@@ -553,4 +565,20 @@ private fun flushAggregatorTier(
         )
     }
     repo.insertBatch(rows)
+
+    if (broadcast) {
+        snapshots.forEach { snap ->
+            com.jeanloickdt.relay.ControlEventBroadcaster.bucketClosed(
+                projectId   = snap.projectId,
+                widgetId    = snap.widgetId,
+                seriesId    = snap.seriesId,
+                bucketAt    = snap.bucketAt,
+                avg         = snap.avgValue,
+                min         = snap.minValue,
+                max         = snap.maxValue,
+                count       = snap.sampleCount,
+                granularity = granularity
+            )
+        }
+    }
 }

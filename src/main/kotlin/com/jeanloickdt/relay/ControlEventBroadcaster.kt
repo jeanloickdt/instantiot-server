@@ -69,6 +69,42 @@ object ControlEventBroadcaster {
         sendEventToSession(session, event)
     }
 
+    /**
+     * Un bucket d'agregation vient de fermer cote serveur (RAM aggregator
+     * → DB). Broadcast a toutes les apps du projet pour que les charts
+     * en mode preset historique puissent ajouter ce bucket a leur
+     * fenetre sans re-fetch HTTP.
+     *
+     * Volume : un message par bucket ferme × tier × widget. Pour un
+     * projet avec 10 widgets et 3 tiers, c'est ~30 messages/min cote
+     * minute, 30 messages/h cote hour, 30 messages/j cote day. Total
+     * largement gerable.
+     */
+    suspend fun bucketClosed(
+        projectId: String,
+        widgetId: String,
+        seriesId: String?,
+        bucketAt: Long,
+        avg: Double,
+        min: Double,
+        max: Double,
+        count: Int,
+        granularity: String
+    ) {
+        val event = ControlEvent(
+            type        = ControlEventType.BUCKET_UPDATED,
+            widgetId    = widgetId,
+            seriesId    = seriesId,
+            bucketAt    = bucketAt,
+            avg         = avg,
+            min         = min,
+            max         = max,
+            count       = count,
+            granularity = granularity
+        )
+        broadcastToProject(projectId, event)
+    }
+
     // ────────────────────────────────────────────────────────────
     // Helpers internes
     // ────────────────────────────────────────────────────────────
