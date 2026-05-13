@@ -98,6 +98,32 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                     return@webSocket
                 }
 
+                // Fermer toute session précédente du même couple (userId, projectId)
+                // AVANT d'enregistrer la nouvelle. Garantit "une seule session
+                // active par user+project" — pas de zombies, pas de double
+                // broadcast bucket_updated, pas de subs qui partent sur la
+                // mauvaise WS quand l'app reconnect after-background.
+                //
+                // Cas typique : l'app était en background, l'OS a freeze la
+                // socket TCP côté client ; quand elle revient au foreground
+                // elle ouvre une nouvelle WS. Sans ce dedupe, l'ancienne
+                // session traîne ~25s jusqu'au ping timeout. Inspiration :
+                // MQTT clean session + Blynk one-app-per-token.
+                val priorSessions = SessionRegistry.appSessions[userId]
+                    ?.filter { it.activeProjectId == projectId }
+                    .orEmpty()
+                priorSessions.forEach { prior ->
+                    try {
+                        prior.session.close(
+                            CloseReason(CloseReason.Codes.NORMAL, "Superseded by new session")
+                        )
+                    } catch (_: Exception) { /* déjà fermée — on s'en fiche */ }
+                    SessionRegistry.unregisterApp(userId, prior.session)
+                }
+                if (priorSessions.isNotEmpty()) {
+                    logger.info("Closed ${priorSessions.size} prior session(s) — userId=$userId projectId=$projectId")
+                }
+
                 // enregistrer la session app avec le projet actif
                 val appSession = SessionRegistry.registerApp(userId, this)
                 SessionRegistry.setActiveProject(appSession, projectId)

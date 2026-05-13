@@ -103,19 +103,31 @@ object ServerConfig {
     }
 
     /**
-     * Active le tier RAW (`widget_history_numeric`). Off par défaut :
-     * les agrégateurs RAM (min/hour/day) suffisent à 90% des cas et
-     * évitent un disque qui explose avec des capteurs rapides.
+     * Active le tier RAW (`widget_history_numeric`). **ON par défaut** —
+     * permet à l'app de zoomer en haute résolution sur les fenêtres ≤ 30min
+     * sans config admin (le chart utilise auto le tier raw quand
+     * disponible). Coût bornée par [historyRetentionRawDays] = 48h par
+     * défaut + cleanup quotidien.
      *
      * Quand activé : chaque sample numérique est buffered et écrit
      * tel quel — pas de throttle, fidélité parfaite pour les fenêtres
      * 1h/6h en mode "live" prolongé.
+     *
+     * L'admin peut désactiver via PATCH /api/admin/history-config si son
+     * setup le demande (ex: 100+ capteurs 100Hz sur SD card 16GB).
      */
-    var historyRawEnabled: Boolean = false
+    var historyRawEnabled: Boolean = true
         private set
 
-    /** Retention des rows RAW dans `widget_history_numeric` (jours). */
-    var historyRetentionRawDays: Int = 7
+    /**
+     * Retention des rows RAW dans `widget_history_numeric` (jours).
+     *
+     * Default **1 jour** (24h) — exactement le cap UI du High Res côté
+     * chart. Pas de waste : ce qu'on stocke = ce qu'on peut afficher.
+     * Pour archiver des fenêtres plus larges, les tiers `min/hour/day`
+     * (kept 90j/365j/∞) couvrent tous les use cases.
+     */
+    var historyRetentionRawDays: Int = 1
         private set
 
     /** Retention des rows opaques dans `widget_history` (jours). */
@@ -248,10 +260,10 @@ object ServerConfig {
             tcpPort = props.getProperty("tcp.port", "9001").toIntOrNull() ?: 9001
 
             // Historique — refonte iWidgets (architecture Blynk-style)
-            historyRawEnabled = props.getProperty("history.raw.enabled", "false")
-                .toBooleanStrictOrNull() ?: false
-            historyRetentionRawDays = props.getProperty("history.retention.raw.days", "7")
-                .toIntOrNull()?.coerceAtLeast(1) ?: 7
+            historyRawEnabled = props.getProperty("history.raw.enabled", "true")
+                .toBooleanStrictOrNull() ?: true
+            historyRetentionRawDays = props.getProperty("history.retention.raw.days", "1")
+                .toIntOrNull()?.coerceAtLeast(1) ?: 1
             historyRetentionOpaqueDays = props.getProperty("history.retention.opaque.days", "1")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 1
 
