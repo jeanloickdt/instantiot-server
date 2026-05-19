@@ -44,13 +44,20 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # jpackage --type msi exige WiX Toolset 3.x sur le PATH (candle/light).
-      # ubuntu (dpkg/fakeroot) et macOS (hdiutil) ont leurs outils en natif.
-      # jpackage (JDK 21) shell-out vers candle.exe/light.exe = WiX 3.x.
-      # WiX 4+ a tout renommé en `wix.exe` → jpackage casse. On pin 3.14.
-      - name: Install WiX 3.x (Windows only)
+      # jpackage --type msi exige WiX 3.x sur le PATH (candle.exe/light.exe ;
+      # WiX 4+ a tout renommé en `wix.exe` → jpackage casse). Le runner
+      # windows-latest ship DÉJÀ WiX 3.14.x pré-installé → on ne tente
+      # l'install QUE s'il est absent (futureproof si l'image change), et
+      # on n'échoue jamais si déjà présent. Pas de --version pin : le
+      # package choco `wixtoolset` reste la ligne 3.14.x (valide jpackage).
+      - name: Ensure WiX 3.x (Windows only)
         if: matrix.os == 'windows-latest'
-        run: choco install wixtoolset --version=3.14.0 --no-progress -y
+        run: |
+          if (Get-Command light.exe -ErrorAction SilentlyContinue) {
+            Write-Host "WiX 3.x already present: $((Get-Command light.exe).Source)"
+          } else {
+            choco install wixtoolset --no-progress -y
+          }
         shell: pwsh
 
       - name: Make gradlew executable (Unix)
