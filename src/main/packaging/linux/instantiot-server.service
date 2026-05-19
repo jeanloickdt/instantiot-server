@@ -17,6 +17,14 @@ Group=instantiot
 Environment="HOME=/var/lib/instantiot"
 WorkingDirectory=/var/lib/instantiot
 
+# Un serveur géré par systemd est TOUJOURS headless (Pi OS Lite, Ubuntu
+# Server, VPS — aucun X11). On force java.awt.headless=true : SystemTray
+# .isSupported() / Desktop renvoient false de façon déterministe, AWT ne
+# tente jamais de connexion X11 → zéro AWTError possible. Le JVM applique
+# JAVA_TOOL_OPTIONS automatiquement. Scopé au service Linux : les installs
+# desktop .dmg/.msi gardent leur system tray (vrai display).
+Environment="JAVA_TOOL_OPTIONS=-Djava.awt.headless=true"
+
 # Lance le binaire jpackage. Le path /opt/instantiot-server est défini
 # par jpackage (--linux-package-name instantiot-server → /opt/<name>/).
 ExecStart=/opt/instantiot-server/bin/InstantIoT\x20Server

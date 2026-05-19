@@ -91,6 +91,22 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                     return@webSocket
                 }
 
+                // 2e message = connectionInstanceId (UUID v4 par install).
+                // Permet le dedup fin sur (userId, projectId, instanceId) au
+                // lieu de (userId, projectId) — plusieurs devices du même
+                // user peuvent regarder le même projet en parallèle, seul
+                // le même install qui reconnect kick son zombie.
+                val instanceFrame = incoming.receive()
+                if (instanceFrame !is Frame.Text) {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Expected connectionInstanceId as second message"))
+                    return@webSocket
+                }
+                val connectionInstanceId = instanceFrame.readText()
+                if (connectionInstanceId.isBlank()) {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "connectionInstanceId cannot be blank"))
+                    return@webSocket
+                }
+
                 // vérifier que le user est bien propriétaire du projet
                 val project = projectRepository.findById(projectId)
                 if (project == null || project.ownerId != userId) {
@@ -98,19 +114,21 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                     return@webSocket
                 }
 
-                // Fermer toute session précédente du même couple (userId, projectId)
-                // AVANT d'enregistrer la nouvelle. Garantit "une seule session
-                // active par user+project" — pas de zombies, pas de double
-                // broadcast bucket_updated, pas de subs qui partent sur la
-                // mauvaise WS quand l'app reconnect after-background.
+                // Dedup par (userId, projectId, connectionInstanceId) : on
+                // ne kick que les sessions précédentes du **même install**.
+                // Devices différents (téléphone A + téléphone B du même user)
+                // cohabitent sur le même projet.
                 //
-                // Cas typique : l'app était en background, l'OS a freeze la
-                // socket TCP côté client ; quand elle revient au foreground
-                // elle ouvre une nouvelle WS. Sans ce dedupe, l'ancienne
-                // session traîne ~25s jusqu'au ping timeout. Inspiration :
-                // MQTT clean session + Blynk one-app-per-token.
+                // Cas typique du kick : l'app était en background, l'OS a
+                // freeze la socket TCP ; quand elle revient au foreground
+                // elle ouvre une nouvelle WS avec le même instanceId →
+                // l'ancienne fantôme est fermée immédiatement (au lieu
+                // d'attendre ~25s le ping timeout).
                 val priorSessions = SessionRegistry.appSessions[userId]
-                    ?.filter { it.activeProjectId == projectId }
+                    ?.filter {
+                        it.activeProjectId == projectId &&
+                        it.connectionInstanceId == connectionInstanceId
+                    }
                     .orEmpty()
                 priorSessions.forEach { prior ->
                     try {
@@ -121,13 +139,13 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                     SessionRegistry.unregisterApp(userId, prior.session)
                 }
                 if (priorSessions.isNotEmpty()) {
-                    logger.info("Closed ${priorSessions.size} prior session(s) — userId=$userId projectId=$projectId")
+                    logger.info("Closed ${priorSessions.size} prior session(s) — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
                 }
 
                 // enregistrer la session app avec le projet actif
-                val appSession = SessionRegistry.registerApp(userId, this)
+                val appSession = SessionRegistry.registerApp(userId, this, connectionInstanceId)
                 SessionRegistry.setActiveProject(appSession, projectId)
-                logger.info("App connected — userId=$userId projectId=$projectId")
+                logger.info("App connected — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
 
                 try {
                     // Le dispatch est **séquentiel** (pas de `launch` par frame) :

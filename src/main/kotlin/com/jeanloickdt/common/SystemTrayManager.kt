@@ -27,12 +27,19 @@ object SystemTrayManager {
      * Retourne true si le tray est actif, false si fallback console.
      */
     fun init(httpPort: Int): Boolean {
-        if (!SystemTray.isSupported()) {
-            logger.info("System tray not supported — running in console mode")
-            return false
-        }
+        // ⚠️ catch(Throwable) — PAS catch(Exception). Sur Linux headless
+        // avec un DISPLAY cassé/partiel, `SystemTray.isSupported()` lui-même
+        // (init du Toolkit AWT) lève `java.awt.AWTError: Can't connect to
+        // X11 window server` qui est un `Error`, pas une `Exception`. Le
+        // serveur tourne typiquement headless (Pi OS Lite, Ubuntu Server,
+        // VPS, systemd) → ce chemin DOIT être incassable. Tout échec tray
+        // = fallback console silencieux, jamais un crash boot.
+        return try {
+            if (!SystemTray.isSupported()) {
+                logger.info("System tray not supported — running in console mode")
+                return false
+            }
 
-        try {
             // icone generee programmatiquement — pas de fichier externe
             val icon = createIcon()
             val popup = createMenu(httpPort)
@@ -57,10 +64,10 @@ object SystemTrayManager {
                 TrayIcon.MessageType.INFO
             )
 
-            return true
-        } catch (e: Exception) {
-            logger.warn("Failed to initialize system tray — ${e.message}")
-            return false
+            true
+        } catch (t: Throwable) {
+            logger.info("System tray unavailable (headless?) — console mode: ${t.message}")
+            false
         }
     }
 

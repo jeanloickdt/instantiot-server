@@ -78,6 +78,21 @@ fun Route.registerRoute(userRepository: UserRepository) {
             return@post
         }
 
+        // 🔒 Registration contrôlée par l'admin. Multi-user supporté, mais
+        // PAS d'inscription ouverte par défaut : sinon n'importe qui sur le
+        // LAN (l'app découvre le serveur via mDNS) pourrait self-register.
+        // L'admin ouvre l'inscription depuis le panel le temps d'onboarder
+        // ses users, puis la referme. Pattern Gitea/Vaultwarden SIGNUPS_ALLOWED.
+        // L'admin lui-même est bootstrapé via POST /api/licence (chemin
+        // séparé) → ce gate ne bloque jamais le premier compte.
+        if (!ServerConfig.registrationOpen) {
+            call.respond(
+                HttpStatusCode.Forbidden,
+                mapOf("error" to "Registration is closed")
+            )
+            return@post
+        }
+
         val body = call.receive<RegisterRequest>()
 
         // validation username — 3-32 caractères alphanumériques + underscore
@@ -466,6 +481,30 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
             target.username, targetId.take(8)
         )
         call.respond(HttpStatusCode.OK)
+    }
+
+    // ── Registration toggle (GET / PATCH) ──────────────────
+    // Contrôle l'inscription publique. Défaut fermé. L'admin l'ouvre
+    // le temps d'onboarder ses users puis la referme. Hot-reload.
+    get("/api/admin/registration/config") {
+        if (!checkAdmin(call)) return@get
+        call.respond(
+            HttpStatusCode.OK,
+            RegistrationConfigResponse(open = ServerConfig.registrationOpen)
+        )
+    }
+
+    patch("/api/admin/registration/config") {
+        if (!checkAdmin(call)) return@patch
+        val body = call.receive<UpdateRegistrationConfigRequest>()
+        ServerConfig.saveRegistrationConfig(body.open)
+        LoggerFactory.getLogger("InstantIoT").info(
+            "Admin set registration open={}", body.open
+        )
+        call.respond(
+            HttpStatusCode.OK,
+            RegistrationConfigResponse(open = ServerConfig.registrationOpen)
+        )
     }
 }
 

@@ -5,10 +5,35 @@ plugins {
 }
 
 group = "com.jeanloickdt"
-version = "0.0.1"
+version = "1.0.0"
 
 application {
     mainClass = "com.jeanloickdt.ApplicationKt"
+}
+
+// ════════════════════════════════════════════════════════════
+// Version single-source : `version` ci-dessus est l'UNIQUE source
+// de vérité. On la matérialise dans une ressource générée que
+// ServerConfig lit au runtime → plus jamais de désync entre le
+// JAR/installer et ce qu'affiche /api/status + mDNS + log boot.
+// Bump = changer SEULEMENT la ligne `version =` plus haut.
+// ════════════════════════════════════════════════════════════
+val generateVersionResource by tasks.registering {
+    val versionValue = project.version.toString()
+    val outDir = layout.buildDirectory.dir("generated/version")
+    inputs.property("version", versionValue)
+    outputs.dir(outDir)
+    doLast {
+        val f = outDir.get().asFile.apply { mkdirs() }
+            .resolve("instantiot-version.properties")
+        f.writeText("version=$versionValue\n")
+    }
+}
+
+sourceSets {
+    named("main") {
+        resources.srcDir(generateVersionResource)
+    }
 }
 
 ktor{
@@ -115,7 +140,11 @@ val packageInstaller by tasks.registering(Exec::class) {
         // -Xmx128m suffit largement (relay TCP léger + SQLite local)
         // -Dfile.encoding=UTF-8 pour cohérence cross-platform
         "--java-options", "-Xmx256m",
-        "--java-options", "-Dfile.encoding=UTF-8"
+        "--java-options", "-Dfile.encoding=UTF-8",
+        // SQLite JDBC charge une lib native (System.load). Sans ça, JDK 24+
+        // émet un WARNING au boot et **bloquera** dans une future release.
+        // On autorise explicitement l'accès natif pour le module unnamed.
+        "--java-options", "--enable-native-access=ALL-UNNAMED"
     )
 
     // Options par OS

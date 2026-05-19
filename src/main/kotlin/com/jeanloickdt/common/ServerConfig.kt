@@ -14,7 +14,21 @@ import java.util.Properties
  */
 object ServerConfig {
 
-    private const val VERSION = "0.0.1"
+    // Version single-source : lue depuis la ressource générée par Gradle
+    // (`generateVersionResource` → instantiot-version.properties, injectée
+    // depuis `version` dans build.gradle.kts). UNE seule source de vérité.
+    // Fallback "0.0.0-dev" uniquement si lancé hors JAR packagé (ex: tests
+    // sans processResources) — jamais en prod.
+    private val VERSION: String = runCatching {
+        ServerConfig::class.java
+            .getResourceAsStream("/instantiot-version.properties")
+            ?.use { stream ->
+                java.util.Properties().apply { load(stream) }
+                    .getProperty("version")
+            }
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }.getOrNull() ?: "0.0.0-dev"
 
     /** Répertoire racine de tous les fichiers d'état du serveur. */
     val instantiotDir: File = File("${System.getProperty("user.home")}/.instantiot").apply {
@@ -89,6 +103,25 @@ object ServerConfig {
     /** Répertoire des snapshots — sous-dossier de instantiotDir pour
      *  rester groupé avec licence.key, secret.key, instantiot.db. */
     val backupDir: File = File(instantiotDir, "backups").apply { mkdirs() }
+
+    // ============================================================
+    // INSCRIPTION USERS — V1
+    // ============================================================
+
+    /** Inscription publique. **Défaut false** (secure-by-default) :
+     *  sans ça, n'importe qui sur le LAN (l'app découvre le serveur via
+     *  mDNS) pourrait self-register. L'admin ouvre l'inscription le temps
+     *  d'onboarder ses users puis la referme. L'admin lui-même est créé
+     *  par l'activation de licence (chemin séparé), jamais bloqué par ce
+     *  flag. Pattern Gitea/Vaultwarden SIGNUPS_ALLOWED. */
+    var registrationOpen: Boolean = false
+        private set
+
+    /** Sauvegarde le flag inscription. Hot-reload — pas de restart. */
+    fun saveRegistrationConfig(open: Boolean) {
+        registrationOpen = open
+        writeProperties()
+    }
 
     /** Sauvegarde la config backup. Hot-reload — pas de restart requis. */
     fun saveBackupConfig(
@@ -281,6 +314,8 @@ object ServerConfig {
                 .toIntOrNull()?.coerceAtLeast(1) ?: 24
             backupRetentionCount = props.getProperty("backup.retention.count", "30")
                 .toIntOrNull()?.coerceAtLeast(1) ?: 30
+            registrationOpen = props.getProperty("registration.open", "false")
+                .toBooleanStrictOrNull() ?: false
         } catch (_: Exception) {
             // fichier corrompu — garder les valeurs par defaut
         }
@@ -341,6 +376,7 @@ object ServerConfig {
         props.setProperty("backup.enabled", backupEnabled.toString())
         props.setProperty("backup.interval.hours", backupIntervalHours.toString())
         props.setProperty("backup.retention.count", backupRetentionCount.toString())
+        props.setProperty("registration.open", registrationOpen.toString())
         configFile.outputStream().use { props.store(it, "InstantIoT Server Configuration") }
     }
 }

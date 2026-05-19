@@ -523,6 +523,25 @@
           <p class="page-header-desc" x-text="t('users.intro')"></p>
         </div>
 
+        <!-- Registration toggle — secure-by-default, admin controls the door -->
+        <form class="form-card" @submit.prevent="saveRegistrationConfig()">
+          <h2 class="section-title" x-text="t('reg.title')"></h2>
+          <p class="page-header-desc" x-text="t('reg.intro')"></p>
+
+          <div class="form-row form-row-checkbox">
+            <input type="checkbox" id="reg-open" class="form-checkbox"
+                   x-model="registrationForm.open"
+                   @change="saveRegistrationConfig()">
+            <label for="reg-open" class="form-label-inline" x-text="t('reg.open')"></label>
+          </div>
+
+          <p class="form-msg"
+             :class="registrationForm.open ? 'error' : 'success'"
+             x-text="registrationForm.open ? t('reg.statusOpen') : t('reg.statusClosed')"></p>
+          <p class="form-msg" :class="registrationForm.msgType"
+             x-show="registrationForm.msg" x-text="registrationForm.msg"></p>
+        </form>
+
         <template x-if="users.length > 0">
           <div class="card-panel">
             <table class="data-table">

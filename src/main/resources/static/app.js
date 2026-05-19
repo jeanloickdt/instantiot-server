@@ -68,6 +68,11 @@ document.addEventListener('alpine:init', () => {
       msg: '', msgType: '',
       restoreModalFor: null  // filename in modal, null = closed
     },
+    registrationForm: {
+      open: false,
+      busy: false,
+      msg: '', msgType: ''
+    },
 
     // ── Data ───────────────────────────────────────────────
     stats: {
@@ -465,6 +470,38 @@ document.addEventListener('alpine:init', () => {
       this.users = data.users || [];
     },
 
+    async loadRegistrationConfig() {
+      const res = await this.api('/api/admin/registration/config');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.registrationForm.open = !!data.open;
+      this.registrationForm.msg = '';
+      this.registrationForm.msgType = '';
+    },
+
+    async saveRegistrationConfig() {
+      this.registrationForm.busy = true;
+      this.registrationForm.msg = '';
+      this.registrationForm.msgType = '';
+      const res = await this.api('/api/admin/registration/config', {
+        method: 'PATCH',
+        body: JSON.stringify({ open: this.registrationForm.open })
+      });
+      this.registrationForm.busy = false;
+      if (res && res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data) this.registrationForm.open = !!data.open;
+        this.registrationForm.msg = this.t('reg.saved');
+        this.registrationForm.msgType = 'success';
+      } else if (res) {
+        const data = await res.json().catch(() => null);
+        this.registrationForm.msg = data?.error || this.t('reg.saveError');
+        this.registrationForm.msgType = 'error';
+        // revert le toggle visuel si le save a échoué
+        await this.loadRegistrationConfig();
+      }
+    },
+
     askResetUserPassword(user) {
       this.resetUserForm.targetUser = user;
       this.resetUserForm.newPassword = '';
@@ -775,6 +812,7 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'users':
           this.loadUsers();
+          this.loadRegistrationConfig();
           break;
         case 'settings':
           this.loadServerInfo();

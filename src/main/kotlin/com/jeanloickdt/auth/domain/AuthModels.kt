@@ -164,6 +164,16 @@ data class UpdateBackupConfigRequest(
 )
 
 @Serializable
+data class RegistrationConfigResponse(
+    val open: Boolean
+)
+
+@Serializable
+data class UpdateRegistrationConfigRequest(
+    val open: Boolean
+)
+
+@Serializable
 data class BackupListEntry(
     val filename: String,
     val sizeBytes: Long,

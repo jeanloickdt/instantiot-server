@@ -11,7 +11,12 @@ import java.util.UUID
 
 object JwtConfig {
 
-    private const val EXPIRY_MS = 30L * 24 * 60 * 60 * 1000
+    // 1 an. Self-hosted IoT : le serveur appartient à l'user, sur son LAN —
+    // pas de threat model SaaS multi-tenant qui justifierait une rotation
+    // courte + refresh token. Aligné sur le standard du domaine (Home
+    // Assistant long-lived tokens). Évite la coupure silencieuse des
+    // dashboards always-on (tablette kiosk) au bout de 30j.
+    private const val EXPIRY_MS = 365L * 24 * 60 * 60 * 1000
 
     val secret: String by lazy {
         val configFile = File("${System.getProperty("user.home")}/.instantiot/secret.key")

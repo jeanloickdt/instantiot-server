@@ -1,0 +1,134 @@
+name: Release installers
+
+# Build les 3 installers natifs (.deb / .dmg / .msi) via jpackage et les
+# attache à une GitHub Release. jpackage ne builde QUE pour l'OS hôte →
+# matrice 3 OS. JDK 21 fourni par la CI (résout le piège toolchain local).
+#
+# Déclencheurs :
+#   - push d'un tag `v*`  → build + crée/maj la Release avec les 3 assets
+#   - workflow_dispatch   → build manuel (artefacts uniquement, pas de Release)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # nécessaire pour créer la Release + uploader les assets
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            label: linux-deb
+            artifact: "*.deb"
+          - os: macos-latest
+            label: macos-dmg
+            artifact: "*.dmg"
+          - os: windows-latest
+            label: windows-msi
+            artifact: "*.msi"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      # jpackage --type msi exige WiX Toolset 3.x sur le PATH (candle/light).
+      # ubuntu (dpkg/fakeroot) et macOS (hdiutil) ont leurs outils en natif.
+      # jpackage (JDK 21) shell-out vers candle.exe/light.exe = WiX 3.x.
+      # WiX 4+ a tout renommé en `wix.exe` → jpackage casse. On pin 3.14.
+      - name: Install WiX 3.x (Windows only)
+        if: matrix.os == 'windows-latest'
+        run: choco install wixtoolset --version=3.14.0 --no-progress -y
+        shell: pwsh
+
+      - name: Make gradlew executable (Unix)
+        if: matrix.os != 'windows-latest'
+        run: chmod +x ./gradlew
+
+      - name: Build installer
+        run: ./gradlew packageInstaller --no-daemon --stacktrace
+        shell: bash
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.label }}
+          path: build/jpackage/${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # ──────────────────────────────────────────────────────────────
+  # .deb arm64 (Raspberry Pi 64-bit — install #1 du marché self-host)
+  #
+  # jpackage builde pour l'archi de la machine de build → pour de
+  # l'arm64 on émule via QEMU et on build DANS un conteneur arm64
+  # (Temurin 21 JDK contient jpackage). Lent (~15-25 min sous
+  # émulation) mais gratuit même en repo privé (minutes x86
+  # standard), et les releases sont rares (sur tag) donc OK.
+  # ──────────────────────────────────────────────────────────────
+  build-linux-arm64:
+    name: Build linux-deb-arm64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build arm64 .deb in arm64 container
+        run: |
+          docker run --rm --platform linux/arm64 \
+            -v "$PWD":/work -w /work \
+            eclipse-temurin:21-jdk \
+            bash -c '
+              set -e
+              apt-get update
+              apt-get install -y --no-install-recommends fakeroot dpkg-dev binutils
+              chmod +x ./gradlew
+              ./gradlew packageInstaller --no-daemon --stacktrace
+            '
+
+      - name: Fix artifact ownership (container ran as root)
+        run: sudo chown -R "$USER" build
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-linux-deb-arm64
+          path: build/jpackage/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Attach to GitHub Release
+    needs: [build, build-linux-arm64]
+    runs-on: ubuntu-latest
+    # Release uniquement sur tag (pas sur workflow_dispatch manuel)
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create / update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

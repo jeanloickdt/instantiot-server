@@ -18,6 +18,14 @@ typealias WidgetId = String
 data class AppSession(
     val userId: UserId,
     val session: WebSocketSession,
+    /**
+     * UUID v4 généré par l'app à l'install (persisté localement). Identifie
+     * cette installation pour le dedup : on ne kick une session précédente
+     * que si elle vient du **même install** (même `connectionInstanceId`),
+     * permettant ainsi à plusieurs devices du même user de cohabiter sur
+     * le même projet.
+     */
+    val connectionInstanceId: String,
     var activeProjectId: String? = null,  // projet actuellement ouvert — change dynamiquement
     // Subscriptions historique : map widgetId → granularité ("minute" | "hour" | "day").
     // Set par l'app via message {"type":"subscribe_history","widgets":[...]}. Filtré
@@ -95,8 +103,12 @@ object SessionRegistry {
     val knownWidgetIds: MutableSet<WidgetId> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     // enregistrer une session app — supporte plusieurs connexions par user
-    fun registerApp(userId: UserId, session: WebSocketSession): AppSession {
-        val appSession = AppSession(userId, session)
+    fun registerApp(
+        userId: UserId,
+        session: WebSocketSession,
+        connectionInstanceId: String
+    ): AppSession {
+        val appSession = AppSession(userId, session, connectionInstanceId)
         appSessions.computeIfAbsent(userId) { CopyOnWriteArrayList() }.add(appSession)
         return appSession
     }
