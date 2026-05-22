@@ -121,74 +121,6 @@
 <!-- AUTH SCREENS                                                 -->
 <!-- ============================================================ -->
 
-<div class="view view-center" x-show="view === 'licence'">
-  <div class="card login-card">
-    <div class="logo">InstantIoT</div>
-    <p class="subtitle" x-text="t('licence.subtitle')"></p>
-    <form @submit.prevent="activateLicence()">
-      <textarea class="auth-textarea" x-model="licenceForm.key" :placeholder="t('licence.placeholder')" rows="4" required></textarea>
-      <button type="submit" x-text="t('licence.submit')"></button>
-      <p class="error" x-text="licenceForm.error"></p>
-    </form>
-    <div class="lang-switch">
-      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
-      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
-    </div>
-  </div>
-</div>
-
-<div class="view view-center" x-show="view === 'welcome'">
-  <div class="card login-card welcome-card">
-    <div class="logo">InstantIoT</div>
-    <p class="subtitle" x-text="t('welcome.subtitle')"></p>
-
-    <div class="welcome-defaults">
-      <div class="welcome-defaults-title" x-text="t('welcome.defaultsTitle')"></div>
-      <div class="welcome-cred-row">
-        <span class="welcome-cred-label" x-text="t('welcome.username')"></span>
-        <code class="welcome-cred-value">admin</code>
-      </div>
-      <div class="welcome-cred-row">
-        <span class="welcome-cred-label" x-text="t('welcome.password')"></span>
-        <code class="welcome-cred-value" x-text="bootstrapLicenceId"></code>
-        <button class="copy-btn" @click="copyText(bootstrapLicenceId, $el)" :title="t('a11y.copy')">
-          <svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>
-        </button>
-      </div>
-      <p class="welcome-defaults-hint" x-text="t('welcome.defaultsHint')"></p>
-    </div>
-
-    <div class="welcome-renew">
-      <div class="welcome-renew-title" x-text="t('welcome.renewTitle')"></div>
-      <input type="text" x-model="welcomeForm.username"
-             :placeholder="t('welcome.newUsername')"
-             autocomplete="username"
-             :disabled="welcomeForm.submitting">
-      <input type="password" x-model="welcomeForm.password"
-             :placeholder="t('welcome.newPassword')"
-             autocomplete="new-password"
-             :disabled="welcomeForm.submitting">
-
-      <div class="welcome-actions">
-        <button type="button" class="btn-cancel"
-                @click="submitWelcome('skip')"
-                :disabled="welcomeForm.submitting"
-                x-text="t('welcome.skip')"></button>
-        <button type="button"
-                @click="submitWelcome('renew')"
-                :disabled="welcomeForm.submitting"
-                x-text="t('welcome.renew')"></button>
-      </div>
-      <p class="error" x-text="welcomeForm.error"></p>
-    </div>
-
-    <div class="lang-switch">
-      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
-      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
-    </div>
-  </div>
-</div>
-
 <div class="view view-center" x-show="view === 'login'">
   <div class="card login-card">
     <div class="logo">InstantIoT</div>
@@ -199,44 +131,6 @@
       <button type="submit" x-text="t('login.submit')"></button>
       <p class="error" x-text="loginForm.error"></p>
     </form>
-    <p class="forgot-link">
-      <a href="#" @click.prevent="view = 'forgot'" x-text="t('login.forgot')"></a>
-    </p>
-    <div class="lang-switch">
-      <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
-      <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
-    </div>
-  </div>
-</div>
-
-<div class="view view-center" x-show="view === 'forgot'">
-  <div class="card login-card">
-    <div class="logo">InstantIoT</div>
-    <p class="subtitle" x-text="t('forgot.subtitle')"></p>
-
-    <template x-if="!forgotForm.success">
-      <form @submit.prevent="submitForgot()">
-        <textarea class="auth-textarea" x-model="forgotForm.key"
-                  :placeholder="t('forgot.placeholder')"
-                  rows="4" required></textarea>
-        <div class="welcome-actions">
-          <button type="button" class="btn-cancel"
-                  @click="view = 'login'; forgotForm = { key: '', error: '', success: false }"
-                  x-text="t('forgot.back')"></button>
-          <button type="submit" x-text="t('forgot.submit')"></button>
-        </div>
-        <p class="error" x-text="forgotForm.error"></p>
-      </form>
-    </template>
-
-    <template x-if="forgotForm.success">
-      <div>
-        <p class="forgot-success" x-text="t('forgot.success')"></p>
-        <button @click="view = 'login'; forgotForm = { key: '', error: '', success: false }"
-                x-text="t('forgot.backToLogin')"></button>
-      </div>
-    </template>
-
     <div class="lang-switch">
       <button class="lang-btn" :class="{ active: lang === 'en' }" @click="setLang('en')">EN</button>
       <button class="lang-btn" :class="{ active: lang === 'fr' }" @click="setLang('fr')">FR</button>
@@ -263,7 +157,7 @@
 <!-- ============================================================ -->
 <div class="app-shell"
      :class="{ 'sidebar-collapsed': sidebarCollapsed, 'mobile-menu-open': mobileMenuOpen }"
-     x-show="['dashboard','devices','users','settings','retention','backups','licence-info'].includes(view)">
+     x-show="['dashboard','devices','users','settings','retention','backups'].includes(view)">
 
   <header class="mobile-topbar">
     <button class="burger-btn" @click="mobileMenuOpen = true" :title="t('a11y.openMenu')" :aria-label="t('a11y.openMenu')">
@@ -322,11 +216,6 @@
          @click.prevent="navigate('backups'); mobileMenuOpen = false" :title="t('nav.backups')">
         <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-archive"/></svg>
         <span class="sidebar-link-label" x-text="t('nav.backups')"></span>
-      </a>
-      <a href="#" class="sidebar-link" :class="{ active: view === 'licence-info' }"
-         @click.prevent="navigate('licence-info'); mobileMenuOpen = false" :title="t('nav.licence')">
-        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-key"/></svg>
-        <span class="sidebar-link-label" x-text="t('nav.licence')"></span>
       </a>
     </nav>
 
@@ -805,69 +694,12 @@
       </div>
     </div>
 
-    <!-- LICENCE INFO -->
-    <div class="page" x-show="view === 'licence-info'">
-      <div class="container container-narrow">
-        <div class="page-header">
-          <h1 x-text="t('licence.panelTitle')"></h1>
-        </div>
-
-        <div x-show="licenceInfo">
-          <div class="info-list">
-            <div class="info-item">
-              <span class="info-label" x-text="t('licence.id')"></span>
-              <span class="info-value" x-text="licenceInfo?.id" x-ref="licenceIdValue"></span>
-              <button class="copy-btn" @click="copyText(licenceInfo?.id, $el)" :title="t('a11y.copy')">
-                <svg class="icon" aria-hidden="true"><use href="#icon-copy"/></svg>
-              </button>
-            </div>
-            <div class="info-item">
-              <span class="info-label" x-text="t('licence.type')"></span>
-              <span class="info-value" x-text="formatLicenceExpiry(licenceInfo?.expiresAt)"></span>
-            </div>
-          </div>
-
-          <div class="danger-zone">
-            <h3 class="danger-zone-title" x-text="t('licence.resetHint')"></h3>
-            <button type="button"
-                    class="btn-danger-outline"
-                    @click="askResetAdminToLicence()"
-                    :disabled="resetAdminForm.busy">
-              <svg class="icon" aria-hidden="true"><use href="#icon-alert-triangle"/></svg>
-              <span x-text="t('licence.resetAdminButton')"></span>
-            </button>
-            <p class="form-msg" :class="resetAdminForm.msgType" x-text="resetAdminForm.msg"></p>
-            <p class="page-note licence-forgot-hint">
-              <svg class="icon" aria-hidden="true"><use href="#icon-help-circle"/></svg>
-              <span x-text="t('licence.forgotHint')"></span>
-            </p>
-          </div>
-        </div>
-
-        <p x-show="!licenceInfo" class="empty-msg" x-text="t('licence.noActive')"></p>
-      </div>
-    </div>
-
   </main>
 </div>
 
 <!-- ============================================================ -->
 <!-- MODALS                                                       -->
 <!-- ============================================================ -->
-
-<div class="modal-overlay" x-show="resetAdminForm.confirmOpen"
-     x-transition.opacity @click.self="resetAdminForm.confirmOpen = false">
-  <div class="modal-card">
-    <h3 x-text="t('licence.resetAdminModalTitle')"></h3>
-    <p x-text="t('licence.resetAdminModalMessage')"></p>
-    <div class="modal-actions">
-      <button class="btn-cancel" @click="resetAdminForm.confirmOpen = false"
-              :disabled="resetAdminForm.busy" x-text="t('restart.cancel')"></button>
-      <button class="btn-danger" @click="confirmResetAdminToLicence()"
-              :disabled="resetAdminForm.busy" x-text="t('licence.resetAdminConfirm')"></button>
-    </div>
-  </div>
-</div>
 
 <div class="modal-overlay" x-show="resetUserForm.targetUser !== null"
      x-transition.opacity @click.self="cancelResetUserPassword()">

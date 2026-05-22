@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.backup
 
 import com.jeanloickdt.common.ServerConfig
@@ -9,28 +28,28 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * Gère les snapshots SQLite du serveur — protège le maker contre la
- * perte de données en cas de :
- *   - Corruption SQLite (rare mais arrive sur SD card de Pi)
- *   - Disque qui meurt
- *   - Erreur humaine (`rm -rf` malheureux)
- *   - Restore après mauvais update
+ * Manages the server's SQLite snapshots — protects the maker against
+ * data loss in case of:
+ *   - SQLite corruption (rare but happens on a Pi SD card)
+ *   - A dying disk
+ *   - Human error (an unfortunate `rm -rf`)
+ *   - Restore after a bad update
  *
- * **Snapshot** : `VACUUM INTO 'backup.db'` — atomique, gère WAL, ne
- * bloque pas les writes en cours. Output dans `~/.instantiot/backups/`
- * sous le nom `instantiot-YYYY-MM-DD-HHmm.db`.
+ * **Snapshot**: `VACUUM INTO 'backup.db'` — atomic, handles WAL, does
+ * not block in-progress writes. Output in `~/.instantiot/backups/`
+ * under the name `instantiot-YYYY-MM-DD-HHmm.db`.
  *
- * **Restore** : copie le backup choisi en place de `instantiot.db`,
- * en gardant l'ancienne DB sous `.before-restore-XXX` comme safety
- * net. Restart serveur requis (Exposed maintient un connection pool
- * qui n'aime pas qu'on swap le fichier sous lui).
+ * **Restore**: copies the chosen backup in place of `instantiot.db`,
+ * keeping the old DB under `.before-restore-XXX` as a safety
+ * net. Server restart required (Exposed maintains a connection pool
+ * that does not like the file being swapped under it).
  *
- * **Lifecycle** : [start] lance une coroutine périodique qui snapshot
- * + cleanup selon `ServerConfig.backupIntervalHours`. [stop] cancel.
+ * **Lifecycle**: [start] launches a periodic coroutine that snapshots
+ * + cleans up according to `ServerConfig.backupIntervalHours`. [stop] cancels.
  *
- * **Thread-safety** : un seul snapshot peut tourner à la fois (sync
- * sur `this`). Évite les snapshots concurrents si l'admin clique
- * "Backup now" pendant que la cron tourne.
+ * **Thread-safety**: only one snapshot can run at a time (sync
+ * on `this`). Avoids concurrent snapshots if the admin clicks
+ * "Backup now" while the cron is running.
  */
 object BackupManager {
 
@@ -39,15 +58,15 @@ object BackupManager {
     private val timestampFormat = SimpleDateFormat("yyyy-MM-dd-HHmm", Locale.US)
     private val displayFormat   = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
 
-    /** Timestamp ms du dernier snapshot réussi (pour affichage admin panel). */
+    /** Timestamp ms of the last successful snapshot (for admin panel display). */
     @Volatile var lastBackupAtMs: Long = 0L
         private set
 
     /**
-     * Snapshot immédiat. Idempotent côté nom de fichier — si appelé 2×
-     * dans la même minute, le 2e écrase le 1er (ms suffit pas dans le nom).
+     * Immediate snapshot. Idempotent on the filename side — if called 2×
+     * in the same minute, the 2nd overwrites the 1st (ms not enough in the name).
      *
-     * @return File du backup créé, ou null si échec
+     * @return File of the created backup, or null on failure
      */
     @Synchronized
     fun snapshotNow(): File? {
@@ -63,13 +82,13 @@ object BackupManager {
         val target = File(backupDir, "instantiot-$timestamp.db")
 
         return try {
-            // VACUUM INTO atomique — gère le WAL transparent, ne bloque
-            // pas les writes en cours. Le fichier output est une DB
-            // SQLite valide standalone, restorable telle quelle.
+            // atomic VACUUM INTO — handles WAL transparently, does not
+            // block in-progress writes. The output file is a valid
+            // standalone SQLite DB, restorable as-is.
             val url = "jdbc:sqlite:${srcDb.absolutePath}"
             DriverManager.getConnection(url).use { conn ->
                 conn.createStatement().use { stmt ->
-                    // Échapper les ' au cas où (path avec apostrophe)
+                    // Escape the ' just in case (path with an apostrophe)
                     val safePath = target.absolutePath.replace("'", "''")
                     stmt.execute("VACUUM INTO '$safePath'")
                 }
@@ -88,7 +107,7 @@ object BackupManager {
     }
 
     /**
-     * Liste les backups existants, triés du plus récent au plus ancien.
+     * Lists the existing backups, sorted from most recent to oldest.
      */
     fun list(): List<BackupInfo> {
         val backupDir = ServerConfig.backupDir
@@ -107,13 +126,13 @@ object BackupManager {
     }
 
     /**
-     * Restore un backup en place. Garde l'ancienne DB en safety net
+     * Restores a backup in place. Keeps the old DB as a safety net
      * (`instantiot.db.before-restore-XXX`).
      *
-     * **L'admin DOIT restart le serveur après pour que le pool de
-     * connexions Exposed reload le nouveau fichier.**
+     * **The admin MUST restart the server afterwards so that the
+     * Exposed connection pool reloads the new file.**
      *
-     * @return Pair (newDbFile, safetyNetFile) si OK, null si échec
+     * @return Pair (newDbFile, safetyNetFile) if OK, null on failure
      */
     @Synchronized
     fun restore(filename: String): Pair<File, File>? {
@@ -123,8 +142,8 @@ object BackupManager {
             log.warn("Restore failed — backup not found: $filename")
             return null
         }
-        // Guard contre path traversal — on n'accepte que des noms
-        // simples sous backupDir (pas de "../etc/passwd" trick)
+        // Guard against path traversal — we only accept simple
+        // names under backupDir (no "../etc/passwd" trick)
         if (src.parentFile.canonicalPath != backupDir.canonicalPath) {
             log.warn("Restore failed — backup path escapes backupDir: $filename")
             return null
@@ -132,7 +151,7 @@ object BackupManager {
 
         val targetDb = ServerConfig.dbFile
         return try {
-            // 1. Snapshot la DB courante en safety net (si elle existe)
+            // 1. Snapshot the current DB as a safety net (if it exists)
             val safetyNet = if (targetDb.exists()) {
                 val ts = timestampFormat.format(Date())
                 val safety = File(targetDb.parentFile, "${targetDb.name}.before-restore-$ts")
@@ -141,11 +160,11 @@ object BackupManager {
                 safety
             } else File("/dev/null")
 
-            // 2. Copy le backup en place
+            // 2. Copy the backup in place
             src.copyTo(targetDb, overwrite = true)
 
-            // 3. Wipe les WAL/SHM files si présents (le restore est une
-            //    DB complète, les WAL files ancien régime vont confuser SQLite)
+            // 3. Wipe the WAL/SHM files if present (the restore is a
+            //    complete DB, old-regime WAL files would confuse SQLite)
             File(targetDb.parentFile, "${targetDb.name}-wal").delete()
             File(targetDb.parentFile, "${targetDb.name}-shm").delete()
 
@@ -161,7 +180,7 @@ object BackupManager {
     }
 
     /**
-     * Applique la rétention : garde les N plus récents, supprime le reste.
+     * Applies retention: keeps the N most recent, deletes the rest.
      */
     @Synchronized
     fun cleanup() {
@@ -181,7 +200,7 @@ object BackupManager {
 }
 
 /**
- * Métadonnées d'un backup pour l'admin panel.
+ * Metadata of a backup for the admin panel.
  */
 data class BackupInfo(
     val filename: String,

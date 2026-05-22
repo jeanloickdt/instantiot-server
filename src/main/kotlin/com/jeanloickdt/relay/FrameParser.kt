@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // relay/FrameParser.kt
 package com.jeanloickdt.relay
 
@@ -5,28 +24,28 @@ import java.security.MessageDigest
 import java.util.Base64
 
 /**
- * Parser de trames binaires iWidgets v1
+ * Parser of iWidgets v1 binary frames
  *
- * Format trame complète :
+ * Complete frame format :
  * AA | VER(01) | LEN(2B LE) | DEV_COUNT | [DEV_LEN|DEV_ID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD... | CRC8
  *
- * Le server est un dumb relay — il ne lit jamais TYPE, EVENT ni le contenu du PAYLOAD.
- * Il extrait uniquement ce dont il a besoin pour router et stocker.
+ * The server is a dumb relay — it never reads TYPE, EVENT or the PAYLOAD content.
+ * It extracts only what it needs to route and store.
  *
- * Deux directions :
- *   App → Server → Device : trame avec DEV_COUNT + device UUIDs → trim → relay TCP
- *   Device → Server → App : trame avec DEV_COUNT=0 → extract widgetId + payload → broadcast WebSocket
+ * Two directions :
+ *   App → Server → Device : frame with DEV_COUNT + device UUIDs → trim → TCP relay
+ *   Device → Server → App : frame with DEV_COUNT=0 → extract widgetId + payload → WebSocket broadcast
  */
 object FrameParser {
 
-    // Taille minimale d'une trame valide
+    // Minimum size of a valid frame
     // AA(1) + VER(1) + LEN(2) + body(min 1) + CRC(1) = 6
     private const val MIN_FRAME_SIZE = 6
 
     private const val SYNC_BYTE: Int    = 0xAA
     private const val VERSION_BYTE: Int = 0x01
 
-    // Header fixe : AA + VER + LEN(2) = 4 bytes
+    // Fixed header : AA + VER + LEN(2) = 4 bytes
     private const val FIXED_HEADER_SIZE = 4
 
     // ================================================================
@@ -34,17 +53,17 @@ object FrameParser {
     // ================================================================
 
     /**
-     * Valide la trame — vérifie sync, version, taille minimale et CRC8.
-     * Le CRC ajoute une couche de protection applicative en plus de TCP.
+     * Validates the frame — checks sync, version, minimum size and CRC8.
+     * The CRC adds an application-level protection layer on top of TCP.
      */
     fun isValid(frame: ByteArray): Boolean {
         if (frame.size < MIN_FRAME_SIZE) return false
         if (frame[0].toInt() and 0xFF != SYNC_BYTE) return false
         if (frame[1].toInt() and 0xFF != VERSION_BYTE) return false
 
-        // vérifier le CRC8 — calculé sur le body (entre le header fixe et le CRC final)
+        // verify the CRC8 — computed over the body (between the fixed header and the final CRC)
         val bodyLength = (frame[2].toInt() and 0xFF) or ((frame[3].toInt() and 0xFF) shl 8)
-        val expectedFrameSize = FIXED_HEADER_SIZE + bodyLength + 1 // +1 pour CRC
+        val expectedFrameSize = FIXED_HEADER_SIZE + bodyLength + 1 // +1 for CRC
         if (frame.size < expectedFrameSize) return false
 
         val body = frame.copyOfRange(FIXED_HEADER_SIZE, FIXED_HEADER_SIZE + bodyLength)
@@ -56,12 +75,12 @@ object FrameParser {
 
     // ================================================================
     // EXTRACTION — Device → Server → App
-    // L'ESP envoie DEV_COUNT=0 — pas de device cible dans cette direction
+    // The ESP sends DEV_COUNT=0 — no target device in this direction
     // ================================================================
 
     /**
-     * Extrait le widget ID de la trame envoyée par l'ESP.
-     * Position : après AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
+     * Extracts the widget ID from the frame sent by the ESP.
+     * Position : after AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
      */
     fun extractWidgetId(frame: ByteArray): String? {
         return try {
@@ -83,12 +102,12 @@ object FrameParser {
     }
 
     /**
-     * Extrait le byte TYPE d'une trame device→server.
+     * Extracts the TYPE byte from a device→server frame.
      *
-     * Position : après AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
+     * Position : after AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
      *
-     * Utilisé pour distinguer les trames applicatives (widget updates)
-     * des trames de service comme le heartbeat (`TYPE = 0xFE`).
+     * Used to distinguish application frames (widget updates)
+     * from service frames such as the heartbeat (`TYPE = 0xFE`).
      */
     fun extractType(frame: ByteArray): Int? {
         return try {
@@ -113,8 +132,8 @@ object FrameParser {
     // STREAMING CLASSIFICATION — backpressure DeviceOutbox
     // ================================================================
 
-    // Codes iWidgets v1 — synchronisés avec app `BinaryProtocolCodes.kt`.
-    // Si ces valeurs changent côté app, il faut les mettre à jour ici.
+    // iWidgets v1 codes — synchronized with the app `BinaryProtocolCodes.kt`.
+    // If these values change on the app side, they must be updated here.
     private const val TYPE_GAUGE: Int    = 0x03
     private const val TYPE_JOYSTICK: Int = 0x04
     private const val TYPE_HLEVEL: Int   = 0x05
@@ -130,29 +149,29 @@ object FrameParser {
     // Device→App event codes (0x01..0x0E)
     private const val EV_SETVALUE: Int        = 0x01  // gauge/hlevel/vlevel/metric/slider
     private const val EV_UPDATE: Int          = 0x03  // gauge/hlevel/vlevel : value+min+max
-    private const val EV_ADD_POINT: Int       = 0x01  // chart : seriesId + y  (même code que EV_SETVALUE, disambiguated par TYPE)
+    private const val EV_ADD_POINT: Int       = 0x01  // chart : seriesId + y  (same code as EV_SETVALUE, disambiguated by TYPE)
     private const val EV_ADD_TIMED_POINT: Int = 0x02  // chart : seriesId + x + y
 
     /**
-     * Identifie les commandes émises par un **geste continu** (drag
-     * slider, joystick actif). Ces frames arrivent à 20 Hz pendant toute
-     * la durée du geste et saturent le pipe TCP → ESP si toutes
-     * transmises.
+     * Identifies the commands emitted by a **continuous gesture** (slider
+     * drag, active joystick). These frames arrive at 20 Hz for the whole
+     * duration of the gesture and saturate the TCP → ESP pipe if all of
+     * them are transmitted.
      *
-     * Streaming actuellement reconnus :
+     * Streaming currently recognized :
      * - HSlider `CMD_VALUE_CHANGING`    (type=0x0A, event=0x10)
      * - VSlider `CMD_VALUE_CHANGING`    (type=0x0B, event=0x10)
      * - Joystick `CMD_POSITION_CHANGED` (type=0x04, event=0x01)
      *
-     * Toute autre trame est considérée **discrète** et doit arriver
-     * intacte (Press, Release, Toggle, ValueChanged final, DragStarted,
-     * DragEnded, Released joystick, SetValue switch, etc.).
+     * Any other frame is considered **discrete** and must arrive
+     * intact (Press, Release, Toggle, final ValueChanged, DragStarted,
+     * DragEnded, joystick Released, SetValue switch, etc.).
      *
-     * Appelé sur la trame **originale** (avant trim) — le format est
-     * identique côté type/event.
+     * Called on the **original** frame (before trim) — the format is
+     * identical on the type/event side.
      *
-     * @return `true` si streaming (peut être droppée sous backpressure),
-     *         `false` sinon ou si la frame est invalide/incomplète.
+     * @return `true` if streaming (can be dropped under backpressure),
+     *         `false` otherwise or if the frame is invalid/incomplete.
      */
     fun isStreamingCommand(frame: ByteArray): Boolean {
         return try {
@@ -180,25 +199,25 @@ object FrameParser {
                 else                       -> false
             }
         } catch (e: Exception) {
-            // Trame mal formée → safe default : non-streaming, pas de drop
+            // Malformed frame → safe default : non-streaming, no drop
             false
         }
     }
 
     /**
-     * Extrait le PAYLOAD brut de la trame envoyée par l'ESP.
-     * Le server ne comprend pas le contenu — bytes opaques stockés en base64.
-     * Position : après WID | TYPE | EVENT — tout ce qui reste avant CRC
+     * Extracts the raw PAYLOAD from the frame sent by the ESP.
+     * The server does not understand the content — opaque bytes stored as base64.
+     * Position : after WID | TYPE | EVENT — everything left before CRC
      */
     fun extractPayload(frame: ByteArray): ByteArray? {
         return try {
             var offset = FIXED_HEADER_SIZE
 
-            // LEN — taille du body (little-endian)
+            // LEN — body size (little-endian)
             val bodyLength = ((frame[2].toInt() and 0xFF)) or
                     ((frame[3].toInt() and 0xFF) shl 8)
 
-            // fin du body = FIXED_HEADER_SIZE + bodyLength
+            // end of body = FIXED_HEADER_SIZE + bodyLength
             val bodyEnd = FIXED_HEADER_SIZE + bodyLength
 
             // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N
@@ -212,10 +231,10 @@ object FrameParser {
             val widgetIdLength = frame[offset++].toInt() and 0xFF
             offset += widgetIdLength
 
-            // skip TYPE + EVENT — le server ne les lit pas
+            // skip TYPE + EVENT — the server does not read them
             offset += 2
 
-            // PAYLOAD = tout ce qui reste avant CRC
+            // PAYLOAD = everything left before CRC
             val payloadLength = bodyEnd - offset
             if (payloadLength <= 0) ByteArray(0)
             else frame.copyOfRange(offset, offset + payloadLength)
@@ -225,15 +244,15 @@ object FrameParser {
     }
 
     // ================================================================
-    // EXTRACTION NUMÉRIQUE — pour l'historique des widgets analogiques
+    // NUMERIC EXTRACTION — for the history of analog widgets
     // ================================================================
 
     /**
-     * Échantillon numérique décodé d'une trame device→app.
+     * Numeric sample decoded from a device→app frame.
      *
-     * @param seriesId Pour chart multi-séries ("line1"). `null` pour les
-     *                 widgets simples (gauge, metric, level, slider).
-     * @param value    La valeur numérique principale (toujours un double).
+     * @param seriesId For a multi-series chart ("line1"). `null` for
+     *                 simple widgets (gauge, metric, level, slider).
+     * @param value    The main numeric value (always a double).
      */
     data class NumericSample(
         val seriesId: String?,
@@ -241,25 +260,25 @@ object FrameParser {
     )
 
     /**
-     * Décode une trame device→app et extrait un échantillon numérique
-     * si l'event contient un `value` (float) analogique.
+     * Decodes a device→app frame and extracts a numeric sample
+     * if the event contains an analog `value` (float).
      *
-     * Supporté :
-     * - Gauge / HLevel / VLevel : EV_SETVALUE (4B float), EV_UPDATE (value+min+max, on prend value)
+     * Supported :
+     * - Gauge / HLevel / VLevel : EV_SETVALUE (4B float), EV_UPDATE (value+min+max, we take value)
      * - Metric                  : EV_SETVALUE
-     * - HSlider / VSlider       : EV_SETVALUE (device→app, rare mais possible)
-     * - Chart                   : EV_ADD_POINT (seriesId + y), EV_ADD_TIMED_POINT (seriesId + x + y, on prend y)
+     * - HSlider / VSlider       : EV_SETVALUE (device→app, rare but possible)
+     * - Chart                   : EV_ADD_POINT (seriesId + y), EV_ADD_TIMED_POINT (seriesId + x + y, we take y)
      *
-     * Tout autre (boutons, switchs, joystick push, segSwitch, etc.) → `null`
-     * → pas d'historique numérique pour ce type.
+     * Anything else (buttons, switches, joystick push, segSwitch, etc.) → `null`
+     * → no numeric history for this type.
      *
-     * @return L'échantillon décodé, ou `null` si non-extractable / trame invalide.
+     * @return The decoded sample, or `null` if non-extractable / invalid frame.
      */
     fun extractNumericValue(frame: ByteArray): NumericSample? {
         return try {
             var offset = FIXED_HEADER_SIZE
 
-            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N (device→app : devCount=0 normalement)
+            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N (device→app : devCount=0 normally)
             val deviceCount = frame[offset++].toInt() and 0xFF
             repeat(deviceCount) {
                 val deviceIdLength = frame[offset++].toInt() and 0xFF
@@ -274,13 +293,13 @@ object FrameParser {
             val type  = frame[offset++].toInt() and 0xFF
             val event = frame[offset++].toInt() and 0xFF
 
-            // offset pointe maintenant sur le début du payload.
-            // Tous les payloads numériques se suffisent à eux-mêmes
-            // (pas besoin de connaître la fin du body pour ces cas).
+            // offset now points to the start of the payload.
+            // All numeric payloads are self-sufficient
+            // (no need to know the end of the body for these cases).
             when (type) {
                 TYPE_GAUGE, TYPE_HLEVEL, TYPE_VLEVEL -> when (event) {
                     EV_SETVALUE -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) }
-                    EV_UPDATE   -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) } // value, puis min, max — on garde value
+                    EV_UPDATE   -> readFloatAt(frame, offset)?.let { NumericSample(null, it.toDouble()) } // value, then min, max — we keep value
                     else        -> null
                 }
                 TYPE_METRIC -> when (event) {
@@ -304,7 +323,7 @@ object FrameParser {
                             readFloatAt(frame, seriesIdEnd)?.let { NumericSample(seriesId, it.toDouble()) }
                         }
                         EV_ADD_TIMED_POINT -> {
-                            // seriesId + x (4B) + y (4B) — on garde y (la valeur), x sert à l'axe temps côté app mais recordedAt fait le job pour nous
+                            // seriesId + x (4B) + y (4B) — we keep y (the value), x is used for the time axis on the app side but recordedAt does the job for us
                             if (seriesIdEnd + 8 > frame.size) return null
                             readFloatAt(frame, seriesIdEnd + 4)?.let { NumericSample(seriesId, it.toDouble()) }
                         }
@@ -318,7 +337,7 @@ object FrameParser {
         }
     }
 
-    /** Lit 4 octets little-endian en Float IEEE 754. `null` si hors borne. */
+    /** Reads 4 little-endian bytes as an IEEE 754 Float. `null` if out of bounds. */
     private fun readFloatAt(frame: ByteArray, offset: Int): Float? {
         if (offset + 4 > frame.size) return null
         val bits = (frame[offset].toInt() and 0xFF) or
@@ -330,12 +349,12 @@ object FrameParser {
 
     // ================================================================
     // EXTRACTION — App → Server → Device
-    // L'app envoie DEV_COUNT + [DEV_LEN|DEVICE_UUID]×N
+    // The app sends DEV_COUNT + [DEV_LEN|DEVICE_UUID]×N
     // ================================================================
 
     /**
-     * Extrait les device UUIDs cibles de la trame envoyée par l'app.
-     * Ce sont les UUIDs publics des devices — pas les tokens secrets.
+     * Extracts the target device UUIDs from the frame sent by the app.
+     * These are the public UUIDs of the devices — not the secret tokens.
      */
     fun extractDeviceIds(frame: ByteArray): List<String> {
         return try {
@@ -357,43 +376,43 @@ object FrameParser {
     }
 
     /**
-     * Trim le header DEV de la trame App → Device.
-     * Retire DEV_COUNT + [DEV_LEN|DEV_ID]×N et recalcule LEN + CRC.
+     * Trims the DEV header of the App → Device frame.
+     * Removes DEV_COUNT + [DEV_LEN|DEV_ID]×N and recomputes LEN + CRC.
      *
-     * Trame originale : AA | VER | LEN | DEV_COUNT | [DEV_UUID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
-     * Trame trimée    : AA | VER | LEN | 00                        | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
+     * Original frame : AA | VER | LEN | DEV_COUNT | [DEV_UUID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
+     * Trimmed frame  : AA | VER | LEN | 00                        | WID_LEN | WID | TYPE | EVENT | PAYLOAD | CRC
      *
-     * L'ESP reçoit une trame identique au mode Direct — DEV_COUNT = 0.
+     * The ESP receives a frame identical to Direct mode — DEV_COUNT = 0.
      */
     fun trimDeviceHeader(frame: ByteArray): ByteArray? {
         return try {
             var offset = FIXED_HEADER_SIZE
 
-            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N pour trouver le début de WID
+            // skip DEV_COUNT + [DEV_LEN|DEV_ID]×N to find the start of WID
             val deviceCount = frame[offset++].toInt() and 0xFF
             repeat(deviceCount) {
                 val deviceIdLength = frame[offset++].toInt() and 0xFF
                 offset += deviceIdLength
             }
 
-            // offset pointe maintenant sur WID_LEN
+            // offset now points to WID_LEN
             val widgetSectionStart = offset
 
-            // corps de la trame trimée : DEV_COUNT=0 + WID_LEN | WID | TYPE | EVENT | PAYLOAD
-            val widgetAndPayloadBytes = frame.copyOfRange(widgetSectionStart, frame.size - 1) // sans CRC
+            // body of the trimmed frame : DEV_COUNT=0 + WID_LEN | WID | TYPE | EVENT | PAYLOAD
+            val widgetAndPayloadBytes = frame.copyOfRange(widgetSectionStart, frame.size - 1) // without CRC
             val trimmedBody = byteArrayOf(0x00) + widgetAndPayloadBytes // DEV_COUNT = 0
 
-            // recalculer LEN
+            // recompute LEN
             val trimmedBodyLength = trimmedBody.size
             val trimmedLenBytes = byteArrayOf(
                 (trimmedBodyLength and 0xFF).toByte(),
                 ((trimmedBodyLength shr 8) and 0xFF).toByte()
             )
 
-            // recalculer CRC sur le nouveau body
+            // recompute CRC over the new body
             val trimmedCrc = computeCrc8(trimmedBody)
 
-            // assembler la trame finale trimée
+            // assemble the final trimmed frame
             byteArrayOf(
                 frame[0],               // AA
                 frame[1],               // VER
@@ -406,8 +425,8 @@ object FrameParser {
     }
 
     // ================================================================
-    // CRC8 — recalcul pour la trame trimée
-    // Polynôme 0x07 — CRC-8/SMBUS — identique à Crc8.kt côté app Android
+    // CRC8 — recomputation for the trimmed frame
+    // Polynomial 0x07 — CRC-8/SMBUS — identical to Crc8.kt on the Android app side
     // ================================================================
 
     private val crc8Table = ByteArray(256) { index ->
@@ -428,19 +447,19 @@ object FrameParser {
     }
 
     // ================================================================
-    // UTILITAIRES
+    // UTILITIES
     // ================================================================
 
     /**
-     * Encode un ByteArray en Base64 pour stockage SQLite.
-     * Le PAYLOAD est stocké opaque — le server ne le décode jamais.
+     * Encodes a ByteArray to Base64 for SQLite storage.
+     * The PAYLOAD is stored opaque — the server never decodes it.
      */
     fun encodePayloadToBase64(payloadBytes: ByteArray): String =
         Base64.getEncoder().encodeToString(payloadBytes)
 
     /**
-     * Calcule le SHA-256 du token device reçu en clair lors de la connexion TCP.
-     * Utilisé pour le lookup dans DeviceTable — le token en clair n'est jamais stocké.
+     * Computes the SHA-256 of the device token received in clear text during the TCP connection.
+     * Used for the lookup in DeviceTable — the clear-text token is never stored.
      */
     fun hashDeviceToken(deviceToken: String): String {
         val hashedBytes = MessageDigest.getInstance("SHA-256").digest(deviceToken.toByteArray())

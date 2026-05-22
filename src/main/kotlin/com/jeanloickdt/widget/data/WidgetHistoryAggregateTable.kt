@@ -1,22 +1,41 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/data/WidgetHistoryAggregateTable.kt
 package com.jeanloickdt.widget.data
 
 import org.jetbrains.exposed.sql.Table
 
 /**
- * Schéma partagé des 3 tables d'agrégation de l'historique :
+ * Shared schema of the 3 history aggregation tables:
  *   - widget_history_min   (bucket = 1 minute)
- *   - widget_history_hour  (bucket = 1 heure)
- *   - widget_history_day   (bucket = 1 jour)
+ *   - widget_history_hour  (bucket = 1 hour)
+ *   - widget_history_day   (bucket = 1 day)
  *
- * Chaque bucket stocke :
- *   - `avg_value` : moyenne des échantillons raw tombant dans la fenêtre
- *   - `min_value` / `max_value` : extrema (utile pour band charts)
- *   - `sample_count` : nombre de points agrégés
- *   - `bucket_at` : timestamp du début du bucket (aligné sur la granularité)
+ * Each bucket stores:
+ *   - `avg_value`: average of the raw samples falling within the window
+ *   - `min_value` / `max_value`: extrema (useful for band charts)
+ *   - `sample_count`: number of aggregated points
+ *   - `bucket_at`: start timestamp of the bucket (aligned on the granularity)
  *
- * Unicité via INDEX UNIQUE `(widget_id, COALESCE(series_id, ''), bucket_at)`
- * créé dans `DatabaseFactory.init` → INSERT OR IGNORE idempotent.
+ * Uniqueness via UNIQUE INDEX `(widget_id, COALESCE(series_id, ''), bucket_at)`
+ * created in `DatabaseFactory.init` → idempotent INSERT OR IGNORE.
  */
 abstract class WidgetHistoryAggregateTable(tableName: String) : Table(tableName) {
     val id          = integer("id").autoIncrement()

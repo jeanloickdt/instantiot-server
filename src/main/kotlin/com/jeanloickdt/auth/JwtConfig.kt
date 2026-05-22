@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.auth
 
 import com.auth0.jwt.JWT
@@ -11,11 +30,11 @@ import java.util.UUID
 
 object JwtConfig {
 
-    // 1 an. Self-hosted IoT : le serveur appartient à l'user, sur son LAN —
-    // pas de threat model SaaS multi-tenant qui justifierait une rotation
-    // courte + refresh token. Aligné sur le standard du domaine (Home
-    // Assistant long-lived tokens). Évite la coupure silencieuse des
-    // dashboards always-on (tablette kiosk) au bout de 30j.
+    // 1 year. Self-hosted IoT: the server belongs to the user, on their LAN —
+    // no multi-tenant SaaS threat model that would justify short
+    // rotation + refresh token. Aligned with the domain standard (Home
+    // Assistant long-lived tokens). Avoids silently cutting off
+    // always-on dashboards (kiosk tablet) after 30 days.
     private const val EXPIRY_MS = 365L * 24 * 60 * 60 * 1000
 
     val secret: String by lazy {
@@ -26,14 +45,14 @@ object JwtConfig {
             val generated = UUID.randomUUID().toString() + UUID.randomUUID().toString()
             configFile.parentFile.mkdirs()
             configFile.writeText(generated)
-            // permissions owner-only — protège contre les autres utilisateurs du système
+            // owner-only permissions — protects against other users of the system
             try {
                 Files.setPosixFilePermissions(
                     configFile.toPath(),
                     PosixFilePermissions.fromString("rw-------")
                 )
             } catch (_: UnsupportedOperationException) {
-                // Windows — POSIX permissions non supportées
+                // Windows — POSIX permissions not supported
             }
             generated
         }

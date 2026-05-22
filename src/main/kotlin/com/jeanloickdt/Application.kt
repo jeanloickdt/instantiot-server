@@ -1,6 +1,24 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt
 
-import com.jeanloickdt.auth.LicenceValidator
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.SqliteUserRepository
@@ -56,19 +74,20 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
+import java.io.File
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
 fun main(args: Array<String>) {
     val startupLogger = LoggerFactory.getLogger("InstantIoT")
 
-    // charger la config AVANT de démarrer le serveur
+    // load the config BEFORE starting the server
     com.jeanloickdt.common.ServerConfig.load()
 
-    // Auto-bind ports : si le port préféré est occupé (Tomcat,
-    // Jenkins, autre InstantIoT en parallèle), on essaie +1, +2, ...
-    // jusqu'à +5. Évite "ne marche pas, j'ai pas idée pourquoi" pour
-    // le maker qui clique sur l'app fraîchement installée.
+    // Auto-bind ports: if the preferred port is taken (Tomcat,
+    // Jenkins, another InstantIoT running in parallel), we try +1, +2, ...
+    // up to +5. Avoids "doesn't work, no idea why" for the
+    // maker who clicks on the freshly installed app.
     val httpPort = try {
         com.jeanloickdt.common.PortFinder.findAvailable(
             com.jeanloickdt.common.ServerConfig.httpPort,
@@ -87,16 +106,16 @@ fun main(args: Array<String>) {
         startupLogger.error(e.message)
         System.exit(1); return
     }
-    // Synchronise les running ports — mDNS, tray, /api/status liront
-    // ces valeurs (pas la config désirée) pour annoncer la bonne URL.
+    // Synchronize the running ports — mDNS, tray, /api/status will read
+    // these values (not the desired config) to announce the correct URL.
     com.jeanloickdt.common.ServerConfig.markRunningPorts(http = httpPort, tcp = tcpPort)
 
     startupLogger.info("Starting InstantIoT Server v${com.jeanloickdt.common.ServerConfig.version}")
     startupLogger.info("HTTP port: $httpPort | TCP port: $tcpPort")
 
     try {
-        // system tray — icone dans la barre des taches (desktop)
-        // si pas supporte (serveur headless) → mode console silencieux
+        // system tray — icon in the taskbar (desktop)
+        // if not supported (headless server) → silent console mode
         val trayActive = com.jeanloickdt.common.SystemTrayManager.init(httpPort)
         if (!trayActive) {
             startupLogger.info("Open http://localhost:$httpPort in your browser")
@@ -108,15 +127,15 @@ fun main(args: Array<String>) {
             module = Application::module
         ).start(wait = true)
     } catch (e: Exception) {
-        // Avec le PortFinder ci-dessus, on ne devrait plus voir ce cas
-        // (sauf race rare). Garde le fallback log pour info.
+        // With the PortFinder above, this case should no longer occur
+        // (except for a rare race). Keep the fallback log for info.
         startupLogger.error("FAILED TO START", e)
         System.exit(1)
     }
 }
 
 // ============================================================
-// Dépendances globales — instanciées une seule fois au démarrage
+// Global dependencies — instantiated once at startup
 // ============================================================
 val userRepository: UserRepository               = SqliteUserRepository()
 val projectRepository: ProjectRepository         = SqliteProjectRepository()
@@ -133,7 +152,7 @@ private val logger = LoggerFactory.getLogger("Application")
 fun Application.module() {
 
     // ============================================================
-    // Plugins globaux
+    // Global plugins
     // ============================================================
     install(ContentNegotiation) { json() }
     install(StatusPages) {
@@ -144,7 +163,7 @@ fun Application.module() {
     }
 
     install(CORS) {
-        anyHost()  // permissif pour la beta — le client restreint via reverse proxy
+        anyHost()  // permissive for the beta — the client restricts via reverse proxy
         allowHeader(HttpHeaders.ContentType)
         allowHeader(HttpHeaders.Authorization)
         allowMethod(HttpMethod.Patch)
@@ -161,8 +180,8 @@ fun Application.module() {
     }
 
     // ============================================================
-    // Base de données — init SQLite + WAL + création des tables
-    // Ajouter les tables des nouveaux modules ici au fur et à mesure
+    // Database — init SQLite + WAL + table creation
+    // Add the tables of new modules here as they are introduced
     // ============================================================
     DatabaseFactory.init(
         UserTable,
@@ -176,18 +195,18 @@ fun Application.module() {
         WidgetHistoryDayTable
     )
 
-    // Reset stale online state : si le server a été kill abruptement
-    // (Ctrl+C qui skip le `finally` de `handleDevice`), la DB peut
-    // garder `isOnline=true` pour des devices qui n'ont plus de session
-    // TCP active. Au démarrage, aucune session n'existe → tout doit
-    // être offline, les devices passeront online dès qu'ils se
-    // reconnecteront et enverront leur handshake.
+    // Reset stale online state: if the server was killed abruptly
+    // (Ctrl+C that skips the `finally` of `handleDevice`), the DB may
+    // keep `isOnline=true` for devices that no longer have an active
+    // TCP session. At startup, no session exists → everything must
+    // be offline, devices will go online as soon as they
+    // reconnect and send their handshake.
     deviceRepository.markAllOffline()
 
-    // flush final au shutdown — aucune donnée du buffer perdue
-    // Refonte iWidgets : on flushe AUSSI tous les buckets RAM (y compris
-    // les buckets en cours non encore fermés) → zéro perte au restart
-    // contrôlé. Au crash brutal, on perd au pire 1 min/h/24h selon tier.
+    // final flush at shutdown — no buffer data lost
+    // iWidgets rework: we ALSO flush all RAM buckets (including
+    // in-progress buckets not yet closed) → zero loss on a controlled
+    // restart. On a hard crash, we lose at worst 1 min/h/24h per tier.
     monitor.subscribe(ApplicationStopping) {
         kotlinx.coroutines.runBlocking {
             flushHistoryBuffer(widgetHistoryRepository)
@@ -200,91 +219,80 @@ fun Application.module() {
         }
     }
 
-    // mDNS / Bonjour — désinscrit le service avant que les sockets ferment
-    // pour que les apps voient le serveur disparaître proprement.
+    // mDNS / Bonjour — unregisters the service before the sockets close
+    // so that apps see the server disappear cleanly.
     monitor.subscribe(ApplicationStopping) {
         com.jeanloickdt.discovery.MdnsPublisher.stop()
     }
 
     // ============================================================
-    // Licence — charger depuis ~/.instantiot/licence.key
+    // Bootstrap / admin recovery — default admin account
+    //
+    // V1.3: no more licensing system. The server always starts
+    // ready with an admin account.
+    //
+    //   • First startup (no admin in DB) → creates admin/admin.
+    //   • Recovery: if the file ~/.instantiot/reset-admin exists,
+    //     we reset the admin's password to "admin" then
+    //     delete the file. This is the recovery mechanism
+    //     when the admin has forgotten their password — gated by
+    //     filesystem access to the machine (only the owner can create
+    //     this file), so no network attack surface.
+    //
+    // The admin is prompted to change this default password after
+    // their first login (POST /api/users/me/password).
     // ============================================================
-    LicenceValidator.load()
+    run {
+        val bootLog = LoggerFactory.getLogger("InstantIoT")
+        val resetMarker = File("${System.getProperty("user.home")}/.instantiot/reset-admin")
+        val existingAdmin = userRepository.findByUsername("admin")
 
-    // ============================================================
-    // Bootstrap admin — V1 first-launch flow
-    //
-    // PLUS de création d'admin avec password random au boot.
-    // Le bootstrap est maintenant déclenché par POST /api/licence
-    // (cf. licenceRoute) avec password = licence.id, ce qui :
-    //   - aligne les credentials par défaut sur la valeur que l'user
-    //     reçoit dans son email d'achat (mémorisable, pas un secret
-    //     random qui scrolle dans les logs)
-    //   - évite d'avoir un admin "orphelin" sur un serveur sans
-    //     licence (impossible de se connecter de toute façon : login
-    //     sans licence dirige vers /setup côté front)
-    //
-    // SAUF cas recovery : licence.key restauré depuis backup mais DB
-    // vide (perte SQLite, restore partiel). Là on recrée silencieusement
-    // l'admin avec licence.id pour que l'user puisse re-login. Sans
-    // ça il serait coincé sur /login sans pouvoir s'authentifier (et
-    // le setup screen ne s'afficherait pas puisque licence active).
-    //
-    // generateAdminPassword() reste défini plus bas mais inutilisé —
-    // gardé temporairement comme référence, à supprimer dans un
-    // commit ultérieur quand le flow V1 sera complètement validé.
-    // ============================================================
-    val licenceInfo = LicenceValidator.getLicenceInfo()
-    if (licenceInfo != null && LicenceValidator.isActivated() &&
-        userRepository.findByUsername("admin") == null) {
-        val pwdHash = BCrypt.hashpw(licenceInfo.id, BCrypt.gensalt())
-        userRepository.create("admin", pwdHash, role = "admin")
-        LoggerFactory.getLogger("InstantIoT").warn(
-            "Recovery bootstrap: licence valid but admin missing — " +
-                "re-created admin from licence (id prefix={})",
-            licenceInfo.id.take(8)
-        )
+        when {
+            existingAdmin == null -> {
+                val pwdHash = BCrypt.hashpw("admin", BCrypt.gensalt())
+                userRepository.create("admin", pwdHash, role = "admin")
+                bootLog.warn(
+                    "Bootstrap: admin user created with default credentials " +
+                        "admin/admin — change the password after first login"
+                )
+            }
+            resetMarker.exists() -> {
+                val pwdHash = BCrypt.hashpw("admin", BCrypt.gensalt())
+                userRepository.updatePassword(existingAdmin.id, pwdHash)
+                bootLog.warn(
+                    "Admin password reset to default 'admin' (reset-admin marker found)"
+                )
+            }
+        }
+
+        // Always clean up the marker if it exists — whether it was
+        // used or not (case: marker present on the very first boot, the
+        // admin had just been created with admin/admin anyway).
+        if (resetMarker.exists() && resetMarker.delete()) {
+            bootLog.info("reset-admin marker consumed and deleted")
+        }
     }
 
     // ============================================================
-    // Setup state — log au boot pour visibilité opérationnelle
-    // (V1 first-launch flow). Le service combine licence + DB +
-    // marker file et auto-heal si marker absent mais admin existe.
-    // Sera utilisé par GET /api/status pour rediriger le browser
-    // vers /setup, /welcome ou /login selon l'état.
-    // ============================================================
-    // SetupStateStore partagé entre le service (lecture) et le route
-    // /api/setup/welcome (écriture via markComplete). Une seule instance
-    // = pas de race / divergence d'état.
-    val setupStateStore = com.jeanloickdt.auth.SetupStateStore()
-    val setupStateService = com.jeanloickdt.auth.SetupStateService(
-        userRepository  = userRepository,
-        setupStateStore = setupStateStore
-    )
-    LoggerFactory.getLogger("InstantIoT").info(
-        "Setup state at boot: ${setupStateService.compute()}"
-    )
-
-    // ============================================================
-    // Authentification JWT — doit être configuré avant les routes
+    // JWT authentication — must be configured before the routes
     // ============================================================
     configureAuth(userRepository)
 
     // ============================================================
-    // Relay devices — TCP port 9001
-    // Chaque connexion ESP dans sa propre coroutine IO
+    // Device relay — TCP port 9001
+    // Each ESP connection in its own IO coroutine
     // ============================================================
     startDeviceRelay(deviceRepository, widgetRepository, tcpPort = com.jeanloickdt.common.ServerConfig.runningTcpPort)
 
     // ============================================================
-    // mDNS / Bonjour — annonce du service _instantiot._tcp
-    // À ce stade les ports HTTP + TCP sont bindés, on peut publier.
-    // Échec non-fatal : si JmDNS ne se lance pas, l'app peut toujours
-    // ajouter le serveur manuellement.
+    // mDNS / Bonjour — announces the _instantiot._tcp service
+    // At this point the HTTP + TCP ports are bound, we can publish.
+    // Non-fatal failure: if JmDNS does not start, the app can still
+    // add the server manually.
     // ============================================================
-    // V1 : nom configurable via admin panel (sinon fallback HOSTNAME).
-    // Permet à l'user qui a 2+ serveurs sur le même LAN de les
-    // distinguer dans l'app mDNS Discovery (Pi du salon, etc.).
+    // V1: name configurable via admin panel (otherwise fallback HOSTNAME).
+    // Lets a user with 2+ servers on the same LAN distinguish them
+    // in the mDNS Discovery app (living-room Pi, etc.).
     val displayName = com.jeanloickdt.common.ServerConfig.serverDisplayName
         .takeIf { it.isNotBlank() }
         ?: System.getenv("HOSTNAME")
@@ -293,17 +301,17 @@ fun Application.module() {
     com.jeanloickdt.discovery.MdnsPublisher.start(displayName = displayName)
 
     // ============================================================
-    // Flush history buffer → SQLite WAL batch toutes les 5s
+    // Flush history buffer → SQLite WAL batch every 5s
     //
-    // Refonte iWidgets (architecture Blynk-style) : un seul job 5s
-    // drain les 5 sources et persiste en batch :
+    // iWidgets rework (Blynk-style architecture): a single 5s job
+    // drains the 5 sources and persists in batch:
     //   - historyBuffer        → widget_history (opaque events)
     //   - numericHistoryBuffer → widget_history_numeric (raw, opt-in)
     //   - HistoryAggregators.minute closed → widget_history_min
     //   - HistoryAggregators.hour  closed → widget_history_hour
     //   - HistoryAggregators.day   closed → widget_history_day
     //
-    // La DB n'est JAMAIS dans le chemin critique du relay device.
+    // The DB is NEVER on the critical path of the device relay.
     // ============================================================
     launch(Dispatchers.IO) {
         while (true) {
@@ -319,14 +327,14 @@ fun Application.module() {
     }
 
     // ============================================================
-    // Cleanup périodique par tier (rétention configurable)
+    // Periodic cleanup per tier (configurable retention)
     //
-    // Plus de downsampling SQL différé — les agrégateurs RAM
-    // alimentent les tables agrégées en temps réel. Seul reste le
-    // cleanup des vieux buckets selon la rétention de chaque tier.
+    // No more deferred SQL downsampling — the RAM aggregators
+    // feed the aggregated tables in real time. All that remains is
+    // cleaning up old buckets according to each tier's retention.
     //
-    // Tourne 1× par heure (la rétention est en jours, pas besoin de
-    // précision minute-par-minute pour purger).
+    // Runs once per hour (retention is in days, no need for
+    // minute-by-minute precision to purge).
     // ============================================================
     launch(Dispatchers.IO) {
         while (true) {
@@ -334,23 +342,23 @@ fun Application.module() {
             val now = System.currentTimeMillis()
             val dayMs = 24L * 3600_000L
 
-            // opaque (widget_history) — événements non-numériques
+            // opaque (widget_history) — non-numeric events
             val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * dayMs
             widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
 
-            // raw numérique (widget_history_numeric) — opt-in
+            // raw numeric (widget_history_numeric) — opt-in
             val rawCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * dayMs
             widgetHistoryNumericRepository.deleteOlderThan(rawCutoff)
 
-            // Buckets 1 min
+            // 1 min buckets
             val minCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionMinDays.toLong() * dayMs
             widgetHistoryMinRepository.deleteOlderThan(minCutoff)
 
-            // Buckets 1 h
+            // 1 h buckets
             val hourCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionHourDays.toLong() * dayMs
             widgetHistoryHourRepository.deleteOlderThan(hourCutoff)
 
-            // Buckets 1 jour — purge SI retention > 0, sinon garder indéfiniment
+            // 1 day buckets — purge IF retention > 0, otherwise keep indefinitely
             val dayRetention = com.jeanloickdt.common.ServerConfig.historyRetentionDayDays
             if (dayRetention > 0) {
                 val dayCutoff = now - dayRetention.toLong() * dayMs
@@ -360,22 +368,22 @@ fun Application.module() {
     }
 
     // ============================================================
-    // Backup automatique SQLite (V1 Phase 4)
-    // Snapshot via VACUUM INTO toutes les N heures + purge selon
-    // rétention. Hot-reload : si l'admin change l'interval/retention
-    // dans le panel, la prochaine itération utilise les nouveaux
-    // params (lecture de ServerConfig à chaque tour).
+    // Automatic SQLite backup (V1 Phase 4)
+    // Snapshot via VACUUM INTO every N hours + purge according to
+    // retention. Hot-reload: if the admin changes the interval/retention
+    // in the panel, the next iteration uses the new
+    // params (reads ServerConfig on each round).
     // ============================================================
     launch(Dispatchers.IO) {
-        // Petit délai initial pour ne pas snapshot pendant le boot
-        // (laisse le serveur s'installer / faire son init de DB)
+        // Small initial delay so we don't snapshot during boot
+        // (lets the server settle / do its DB init)
         delay(60_000)
         while (true) {
             if (com.jeanloickdt.common.ServerConfig.backupEnabled) {
                 com.jeanloickdt.backup.BackupManager.snapshotNow()
                 com.jeanloickdt.backup.BackupManager.cleanup()
             }
-            // Re-lecture de l'interval à chaque iter — hot-reload friendly
+            // Re-read the interval on each iter — hot-reload friendly
             val intervalMs = com.jeanloickdt.common.ServerConfig.backupIntervalHours
                 .toLong() * 3600_000L
             delay(intervalMs)
@@ -383,43 +391,29 @@ fun Application.module() {
     }
 
     // ============================================================
-    // Relay app — WebSocket /ws/app
+    // App relay — WebSocket /ws/app
     // ============================================================
     configureAppRelay(projectRepository)
 
     // ============================================================
-    // Routes REST
+    // REST routes
     // ============================================================
     routing {
         staticResources("/", "static")
 
-        // GET /api/status — état du server — toujours accessible
-        // V1 : enrichi avec setup_state + licence summary pour que
-        // le frontend route vers /setup, /welcome ou /login selon
-        // l'état du first-launch flow.
+        // GET /api/status — server state — always accessible.
+        // V1.3: no more license or first-launch flow → the server
+        // always starts ready. setup_state is always "ready"
+        // (field kept for compat with the admin panel).
         get("/api/status") {
-            val state = setupStateService.compute()
-            val info  = LicenceValidator.getLicenceInfo()
             call.respond(StatusResponse(
-                status           = "ok",
-                setupState       = when (state) {
-                    com.jeanloickdt.auth.SetupState.NeedsLicence -> "needs_licence"
-                    com.jeanloickdt.auth.SetupState.NeedsWelcome -> "needs_welcome"
-                    com.jeanloickdt.auth.SetupState.Ready        -> "ready"
-                },
-                licence          = if (info != null && LicenceValidator.isActivated()) {
-                    com.jeanloickdt.common.LicenceSummary(
-                        id        = info.id,
-                        expiresAt = info.expiresAt
-                    )
-                } else null,
-                // legacy fields — derived from same source for compat
-                setup_required   = userRepository.count() == 0L,
-                licence_required = !LicenceValidator.isActivated()
+                status         = "ok",
+                setupState     = "ready",
+                setup_required = userRepository.count() == 0L
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository, setupStateStore)
+        authRoutes(userRepository, projectRepository, deviceRepository)
         projectRoutes(
             projectRepository, deviceRepository, widgetRepository,
             widgetHistoryRepository, widgetHistoryNumericRepository,
@@ -431,23 +425,13 @@ fun Application.module() {
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository
         )
 
-        // TODO: ajouter les routes des nouveaux modules ici
+        // TODO: add the routes of new modules here
     }
 }
 
 // ============================================================
-// Génération password admin — 16 caractères alphanumériques
-// SecureRandom pour génération cryptographiquement sûre
-// ============================================================
-private fun generateAdminPassword(): String {
-    val chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    val random = java.security.SecureRandom()
-    return (1..16).map { chars[random.nextInt(chars.length)] }.joinToString("")
-}
-
-// ============================================================
 // Flush history buffer → SQLite WAL batch insert
-// Appelé toutes les 5s + au shutdown
+// Called every 5s + at shutdown
 // ============================================================
 private suspend fun flushHistoryBuffer(widgetHistoryRepository: WidgetHistoryRepository) {
     val batch = mutableListOf<HistoryEntry>()
@@ -459,7 +443,7 @@ private suspend fun flushHistoryBuffer(widgetHistoryRepository: WidgetHistoryRep
 
     val historyRows = batch.map { entry ->
         WidgetHistoryRow(
-            id         = 0,              // auto-increment — ignoré à l'insert
+            id         = 0,              // auto-increment — ignored on insert
             widgetId   = entry.widgetId,
             projectId  = entry.projectId,
             ownerId    = entry.ownerId,
@@ -498,11 +482,11 @@ private suspend fun flushNumericHistoryBuffer(repo: WidgetHistoryNumericReposito
 }
 
 // ============================================================
-// Flush des buckets FERMÉS des agrégateurs RAM (job 5s)
+// Flush the CLOSED buckets of the RAM aggregators (5s job)
 //
-// Un bucket est "fermé" quand sa fenêtre (bucketAt + bucketSizeMs)
-// est ≤ now. Le bucket courant reste en RAM pour continuer à
-// accumuler les samples qui arrivent pendant sa fenêtre.
+// A bucket is "closed" when its window (bucketAt + bucketSizeMs)
+// is ≤ now. The current bucket stays in RAM to keep
+// accumulating the samples that arrive during its window.
 // ============================================================
 private suspend fun flushClosedAggregatorBuckets(
     minRepo: WidgetHistoryAggregateRepository,
@@ -516,16 +500,16 @@ private suspend fun flushClosedAggregatorBuckets(
 }
 
 // ============================================================
-// Flush TOUS les buckets des agrégateurs (y compris en cours)
+// Flush ALL the aggregator buckets (including in-progress ones)
 //
-// Appelé UNIQUEMENT au shutdown propre via ApplicationStopping
-// pour ne rien perdre lors d'un restart contrôlé. Une fois flushé,
-// les agrégateurs sont vides — les samples qui arriveraient après
-// ce point ne sont plus collectés (le server s'arrête).
+// Called ONLY on a clean shutdown via ApplicationStopping
+// so nothing is lost on a controlled restart. Once flushed,
+// the aggregators are empty — samples arriving after
+// this point are no longer collected (the server is stopping).
 //
-// Pas de broadcast WS au shutdown : les apps sont en train de perdre
-// leur connexion de toute façon (et re-fetcheront leur historique
-// complet au prochain open).
+// No WS broadcast at shutdown: the apps are losing their
+// connection anyway (and will re-fetch their full history
+// on the next open).
 // ============================================================
 private suspend fun flushAllAggregatorBuckets(
     minRepo: WidgetHistoryAggregateRepository,
@@ -538,11 +522,11 @@ private suspend fun flushAllAggregatorBuckets(
 }
 
 /**
- * Convertit les snapshots en `AggregateInsertRow` + insertBatch.
- * Si [broadcast] = true, emet un control event "bucket_updated" pour
- * chaque snapshot apres l'insert DB reussi. Permet aux charts cote
- * app en mode preset historique de mettre a jour leur fenetre sans
- * re-fetch HTTP.
+ * Converts the snapshots into `AggregateInsertRow` + insertBatch.
+ * If [broadcast] = true, emits a "bucket_updated" control event for
+ * each snapshot after the successful DB insert. Lets app-side charts
+ * in historical preset mode update their window without
+ * re-fetching over HTTP.
  */
 private suspend fun flushAggregatorTier(
     repo: WidgetHistoryAggregateRepository,

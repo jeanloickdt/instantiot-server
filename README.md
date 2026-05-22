@@ -1,52 +1,108 @@
-# instantiot-server
+# InstantIoT Server
 
-This project was created using the [Ktor Project Generator](https://start.ktor.io).
+**Self-hosted, open-source IoT relay server.** It relays real-time
+communication between IoT boards (ESP32 / Arduino) and the InstantIoT mobile
+app — multi-device connections, time-series history, web admin panel.
 
-Here are some useful links to get you started:
+No cloud, no subscription: install it on your own computer or a Raspberry Pi,
+it runs at home.
 
-- [Ktor Documentation](https://ktor.io/docs/home.html)
-- [Ktor GitHub page](https://github.com/ktorio/ktor)
-- The [Ktor Slack chat](https://app.slack.com/client/T09229ZC6/C0A974TJ9). You'll need to [request an invite](https://surveys.jetbrains.com/s3/kotlin-slack-sign-up) to join.
+> Stack: **Kotlin · Ktor · Netty · SQLite (Exposed)** · JDK 21.
+> License: **GNU AGPLv3** (see [§ License](#license)).
+
+---
 
 ## Features
 
-Here's a list of features included in this project:
+- **Real-time relay** between TCP (boards) and WebSocket (apps) via the
+  `iWidgets v1` binary protocol
+- **Multi-user**: admin/user accounts, JWT auth
+- **Time-series history** with 3 aggregated tiers (minute / hour / day) plus an
+  optional raw tier
+- **mDNS discovery**: the app finds the server automatically on the LAN
+- **Web admin panel**: stats, user management, config, backups
+- **Automatic SQLite backups** (`VACUUM INTO`, configurable retention)
+- **Native installers** `.deb` / `.dmg` / `.msi` (jpackage)
 
-| Name                                                                   | Description                                                                        |
-| ------------------------------------------------------------------------|------------------------------------------------------------------------------------ |
-| [Routing](https://start.ktor.io/p/routing)                             | Provides a structured routing DSL                                                  |
-| [Static Content](https://start.ktor.io/p/static-content)               | Serves static files from defined locations                                         |
-| [Authentication](https://start.ktor.io/p/auth)                         | Provides extension point for handling the Authorization header                     |
-| [Authentication JWT](https://start.ktor.io/p/auth-jwt)                 | Handles JSON Web Token (JWT) bearer authentication scheme                          |
-| [WebSockets](https://start.ktor.io/p/ktor-websockets)                  | Adds WebSocket protocol support for bidirectional client connections               |
-| [Status Pages](https://start.ktor.io/p/status-pages)                   | Provides exception handling for routes                                             |
-| [Content Negotiation](https://start.ktor.io/p/content-negotiation)     | Provides automatic content conversion according to Content-Type and Accept headers |
-| [kotlinx.serialization](https://start.ktor.io/p/kotlinx-serialization) | Handles JSON serialization using kotlinx.serialization library                     |
+Detailed architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
-## Building & Running
+---
 
-To build or run the project, use one of the following tasks:
+## Quick start
 
-| Task                                    | Description                                                          |
-| -----------------------------------------|---------------------------------------------------------------------- |
-| `./gradlew test`                        | Run the tests                                                        |
-| `./gradlew build`                       | Build everything                                                     |
-| `./gradlew buildFatJar`                 | Build an executable JAR of the server with all dependencies included |
-| `./gradlew buildImage`                  | Build the docker image to use with the fat JAR                       |
-| `./gradlew publishImageToLocalRegistry` | Publish the docker image locally                                     |
-| `./gradlew run`                         | Run the server                                                       |
-| `./gradlew runDocker`                   | Run using the local docker image                                     |
+### Option A — native installer
 
-If the server starts successfully, you'll see the following output:
+Download the installer for your OS from the [Releases](../../releases) page
+(`.deb`, `.dmg`, `.msi`, including `.deb arm64` for Raspberry Pi), install,
+and launch.
+
+### Option B — from source
+
+Requirement: **JDK 21**.
+
+```bash
+./gradlew run               # run the server in dev
+./gradlew buildFatJar       # → build/libs/*-all.jar (standalone JAR)
+java -jar build/libs/instantiot-server-all.jar
+./gradlew packageInstaller  # → build/jpackage/*.{deb,dmg,msi}
+```
+
+On startup you will see:
 
 ```
-2024-12-04 14:32:45.584 [main] INFO  Application - Application started in 0.303 seconds.
-2024-12-04 14:32:45.682 [main] INFO  Application - Responding at http://0.0.0.0:8080
+Starting InstantIoT Server v1.x.x
+HTTP port: 8080 | TCP port: 9001
 ```
 
-## Device protocol quick reference
+Open **http://localhost:8080** → admin panel.
 
-Full technical documentation: [`doc-and-test/doc-technique.html`](doc-and-test/doc-technique.html).
+---
+
+## First launch & admin account
+
+On the very first start, the server creates a default admin account:
+
+```
+username: admin
+password: admin
+```
+
+> Log in, then **change the password** immediately
+> (admin panel → settings).
+
+### Forgot the admin password
+
+There is no network-based recovery (by design — zero attack surface). On the
+machine hosting the server:
+
+```bash
+touch ~/.instantiot/reset-admin
+# restart the server
+```
+
+On boot, the server resets the admin password back to `admin` and deletes the
+file. Secured by filesystem access = proof that you own the machine.
+
+---
+
+## Configuration
+
+File `~/.instantiot/server.properties` (created on first boot). HTTP / TCP
+ports, per-tier history retention, backup interval, registration toggle, etc.
+Several settings are hot-reloaded (applied without a restart).
+
+Runtime data, all under `~/.instantiot/`:
+
+| File | Purpose |
+|---|---|
+| `instantiot.db` | SQLite database (users, projects, devices, widgets, history) |
+| `server.properties` | Configuration |
+| `secret.key` | JWT secret (generated once) — **do not share** |
+| `reset-admin` | Reset marker (see above) |
+
+---
+
+## Device protocol — quick reference
 
 ### TCP handshake (port `tcp.port`, default 9001)
 
@@ -54,32 +110,67 @@ Full technical documentation: [`doc-and-test/doc-technique.html`](doc-and-test/d
 [PAYLOAD_LEN(1B) | PAYLOAD_BYTES]
 ```
 
-- `payload = "token"` — legacy, server soTimeout = **90s**
-- `payload = "token:heartbeatMs"` — adaptive, server soTimeout = `heartbeatMs × 2.5` (clamp 2s..120s)
-
-Example (Arduino lib ≥ heartbeat):
-
-```cpp
-InstantIoTWiFiServer instant(ip, port, token);
-void setup() {
-    instant.setHeartbeat(5000);   // optional — default already 5000ms
-    instant.begin(ssid, pass);
-}
-void loop() { instant.loop(); }
-```
+- `payload = "token"` — legacy, server soTimeout = **90 s**
+- `payload = "token:heartbeatMs"` — adaptive, soTimeout = `heartbeatMs × 2.5`
+  (clamped 2 s … 120 s)
 
 ### Heartbeat frame
 
-iWidgets v1 binary frame with `TYPE = 0xFE`, `WID_LEN = 0`, empty payload.
-Emitted by the Arduino lib every `heartbeatMs` ms. Server skips dispatch
-but the byte reception resets the socket read timeout.
+An `iWidgets v1` frame with `TYPE = 0xFE`, `WID_LEN = 0`, empty payload.
+Emitted by the Arduino library every `heartbeatMs`. The server does not
+dispatch it, but receiving the byte resets the socket read timeout.
 
-With `heartbeat = 5000ms`, an unplugged / crashed device is detected
-offline in **≤ 12.5s**.
+With `heartbeat = 5000 ms`, an unplugged / crashed board is detected offline
+in **≤ 12.5 s**.
 
-### Startup hygiene
+---
 
-At boot, the server calls `deviceRepository.markAllOffline()` to clean up
-stale `isOnline=true` left by an abrupt kill (Ctrl+C that skipped the
-`finally` block in `handleDeviceConnection`).
+## Build & Gradle tasks
 
+| Task | Description |
+|---|---|
+| `./gradlew run` | Run the server |
+| `./gradlew build` | Full build |
+| `./gradlew test` | Run tests |
+| `./gradlew buildFatJar` | Standalone JAR (all dependencies bundled) |
+| `./gradlew packageInstaller` | Native installer for the current OS |
+
+CI: pushing a `v*` tag triggers the build of all three installers
+(`.github/workflows/release.yml`) and attaches them to a GitHub Release.
+
+---
+
+## Contributing
+
+Contributions are welcome.
+
+1. Read [`ARCHITECTURE.md`](ARCHITECTURE.md) to understand the structure.
+2. Fork → branch → commit → pull request.
+3. `./gradlew build` must pass.
+4. By contributing, you agree that your code is distributed under AGPLv3.
+
+---
+
+## License
+
+This project is licensed under the **GNU Affero General Public License v3.0**
+(AGPLv3) — see [`LICENSE`](LICENSE).
+
+In short: you are free to use, study, modify and redistribute this server. Any
+modified version — **including one you offer as a network service** — must
+also be published under AGPLv3 with its source code. This is copyleft designed
+for server software.
+
+```
+Copyright (C) 2026 InstantIoT
+Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by
+the Free Software Foundation, either version 3 of the License, or (at your
+option) any later version. This program is distributed WITHOUT ANY WARRANTY.
+See the GNU Affero General Public License for more details.
+```
+
+> The InstantIoT mobile app is a separate project; it communicates with this
+> server over a network protocol and is not covered by this license.

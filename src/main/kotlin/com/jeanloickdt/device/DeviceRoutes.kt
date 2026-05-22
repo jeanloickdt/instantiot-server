@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // device/DeviceRoutes.kt
 package com.jeanloickdt.device
 
@@ -26,7 +45,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
     authenticate("jwt") {
 
         // ============================================================
-        // GET /api/devices — liste tous les devices du user connecté
+        // GET /api/devices — lists all devices of the logged-in user
         // ============================================================
         get("/api/devices") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -48,7 +67,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
         }
 
         // ============================================================
-        // GET /api/projects/{projectId}/devices — devices d'un projet
+        // GET /api/projects/{projectId}/devices — devices of a project
         // ============================================================
         get("/api/projects/{projectId}/devices") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -74,9 +93,9 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
         }
 
         // ============================================================
-        // POST /api/devices — enregistrer un nouveau device
-        // Génère un token UUID v4 → retourné en clair UNE SEULE FOIS
-        // Stocke seulement le SHA-256 du token en DB
+        // POST /api/devices — register a new device
+        // Generates a UUID v4 token → returned in plaintext ONLY ONCE
+        // Stores only the SHA-256 of the token in DB
         // ============================================================
         post("/api/devices") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -84,7 +103,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 
             val body = call.receive<CreateDeviceRequest>()
 
-            // ── Validation enums ──────────────────────────────────
+            // ── Enum validation ───────────────────────────────────
             val deviceType = DeviceType.fromString(body.deviceType)
                 ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf(
                     "error" to "Unknown deviceType",
@@ -107,7 +126,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 ))
             }
 
-            // génère le token en clair — affiché une seule fois
+            // generate the plaintext token — shown only once
             val token     = UUID.randomUUID().toString()
             val tokenHash = sha256(token)
 
@@ -120,7 +139,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 connectivity = connectivity
             )
 
-            // retourne le token en clair — une seule fois
+            // returns the plaintext token — only once
             call.respond(HttpStatusCode.Created, CreateDeviceResponse(
                 id           = id,
                 name         = body.name,
@@ -132,9 +151,9 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
         }
 
         // ============================================================
-        // PATCH /api/devices/{id}/name — renommer un device
-        // Ne touche pas la session TCP : le device ESP continue a emettre
-        // normalement, seul son label change cote serveur et apps.
+        // PATCH /api/devices/{id}/name — rename a device
+        // Doesn't touch the TCP session: the ESP device keeps emitting
+        // normally, only its label changes on the server and apps side.
         // ============================================================
         patch("/api/devices/{id}/name") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -174,8 +193,8 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
         }
 
         // ============================================================
-        // DELETE /api/devices/{id} — supprimer device + révoquer token
-        // Broadcast device_offline (reason=deleted) aux apps + ferme la session TCP
+        // DELETE /api/devices/{id} — delete device + revoke token
+        // Broadcasts device_offline (reason=deleted) to the apps + closes the TCP session
         // ============================================================
         delete("/api/devices/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -191,23 +210,23 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 return@delete
             }
 
-            // broadcast device_offline (reason=deleted) AVANT de fermer la session
-            // pour que les apps sachent pourquoi le device part
+            // broadcast device_offline (reason=deleted) BEFORE closing the session
+            // so the apps know why the device is leaving
             ControlEventBroadcaster.deviceOffline(
                 projectId = device.projectId,
                 deviceId  = deviceId,
                 reason    = DeviceOfflineReason.DELETED
             )
 
-            // force disconnect de la session TCP existante si le device etait connecte
+            // force disconnect of the existing TCP session if the device was connected
             SessionRegistry.getDeviceSession(deviceId)?.let { activeSession ->
                 try {
                     activeSession.socket.close()
                 } catch (_: Exception) {
-                    // socket deja ferme ou I/O error — peu importe
+                    // socket already closed or I/O error — doesn't matter
                 }
-                // le finally du handleDeviceConnection va retirer la session
-                // et broadcaster un device_offline reason=disconnected (accepte)
+                // the finally of handleDeviceConnection will remove the session
+                // and broadcast a device_offline reason=disconnected (accepted)
             }
 
             deviceRepository.delete(deviceId)
@@ -218,10 +237,10 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
         }
 
         // ============================================================
-        // POST /api/devices/{id}/renew-token — regénère un nouveau token
-        // L'ancien token est révoqué immédiatement
-        // Le nouveau token est affiché une seule fois
-        // Broadcast device_offline (reason=token_renewed) + ferme la session TCP
+        // POST /api/devices/{id}/renew-token — regenerates a new token
+        // The old token is revoked immediately
+        // The new token is shown only once
+        // Broadcasts device_offline (reason=token_renewed) + closes the TCP session
         // ============================================================
         post("/api/devices/{id}/renew-token") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -242,25 +261,25 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 
             deviceRepository.renewToken(deviceId, newTokenHash)
 
-            // broadcast device_offline (reason=token_renewed) AVANT de fermer la session
-            // pour que les apps sachent que ce n'est pas un crash mais un renouvellement
+            // broadcast device_offline (reason=token_renewed) BEFORE closing the session
+            // so the apps know it's not a crash but a renewal
             ControlEventBroadcaster.deviceOffline(
                 projectId = device.projectId,
                 deviceId  = deviceId,
                 reason    = DeviceOfflineReason.TOKEN_RENEWED
             )
 
-            // force disconnect de l'ancienne session TCP
-            // le device reconnectera avec son vieux token → serveur le rejette (LED rouge)
-            // jusqu'a reflash avec le nouveau token
+            // force disconnect of the old TCP session
+            // the device will reconnect with its old token → server rejects it (red LED)
+            // until reflashed with the new token
             SessionRegistry.getDeviceSession(deviceId)?.let { activeSession ->
                 try {
                     activeSession.socket.close()
                 } catch (_: Exception) {
-                    // socket deja ferme ou I/O error
+                    // socket already closed or I/O error
                 }
-                // le finally du handleDeviceConnection va retirer la session
-                // et broadcaster un device_offline reason=disconnected (accepte)
+                // the finally of handleDeviceConnection will remove the session
+                // and broadcast a device_offline reason=disconnected (accepted)
             }
 
             call.respond(HttpStatusCode.OK, mapOf(
@@ -273,8 +292,8 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 }
 
 // ============================================================
-// SHA-256 — hash du token device
-// Le token en clair n'est jamais stocké en DB
+// SHA-256 — hash of the device token
+// The plaintext token is never stored in DB
 // ============================================================
 private fun sha256(input: String): String {
     val bytes = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())

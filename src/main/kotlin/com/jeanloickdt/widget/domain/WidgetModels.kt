@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/domain/WidgetModels.kt
 package com.jeanloickdt.widget.domain
 
@@ -7,17 +26,17 @@ import kotlinx.serialization.Serializable
 // 📥 REQUESTS
 // ============================================================
 
-// Enregistrer un widget — appelé par l'app quand un widget est ajouté
-// Le server ne connaît que l'id et le type — pas la géométrie ni les settings
+// Register a widget — called by the app when a widget is added
+// The server only knows the id and the type — not the geometry nor the settings
 @Serializable
 data class RegisterWidgetRequest(
-    val id: String,    // protocolId du widget (matche ce que le device envoie)
-    val type: String   // kind du widget ("Gauge", "SimpleButton", "HorizontalSlider", etc.)
+    val id: String,    // protocolId of the widget (matches what the device sends)
+    val type: String   // kind of the widget ("Gauge", "SimpleButton", "HorizontalSlider", etc.)
 )
 
-// Batch register — appelé par l'app après un layout save pour s'assurer
-// que TOUS les widgets du layout sont connus côté serveur, même ceux qui
-// n'ont pas encore reçu de trame device (sliders/boutons App→Device).
+// Batch register — called by the app after a layout save to make sure
+// that ALL widgets of the layout are known on the server side, even those
+// that have not yet received a device frame (App→Device sliders/buttons).
 // Idempotent via `registerIfAbsent`.
 @Serializable
 data class BulkRegisterWidgetsRequest(
@@ -26,55 +45,55 @@ data class BulkRegisterWidgetsRequest(
 
 @Serializable
 data class BulkRegisterWidgetsResponse(
-    val created: Int,   // nombre de widgets nouvellement insérés
-    val existing: Int   // nombre de widgets déjà en DB (no-op)
+    val created: Int,   // number of newly inserted widgets
+    val existing: Int   // number of widgets already in DB (no-op)
 )
 
 // ============================================================
 // 📤 RESPONSES
 // ============================================================
 
-// État d'un widget — last_payload pour reconnexion
-// Retourné par GET /api/projects/{id}/states
+// State of a widget — last_payload for reconnection
+// Returned by GET /api/projects/{id}/states
 @Serializable
 data class WidgetStateResponse(
     val widgetId: String,
-    val payload: String?,  // null si jamais reçu de l'ESP
+    val payload: String?,  // null if never received from the ESP
     val lastSeenAt: Long?
 )
 
-// Historique d'un widget — payload opaque par plage de temps
-// Retourné par GET /api/widgets/{id}/history-raw?from=&to=
+// History of a widget — opaque payload by time range
+// Returned by GET /api/widgets/{id}/history-raw?from=&to=
 @Serializable
 data class WidgetHistoryResponse(
     val payload: String,
     val recordedAt: Long
 )
 
-// Point numérique d'un widget — pour chart/gauge/metric/level/slider
-// Retourné par GET /api/widgets/{id}/history?from=&to=&seriesId=&granularity=
+// Numeric point of a widget — for chart/gauge/metric/level/slider
+// Returned by GET /api/widgets/{id}/history?from=&to=&seriesId=&granularity=
 //
-// Pour granularity=raw : yMin/yMax/count null (point individuel).
-// Pour granularity=min/hour/day : yMin/yMax/count populés (bucket agrégé).
+// For granularity=raw: yMin/yMax/count null (individual point).
+// For granularity=min/hour/day: yMin/yMax/count populated (aggregated bucket).
 @Serializable
 data class WidgetHistoryPointResponse(
-    val t: Long,                  // timestamp ms epoch (recordedAt pour raw, bucket_at pour agrégé)
-    val y: Double,                // value pour raw, avg pour agrégé
-    val seriesId: String? = null, // null pour widgets non-chart
-    val yMin: Double? = null,     // null pour raw ; min du bucket pour agrégé
-    val yMax: Double? = null,     // null pour raw ; max du bucket pour agrégé
-    val count: Int? = null        // null pour raw ; nombre d'échantillons du bucket
+    val t: Long,                  // timestamp ms epoch (recordedAt for raw, bucket_at for aggregated)
+    val y: Double,                // value for raw, avg for aggregated
+    val seriesId: String? = null, // null for non-chart widgets
+    val yMin: Double? = null,     // null for raw; bucket min for aggregated
+    val yMax: Double? = null,     // null for raw; bucket max for aggregated
+    val count: Int? = null        // null for raw; number of samples in the bucket
 )
 
 /**
- * Enveloppe de réponse pour `GET /api/widgets/{id}/history`.
+ * Response envelope for `GET /api/widgets/{id}/history`.
  *
- * Le champ [serverTimeMs] permet à l'app de calculer son **clock skew**
- * (`serverTimeMs - app.now()` au moment de la réception) et de corriger
- * les timestamps des points live arrivant ensuite via WebSocket. Sans
- * ça, mélanger des t serveur (historique) et des t app (live) crée des
- * sauts visibles dans la courbe ("fishhook" à la frontière historique
- * ↔ live) dès qu'il y a >1s d'écart d'horloge.
+ * The [serverTimeMs] field lets the app compute its **clock skew**
+ * (`serverTimeMs - app.now()` at reception time) and correct
+ * the timestamps of live points arriving afterwards via WebSocket. Without
+ * it, mixing server t (history) and app t (live) creates
+ * visible jumps in the curve ("fishhook" at the history ↔ live
+ * boundary) as soon as there is a >1s clock offset.
  */
 @Serializable
 data class WidgetHistoryEnvelope(

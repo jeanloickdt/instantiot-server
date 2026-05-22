@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.common
 
 import org.slf4j.LoggerFactory
@@ -6,15 +25,15 @@ import java.awt.image.BufferedImage
 import java.net.URI
 
 /**
- * System Tray — icone dans la barre des taches.
+ * System Tray — icon in the taskbar.
  *
- * Affiche une icone avec un menu pour controler le serveur :
- *   - Open Admin Panel → ouvre le navigateur
- *   - Restart Server → arret propre (process manager relance)
- *   - Quit → arret definitif
+ * Shows an icon with a menu to control the server:
+ *   - Open Admin Panel → opens the browser
+ *   - Restart Server → clean shutdown (process manager restarts it)
+ *   - Quit → permanent shutdown
  *
- * Si le system tray n'est pas supporte (serveur headless, VPS),
- * le serveur tourne en mode console sans GUI.
+ * If the system tray is not supported (headless server, VPS),
+ * the server runs in console mode without a GUI.
  */
 object SystemTrayManager {
 
@@ -22,25 +41,25 @@ object SystemTrayManager {
     private var trayIcon: TrayIcon? = null
 
     /**
-     * Initialiser le system tray.
-     * Appele dans main() AVANT embeddedServer.start().
-     * Retourne true si le tray est actif, false si fallback console.
+     * Initialize the system tray.
+     * Called in main() BEFORE embeddedServer.start().
+     * Returns true if the tray is active, false if falling back to console.
      */
     fun init(httpPort: Int): Boolean {
-        // ⚠️ catch(Throwable) — PAS catch(Exception). Sur Linux headless
-        // avec un DISPLAY cassé/partiel, `SystemTray.isSupported()` lui-même
-        // (init du Toolkit AWT) lève `java.awt.AWTError: Can't connect to
-        // X11 window server` qui est un `Error`, pas une `Exception`. Le
-        // serveur tourne typiquement headless (Pi OS Lite, Ubuntu Server,
-        // VPS, systemd) → ce chemin DOIT être incassable. Tout échec tray
-        // = fallback console silencieux, jamais un crash boot.
+        // ⚠️ catch(Throwable) — NOT catch(Exception). On headless Linux
+        // with a broken/partial DISPLAY, `SystemTray.isSupported()` itself
+        // (AWT Toolkit init) throws `java.awt.AWTError: Can't connect to
+        // X11 window server` which is an `Error`, not an `Exception`. The
+        // server typically runs headless (Pi OS Lite, Ubuntu Server,
+        // VPS, systemd) → this path MUST be unbreakable. Any tray failure
+        // = silent console fallback, never a boot crash.
         return try {
             if (!SystemTray.isSupported()) {
                 logger.info("System tray not supported — running in console mode")
                 return false
             }
 
-            // icone generee programmatiquement — pas de fichier externe
+            // icon generated programmatically — no external file
             val icon = createIcon()
             val popup = createMenu(httpPort)
 
@@ -52,12 +71,12 @@ object SystemTrayManager {
             SystemTray.getSystemTray().add(trayIcon)
             logger.info("System tray initialized — port $httpPort")
 
-            // ouvrir le navigateur automatiquement au premier lancement
+            // open the browser automatically on first launch
             openBrowser(httpPort)
 
-            // notification systeme post-boot — utile sur Pi headless
-            // ou serveur lancé via systemd où l'user ne voit pas la
-            // console. Cliquer dessus ouvre aussi l'admin panel.
+            // post-boot system notification — useful on a headless Pi
+            // or a server started via systemd where the user can't see
+            // the console. Clicking it also opens the admin panel.
             trayIcon?.displayMessage(
                 "InstantIoT Server",
                 "Server ready on http://localhost:$httpPort\nClick the tray icon to manage.",
@@ -72,12 +91,12 @@ object SystemTrayManager {
     }
 
     /**
-     * Creer le menu du tray.
+     * Create the tray menu.
      */
     private fun createMenu(httpPort: Int): PopupMenu {
         val popup = PopupMenu()
 
-        // titre
+        // title
         val titleItem = MenuItem("InstantIoT Server v${ServerConfig.version}")
         titleItem.isEnabled = false
         popup.add(titleItem)
@@ -89,19 +108,19 @@ object SystemTrayManager {
 
         popup.addSeparator()
 
-        // ouvrir le dashboard
+        // open the dashboard
         val openItem = MenuItem("Open Admin Panel")
         openItem.addActionListener { openBrowser(httpPort) }
         popup.add(openItem)
 
-        // afficher les infos serveur (IP, ports, version) en notif système
+        // show server info (IP, ports, version) as a system notification
         val infoItem = MenuItem("Show Server Info")
         infoItem.addActionListener { showServerInfo(httpPort) }
         popup.add(infoItem)
 
         popup.addSeparator()
 
-        // restart — `Restart=always` côté systemd / process manager re-lance
+        // restart — `Restart=always` on the systemd / process manager side restarts it
         val restartItem = MenuItem("Restart Server")
         restartItem.addActionListener {
             logger.info("Restart requested from system tray")
@@ -121,21 +140,19 @@ object SystemTrayManager {
     }
 
     /**
-     * Affiche les infos serveur en notification système.
-     * Inclut l'IP locale (utile pour configurer un device ESP),
-     * les ports HTTP+TCP, la version, et l'état de la licence.
+     * Shows server info as a system notification.
+     * Includes the local IP (useful to configure an ESP device),
+     * the HTTP+TCP ports and the version.
      */
     private fun showServerInfo(httpPort: Int) {
         val ip = detectLocalIp()
         val tcpPort = ServerConfig.tcpPort
         val version = ServerConfig.version
-        val licenceStatus = if (com.jeanloickdt.auth.LicenceValidator.isActivated())
-            "activated" else "not activated"
 
         val text = buildString {
             append("Local IP: $ip\n")
             append("HTTP: $httpPort  •  TCP: $tcpPort\n")
-            append("Version: $version  •  Licence: $licenceStatus")
+            append("Version: $version")
         }
 
         trayIcon?.displayMessage(
@@ -147,29 +164,29 @@ object SystemTrayManager {
     }
 
     /**
-     * Détecte l'IP locale via [ServerConfig.localIp] qui applique le
-     * scoring intelligent (filtre VPN/virtuels, privilège Wi-Fi/Ethernet).
+     * Detects the local IP via [ServerConfig.localIp] which applies the
+     * smart scoring (filters VPN/virtual interfaces, prefers Wi-Fi/Ethernet).
      */
     private fun detectLocalIp(): String =
         ServerConfig.localIp.takeUnless { it == "unknown" || it.isBlank() } ?: "localhost"
 
     /**
-     * Generer une icone 16x16 programmatiquement.
-     * Carre avec gradient violet → teal (brand InstantIoT).
+     * Generate a 16x16 icon programmatically.
+     * Square with a purple → teal gradient (InstantIoT brand).
      */
     private fun createIcon(): Image {
         val size = 16
         val img = BufferedImage(size, size, BufferedImage.TYPE_INT_ARGB)
         val g = img.createGraphics()
 
-        // gradient brand : violet (#6C63FF) → teal (#4ECDC4)
+        // brand gradient: purple (#6C63FF) → teal (#4ECDC4)
         g.paint = GradientPaint(
             0f, 0f, Color(0x6C, 0x63, 0xFF),
             size.toFloat(), size.toFloat(), Color(0x4E, 0xCD, 0xC4)
         )
         g.fillRoundRect(0, 0, size, size, 4, 4)
 
-        // lettre "I" au centre en blanc
+        // letter "I" centered in white
         g.color = Color.WHITE
         g.font = Font("SansSerif", Font.BOLD, 11)
         val fm = g.fontMetrics
@@ -182,7 +199,7 @@ object SystemTrayManager {
     }
 
     /**
-     * Ouvrir le navigateur sur le dashboard admin.
+     * Open the browser on the admin dashboard.
      */
     private fun openBrowser(httpPort: Int) {
         try {
@@ -191,7 +208,7 @@ object SystemTrayManager {
                 Desktop.getDesktop().browse(URI(url))
                 logger.info("Browser opened: $url")
             } else {
-                // fallback par OS
+                // per-OS fallback
                 val os = System.getProperty("os.name").lowercase()
                 when {
                     os.contains("mac") -> Runtime.getRuntime().exec(arrayOf("open", url))

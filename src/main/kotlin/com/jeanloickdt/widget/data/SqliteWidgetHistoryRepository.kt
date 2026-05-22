@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/data/SqliteWidgetHistoryRepository.kt
 package com.jeanloickdt.widget.data
 
@@ -11,8 +30,8 @@ import org.jetbrains.exposed.sql.transactions.transaction
 class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
 
     // ============================================================
-    // Insérer un payload — appelé par le relay
-    // Throttle 1/sec géré côté relay — pas ici
+    // Insert a payload — called by the relay
+    // 1/sec throttle handled on the relay side — not here
     // ============================================================
     override fun insert(widgetId: String, projectId: String, ownerId: String, payload: String) {
         transaction {
@@ -27,8 +46,8 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     }
 
     // ============================================================
-    // Batch insert — appelé par le relay toutes les 5s
-    // 1 transaction pour N rows — beaucoup plus rapide
+    // Batch insert — called by the relay every 5s
+    // 1 transaction for N rows — much faster
     // ============================================================
     override fun insertBatch(entries: List<WidgetHistoryRow>) {
         if (entries.isEmpty()) return
@@ -44,8 +63,8 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     }
 
     // ============================================================
-    // Historique par plage de temps
-    // Index (widget_id, recorded_at) — query rapide
+    // History by time range
+    // Index (widget_id, recorded_at) — fast query
     // ============================================================
     override fun findByWidgetAndRange(widgetId: String, from: Long, to: Long): List<WidgetHistoryRow> {
         return transaction {
@@ -62,8 +81,8 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     }
 
     // ============================================================
-    // Cleanup — supprimer rows de plus de 24h
-    // Appelé au démarrage + toutes les heures
+    // Cleanup — delete rows older than 24h
+    // Called at startup + every hour
     // ============================================================
     override fun deleteOlderThan(timestamp: Long) {
         transaction {
@@ -74,7 +93,7 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     }
 
     // ============================================================
-    // Supprimer tout l'historique d'un widget
+    // Delete a widget's entire history
     // ============================================================
     override fun deleteAllByWidget(widgetId: String) {
         transaction {
@@ -85,7 +104,7 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     }
 
     // ============================================================
-    // Supprimer tout l'historique d'un projet — cascade DELETE projet
+    // Delete a project's entire history — project DELETE cascade
     // ============================================================
     override fun deleteAllByProject(projectId: String) {
         transaction {
@@ -96,7 +115,7 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     }
 
     // ============================================================
-    // Mapper ResultRow → WidgetHistoryRow
+    // Map ResultRow → WidgetHistoryRow
     // ============================================================
     private fun ResultRow.toWidgetHistoryRow() = WidgetHistoryRow(
         id         = this[WidgetHistoryTable.id],

@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/WidgetRoutes.kt
 package com.jeanloickdt.widget
 
@@ -32,9 +51,9 @@ fun Route.widgetRoutes(
     authenticate("jwt") {
 
         // ============================================================
-        // POST /api/projects/{projectId}/widgets — enregistrer un widget (idempotent)
-        // Le `id` doit être le `protocolId` (celui que le device utilise
-        // dans ses frames iWidgets v1).
+        // POST /api/projects/{projectId}/widgets — register a widget (idempotent)
+        // The `id` must be the `protocolId` (the one the device uses
+        // in its iWidgets v1 frames).
         // ============================================================
         post("/api/projects/{projectId}/widgets") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -65,9 +84,9 @@ fun Route.widgetRoutes(
         }
 
         // ============================================================
-        // POST /api/projects/{projectId}/widgets/bulk — register en masse
-        // Appelé par l'app après chaque save de layout pour s'assurer que
-        // tous les widgets du projet sont connus. Idempotent.
+        // POST /api/projects/{projectId}/widgets/bulk — bulk register
+        // Called by the app after each layout save to ensure that
+        // all widgets of the project are known. Idempotent.
         // ============================================================
         post("/api/projects/{projectId}/widgets/bulk") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -103,7 +122,7 @@ fun Route.widgetRoutes(
         }
 
         // ============================================================
-        // DELETE /api/widgets/{id} — supprimer widget + history (opaque + numérique)
+        // DELETE /api/widgets/{id} — delete widget + history (opaque + numeric)
         // ============================================================
         delete("/api/widgets/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -119,7 +138,7 @@ fun Route.widgetRoutes(
                 return@delete
             }
 
-            // supprimer history d'abord — cascade tous les tiers
+            // delete history first — cascade across all tiers
             widgetHistoryRepository.deleteAllByWidget(widgetId)
             widgetHistoryNumericRepository.deleteAllByWidget(widgetId)
             widgetHistoryMinRepository.deleteAllByWidget(widgetId)
@@ -134,8 +153,8 @@ fun Route.widgetRoutes(
         }
 
         // ============================================================
-        // GET /api/projects/{id}/states — derniers payloads
-        // Appelé à la reconnexion app pour afficher les dernières valeurs
+        // GET /api/projects/{id}/states — latest payloads
+        // Called on app reconnection to display the latest values
         // ============================================================
         get("/api/projects/{id}/states") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -160,14 +179,14 @@ fun Route.widgetRoutes(
         // ============================================================
         // GET /api/widgets/{id}/history?from=&to=&seriesId=&granularity=
         //
-        // Granularité (défaut = "raw") :
-        //   raw   : échantillons bruts (max 1 / 5s par widget+série)
-        //   min   : buckets 1 minute    (downsampled, avec yMin/yMax/count)
-        //   hour  : buckets 1 heure
-        //   day   : buckets 1 jour
+        // Granularity (default = "raw"):
+        //   raw   : raw samples (max 1 / 5s per widget+series)
+        //   min   : 1-minute buckets    (downsampled, with yMin/yMax/count)
+        //   hour  : 1-hour buckets
+        //   day   : 1-day buckets
         //
-        // Rétention par tier (config dans ~/.instantiot/server.properties) :
-        //   raw=7j · min=90j · hour=365j · day=infini
+        // Retention per tier (config in ~/.instantiot/server.properties):
+        //   raw=7d · min=90d · hour=365d · day=infinite
         // ============================================================
         get("/api/widgets/{id}/history") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -227,20 +246,20 @@ fun Route.widgetRoutes(
                 }
             }
 
-            // Capturé après la query : reflète le moment où le serveur
-            // est sur le point de répondre. L'app utilise ça pour
-            // corriger le clock skew app↔serveur (cf. AdvancedChart
+            // Captured after the query: reflects the moment when the server
+            // is about to respond. The app uses this to
+            // correct the app↔server clock skew (see AdvancedChart
             // live append).
             val serverTimeMs = System.currentTimeMillis()
             call.respond(HttpStatusCode.OK, WidgetHistoryEnvelope(serverTimeMs, points))
         }
 
         // ============================================================
-        // GET /api/widgets/{id}/history-raw?from=&to= — historique opaque
+        // GET /api/widgets/{id}/history-raw?from=&to= — opaque history
         //
-        // Ancienne route retournant le payload Base64 brut. Conservée pour
-        // les widgets non-numériques (boutons, segswitch, dpad) et les
-        // clients qui veulent décoder eux-mêmes.
+        // Legacy route returning the raw Base64 payload. Kept for
+        // non-numeric widgets (buttons, segswitch, dpad) and
+        // clients that want to decode it themselves.
         // ============================================================
         get("/api/widgets/{id}/history-raw") {
             val ownerId = call.principal<JWTPrincipal>()?.subject

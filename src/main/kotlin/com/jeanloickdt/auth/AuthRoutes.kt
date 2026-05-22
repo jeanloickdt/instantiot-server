@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.auth
 
 import com.jeanloickdt.auth.domain.*
@@ -18,16 +37,16 @@ import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
 // ============================================================
-// Validation — port disponible
+// Validation — port availability
 // ============================================================
 private fun isPortAvailable(port: Int): Boolean {
     return try {
-        // bind explicite sur 0.0.0.0 avec SO_REUSEADDR désactivé
+        // explicit bind on 0.0.0.0 with SO_REUSEADDR disabled
         val socket = java.net.ServerSocket()
         socket.reuseAddress = false
         socket.bind(java.net.InetSocketAddress("0.0.0.0", port))
         socket.close()
-        // double check sur 127.0.0.1 (macOS peut avoir des binds séparés)
+        // double check on 127.0.0.1 (macOS can have separate binds)
         val socket2 = java.net.ServerSocket()
         socket2.reuseAddress = false
         socket2.bind(java.net.InetSocketAddress("127.0.0.1", port))
@@ -39,15 +58,15 @@ private fun isPortAvailable(port: Int): Boolean {
 }
 
 // ============================================================
-// Validation — contraintes username et password
+// Validation — username and password constraints
 // ============================================================
 private val USERNAME_REGEX = Regex("^[a-zA-Z0-9_]{3,32}$")
 private const val PASSWORD_MIN_LENGTH = 8
 private const val PASSWORD_MAX_LENGTH = 128
 
 // ============================================================
-// 🔓 LOGIN — toujours accessible, même sans licence
-// Retourne le token + role pour le dashboard
+// 🔓 LOGIN — always accessible, even without a license
+// Returns the token + role for the dashboard
 // ============================================================
 fun Route.loginRoute(userRepository: UserRepository) {
     post("/api/login") {
@@ -68,23 +87,17 @@ fun Route.loginRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// 📝 REGISTER — bloqué si licence invalide
+// 📝 REGISTER — controlled by the registrationOpen flag
 // ============================================================
 fun Route.registerRoute(userRepository: UserRepository) {
     post("/api/register") {
-        // licence requise pour créer un compte
-        if (!LicenceValidator.isActivated()) {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Licence required"))
-            return@post
-        }
-
-        // 🔒 Registration contrôlée par l'admin. Multi-user supporté, mais
-        // PAS d'inscription ouverte par défaut : sinon n'importe qui sur le
-        // LAN (l'app découvre le serveur via mDNS) pourrait self-register.
-        // L'admin ouvre l'inscription depuis le panel le temps d'onboarder
-        // ses users, puis la referme. Pattern Gitea/Vaultwarden SIGNUPS_ALLOWED.
-        // L'admin lui-même est bootstrapé via POST /api/licence (chemin
-        // séparé) → ce gate ne bloque jamais le premier compte.
+        // 🔒 Registration controlled by the admin. Multi-user supported, but
+        // NO open registration by default: otherwise anyone on the
+        // LAN (the app discovers the server via mDNS) could self-register.
+        // The admin opens registration from the panel while onboarding
+        // their users, then closes it. Gitea/Vaultwarden SIGNUPS_ALLOWED pattern.
+        // The admin itself is created at server boot (separate path) →
+        // this gate never blocks the first account.
         if (!ServerConfig.registrationOpen) {
             call.respond(
                 HttpStatusCode.Forbidden,
@@ -95,7 +108,7 @@ fun Route.registerRoute(userRepository: UserRepository) {
 
         val body = call.receive<RegisterRequest>()
 
-        // validation username — 3-32 caractères alphanumériques + underscore
+        // username validation — 3-32 alphanumeric characters + underscore
         if (!USERNAME_REGEX.matches(body.username)) {
             call.respond(HttpStatusCode.BadRequest, mapOf(
                 "error" to "Username must be 3-32 characters, alphanumeric and underscores only"
@@ -103,7 +116,7 @@ fun Route.registerRoute(userRepository: UserRepository) {
             return@post
         }
 
-        // validation password — 8-128 caractères
+        // password validation — 8-128 characters
         if (body.password.length < PASSWORD_MIN_LENGTH || body.password.length > PASSWORD_MAX_LENGTH) {
             call.respond(HttpStatusCode.BadRequest, mapOf(
                 "error" to "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
@@ -132,7 +145,7 @@ fun Route.registerRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// 🔑 CHANGE PASSWORD — tout user authentifié
+// 🔑 CHANGE PASSWORD — any authenticated user
 // ============================================================
 fun Route.changePasswordRoute(userRepository: UserRepository) {
     patch("/api/users/me/password") {
@@ -144,13 +157,13 @@ fun Route.changePasswordRoute(userRepository: UserRepository) {
 
         val body = call.receive<ChangePasswordRequest>()
 
-        // vérifier l'ancien password
+        // verify the old password
         if (!BCrypt.checkpw(body.currentPassword, user.pwdHash)) {
             call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Invalid current password"))
             return@patch
         }
 
-        // valider le nouveau password
+        // validate the new password
         if (body.newPassword.length < PASSWORD_MIN_LENGTH || body.newPassword.length > PASSWORD_MAX_LENGTH) {
             call.respond(HttpStatusCode.BadRequest, mapOf(
                 "error" to "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
@@ -195,7 +208,7 @@ fun Route.adminStatsRoute(
 }
 
 // ============================================================
-// 📋 ADMIN DEVICES — admin only — tous les devices de tous les users
+// 📋 ADMIN DEVICES — admin only — all devices of all users
 // ============================================================
 fun Route.adminDevicesRoute(
     userRepository: UserRepository,
@@ -211,7 +224,7 @@ fun Route.adminDevicesRoute(
             return@get
         }
 
-        // retourner TOUS les devices — pas filtré par owner
+        // return ALL devices — not filtered by owner
         val devices = deviceRepository.findAll().map {
             DeviceResponse(
                 id        = it.id,
@@ -261,8 +274,8 @@ fun Route.adminServerInfoRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// ⚙️ ADMIN CONFIG — admin only — modifier les ports
-// Nécessite un redémarrage du serveur pour appliquer
+// ⚙️ ADMIN CONFIG — admin only — modify the ports
+// Requires a server restart to apply
 // ============================================================
 fun Route.adminConfigRoute(userRepository: UserRepository) {
     patch("/api/admin/config") {
@@ -277,7 +290,7 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
 
         val body = call.receive<UpdateConfigRequest>()
 
-        // validation des ports
+        // port validation
         val httpPort = body.httpPort
         val tcpPort = body.tcpPort
 
@@ -294,8 +307,8 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
             return@patch
         }
 
-        // vérifier que les ports sont disponibles (pas utilisés par un autre service)
-        // on skip le check pour les ports actuellement utilisés par CE serveur
+        // verify the ports are available (not used by another service)
+        // we skip the check for the ports currently used by THIS server
         if (httpPort != null && httpPort != ServerConfig.runningHttpPort && httpPort != ServerConfig.runningTcpPort && !isPortAvailable(httpPort)) {
             call.respond(HttpStatusCode.Conflict, mapOf("error" to "HTTP port $httpPort is already in use"))
             return@patch
@@ -305,8 +318,8 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
             return@patch
         }
 
-        // Validation server display name : 1-64 chars, sans control chars,
-        // sans @/. au début (mDNS friendly)
+        // Server display name validation: 1-64 chars, no control chars,
+        // no @/. at the start (mDNS friendly)
         val displayName = body.serverDisplayName?.trim()
         if (displayName != null && displayName.isNotEmpty()) {
             if (displayName.length > 64) {
@@ -340,12 +353,12 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// 🗄️ ADMIN HISTORY CONFIG — admin only — paramètres rétention / downsample
-// Pas de redémarrage requis : les valeurs sont relues à chaque cycle.
+// 🗄️ ADMIN HISTORY CONFIG — admin only — retention / downsample params
+// No restart required: the values are re-read on each cycle.
 // ============================================================
 fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
 
-    // garde commune admin-only
+    // shared admin-only guard
     suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
         val userId = call.principal<JWTPrincipal>()?.subject
         if (userId == null) {
@@ -370,7 +383,7 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
 
         val body = call.receive<UpdateHistoryConfigRequest>()
 
-        // validations — bornes positives (sauf day qui accepte -1 = infini)
+        // validations — positive bounds (except day which accepts -1 = unlimited)
         body.retentionRawDays?.let {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
                 mapOf("error" to "retentionRawDays must be >= 1"))
@@ -388,7 +401,7 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
                 mapOf("error" to "retentionHourDays must be >= 1"))
         }
         body.retentionDayDays?.let {
-            // -1 = infini, sinon >= 1
+            // -1 = unlimited, otherwise >= 1
             if (it != -1 && it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
                 mapOf("error" to "retentionDayDays must be >= 1 or -1 for unlimited"))
         }
@@ -406,7 +419,7 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
     }
 }
 
-/** Snapshot DTO de la config historique courante. */
+/** Snapshot DTO of the current history config. */
 private fun currentHistoryConfig(): HistoryConfigResponse = HistoryConfigResponse(
     rawEnabled          = ServerConfig.historyRawEnabled,
     retentionRawDays    = ServerConfig.historyRetentionRawDays,
@@ -417,11 +430,11 @@ private fun currentHistoryConfig(): HistoryConfigResponse = HistoryConfigRespons
 )
 
 // ============================================================
-// 👥 ADMIN USERS — liste read-only + reset password (V1 Phase 4)
-// L'admin peut voir tous les comptes sur le serveur et reset le
-// password de n'importe lequel (sa femme/copain qui a oublié, etc.).
-// Pas d'email dans V1 — l'admin communique le nouveau password à
-// l'user out-of-band (SMS, IRL, etc.).
+// 👥 ADMIN USERS — read-only list + reset password (V1 Phase 4)
+// The admin can see all accounts on the server and reset the
+// password of any of them (their spouse/partner who forgot, etc.).
+// No email in V1 — the admin communicates the new password to
+// the user out-of-band (SMS, IRL, etc.).
 // ============================================================
 fun Route.adminUsersRoute(userRepository: UserRepository) {
 
@@ -439,7 +452,7 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
         return true
     }
 
-    // ── Liste (read-only) ──────────────────────────────────
+    // ── List (read-only) ──────────────────────────────────
     get("/api/admin/users") {
         if (!checkAdmin(call)) return@get
         val list = userRepository.findAll().map { row ->
@@ -453,10 +466,10 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
         call.respond(HttpStatusCode.OK, AdminUserListResponse(list))
     }
 
-    // ── Reset password d'un user (par l'admin) ─────────────
-    // L'user reste connecté avec son ancien token JWT (pas de
-    // revoke session V1). Au prochain logout/expiry, il devra
-    // utiliser le nouveau password.
+    // ── Reset a user's password (by the admin) ─────────────
+    // The user stays logged in with their old JWT token (no
+    // session revoke in V1). On the next logout/expiry, they will
+    // have to use the new password.
     post("/api/admin/users/{id}/reset-password") {
         if (!checkAdmin(call)) return@post
         val targetId = call.parameters["id"]
@@ -484,8 +497,8 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
     }
 
     // ── Registration toggle (GET / PATCH) ──────────────────
-    // Contrôle l'inscription publique. Défaut fermé. L'admin l'ouvre
-    // le temps d'onboarder ses users puis la referme. Hot-reload.
+    // Controls public registration. Closed by default. The admin opens it
+    // while onboarding their users then closes it. Hot-reload.
     get("/api/admin/registration/config") {
         if (!checkAdmin(call)) return@get
         call.respond(
@@ -509,7 +522,7 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// 💾 ADMIN BACKUP — admin only — snapshots SQLite (V1 Phase 4)
+// 💾 ADMIN BACKUP — admin only — SQLite snapshots (V1 Phase 4)
 // ============================================================
 fun Route.adminBackupRoute(userRepository: UserRepository) {
 
@@ -567,7 +580,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
         call.respond(HttpStatusCode.OK, configResponse())
     }
 
-    // ── Snapshot manuel ────────────────────────────────────
+    // ── Manual snapshot ────────────────────────────────────
     post("/api/admin/backup/now") {
         if (!checkAdmin(call)) return@post
         val file = com.jeanloickdt.backup.BackupManager.snapshotNow()
@@ -581,7 +594,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
         call.respond(HttpStatusCode.OK, configResponse())
     }
 
-    // ── Liste ──────────────────────────────────────────────
+    // ── List ───────────────────────────────────────────────
     get("/api/admin/backup/list") {
         if (!checkAdmin(call)) return@get
         val backups = com.jeanloickdt.backup.BackupManager.list().map { info ->
@@ -621,8 +634,8 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// 🔄 ADMIN RESTART — admin only — arrêt propre du serveur
-// Le process manager (systemd, jpackage, etc.) le redémarrera
+// 🔄 ADMIN RESTART — admin only — clean server shutdown
+// The process manager (systemd, jpackage, etc.) will restart it
 // ============================================================
 fun Route.adminRestartRoute(userRepository: UserRepository) {
     post("/api/admin/restart") {
@@ -637,8 +650,8 @@ fun Route.adminRestartRoute(userRepository: UserRepository) {
 
         call.respond(HttpStatusCode.OK, mapOf("message" to "Server shutting down..."))
 
-        // arrêt propre après avoir envoyé la réponse
-        // le process manager (systemd, etc.) redémarrera le serveur
+        // clean shutdown after sending the response
+        // the process manager (systemd, etc.) will restart the server
         Thread {
             Thread.sleep(500)
             Runtime.getRuntime().exit(0)
@@ -647,229 +660,14 @@ fun Route.adminRestartRoute(userRepository: UserRepository) {
 }
 
 // ============================================================
-// 🔑 ADMIN LICENCE — activer une licence JWT signée
-// Pas besoin d'être authentifié — la licence est nécessaire AVANT le login
-// ============================================================
-fun Route.licenceRoute(userRepository: UserRepository) {
-    // GET — état de la licence courante
-    get("/api/licence") {
-        val info = LicenceValidator.getLicenceInfo()
-        if (info != null && LicenceValidator.isActivated()) {
-            call.respond(HttpStatusCode.OK, LicenceResponse(
-                id        = info.id,
-                expiresAt = info.expiresAt
-            ))
-        } else {
-            call.respond(HttpStatusCode.NotFound, mapOf("error" to "No valid licence"))
-        }
-    }
-
-    // POST — activer une licence + bootstrap admin (V1 first-launch flow)
-    post("/api/licence") {
-        val body = call.receive<LicenceRequest>()
-
-        val info = LicenceValidator.activate(body.key)
-        if (info != null) {
-            // Bootstrap admin user si absent — V1 first-launch flow.
-            // password = licence.id (court, mémorisable, présent dans
-            // l'email d'achat). Si admin existe déjà (re-activation
-            // d'une licence sur un serveur configuré, ou licence
-            // renouvelée), on ne touche surtout PAS au password
-            // existant — l'user a peut-être fait Renew avec ses
-            // propres credentials.
-            var bootstrapToken: String? = null
-            if (userRepository.findByUsername("admin") == null) {
-                val pwdHash = BCrypt.hashpw(info.id, BCrypt.gensalt())
-                val adminId = userRepository.create(
-                    username = "admin",
-                    pwdHash  = pwdHash,
-                    role     = "admin"
-                )
-                LoggerFactory.getLogger("InstantIoT").info(
-                    "Admin user bootstrapped from licence (id prefix={})",
-                    info.id.take(8)  // log seulement le prefix, pas le password complet
-                )
-                // Auto-login : émission d'un JWT pour que le browser
-                // puisse appeler POST /api/setup/welcome (authentifié)
-                // sans repasser par /api/login. UX : l'user enchaîne
-                // setup → welcome sans friction.
-                bootstrapToken = JwtConfig.generateToken(adminId)
-            }
-            call.respond(HttpStatusCode.OK, LicenceResponse(
-                id        = info.id,
-                expiresAt = info.expiresAt,
-                token     = bootstrapToken
-            ))
-        } else {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid licence key"))
-        }
-    }
-}
-
-// ============================================================
-// 🎉 WELCOME — finalise le first-launch flow
-// Authentifié admin only — l'user vient juste d'avoir son token via
-// POST /api/licence (auto-login) OU via login classique.
-// Action = "renew" (change credentials) ou "skip" (garde defaults).
-// Dans les deux cas, marque setup.done → welcome ne réapparaît plus.
-// ============================================================
-fun Route.welcomeRoute(
-    userRepository: UserRepository,
-    setupStateStore: SetupStateStore
-) {
-    authenticate("jwt") {
-        post("/api/setup/welcome") {
-            val userId = call.principal<JWTPrincipal>()?.subject
-                ?: return@post call.respond(HttpStatusCode.Unauthorized)
-            val user = userRepository.findById(userId)
-            if (user == null || user.role != "admin") {
-                return@post call.respond(
-                    HttpStatusCode.Forbidden,
-                    mapOf("error" to "Admin only")
-                )
-            }
-
-            val body = call.receive<WelcomeRequest>()
-
-            when (body.action.lowercase()) {
-                "renew" -> {
-                    val newUsername = body.username?.trim()?.takeIf { it.isNotBlank() }
-                    val newPassword = body.password?.takeIf { it.isNotBlank() }
-
-                    if (newUsername == null && newPassword == null) {
-                        return@post call.respond(
-                            HttpStatusCode.BadRequest,
-                            mapOf("error" to "Renew requires at least one of: username, password")
-                        )
-                    }
-
-                    if (newUsername != null) {
-                        if (!USERNAME_REGEX.matches(newUsername)) {
-                            return@post call.respond(
-                                HttpStatusCode.BadRequest,
-                                mapOf("error" to "Invalid username format (3-32 alphanumeric/underscore)")
-                            )
-                        }
-                        // Conflit si autre user a déjà ce username
-                        if (newUsername != user.username) {
-                            val existing = userRepository.findByUsername(newUsername)
-                            if (existing != null && existing.id != userId) {
-                                return@post call.respond(
-                                    HttpStatusCode.Conflict,
-                                    mapOf("error" to "Username already taken")
-                                )
-                            }
-                        }
-                    }
-
-                    if (newPassword != null) {
-                        if (newPassword.length < PASSWORD_MIN_LENGTH ||
-                            newPassword.length > PASSWORD_MAX_LENGTH) {
-                            return@post call.respond(
-                                HttpStatusCode.BadRequest,
-                                mapOf("error" to "Password must be $PASSWORD_MIN_LENGTH-$PASSWORD_MAX_LENGTH characters")
-                            )
-                        }
-                    }
-
-                    val newHash = newPassword?.let { BCrypt.hashpw(it, BCrypt.gensalt()) }
-                    userRepository.updateCredentials(userId, newUsername, newHash)
-                    LoggerFactory.getLogger("InstantIoT").info(
-                        "Welcome flow: admin credentials updated (renew)"
-                    )
-                }
-                "skip" -> {
-                    LoggerFactory.getLogger("InstantIoT").info(
-                        "Welcome flow: skipped — keeping default credentials"
-                    )
-                }
-                else -> return@post call.respond(
-                    HttpStatusCode.BadRequest,
-                    mapOf("error" to "action must be 'renew' or 'skip'")
-                )
-            }
-
-            // Marque le setup comme complet — welcome ne réapparaîtra
-            // plus jamais (sauf si l'user delete setup.done volontairement,
-            // auquel cas l'auto-heal de SetupStateService recréé le
-            // marker silencieusement puisqu'un admin existe).
-            setupStateStore.markComplete()
-            call.respond(HttpStatusCode.OK)
-        }
-    }
-}
-
-// ============================================================
-// 🆘 FORGOT PASSWORD — reset admin via licence key
-// Pas authentifié (l'user a perdu son password). Sécurisé par la
-// preuve de possession de la licence : seul le détenteur de la
-// clé licence valide ET déjà activée sur ce serveur peut reset.
-// ============================================================
-fun Route.forgotPasswordRoute(userRepository: UserRepository) {
-    rateLimit(RateLimitName("auth")) {
-        post("/api/setup/forgot-password") {
-            val body = call.receive<ForgotPasswordRequest>()
-
-            // 1. Verifier la signature de la clé soumise
-            val submitted = LicenceValidator.verify(body.licenceKey)
-            if (submitted == null) {
-                return@post call.respond(
-                    HttpStatusCode.BadRequest,
-                    mapOf("error" to "Invalid licence key")
-                )
-            }
-
-            // 2. Comparer avec la licence active sur ce serveur.
-            // Empêche un attaquant qui aurait n'importe quelle licence
-            // valide de reset l'admin de notre serveur.
-            val active = LicenceValidator.getLicenceInfo()
-            if (active == null || !LicenceValidator.isActivated()) {
-                return@post call.respond(
-                    HttpStatusCode.Conflict,
-                    mapOf("error" to "No active licence on this server")
-                )
-            }
-            if (submitted.id != active.id) {
-                return@post call.respond(
-                    HttpStatusCode.Forbidden,
-                    mapOf("error" to "Licence does not match this server")
-                )
-            }
-
-            // 3. Reset le password admin à licence.id (= default original)
-            val admin = userRepository.findByUsername("admin")
-            if (admin == null) {
-                return@post call.respond(
-                    HttpStatusCode.NotFound,
-                    mapOf("error" to "Admin user not found")
-                )
-            }
-            val newHash = BCrypt.hashpw(active.id, BCrypt.gensalt())
-            userRepository.updatePassword(admin.id, newHash)
-            LoggerFactory.getLogger("InstantIoT").info(
-                "Admin password reset via forgot-password (licence id prefix={})",
-                active.id.take(8)
-            )
-
-            call.respond(HttpStatusCode.OK)
-        }
-    }
-}
-
-// ============================================================
-// 🔐 AUTH ROUTES COMPLÈTES — login + register
-// Rate limited par IP — 10 requêtes / minute
+// 🔐 COMPLETE AUTH ROUTES — login + register
+// Rate limited by IP — 10 requests / minute
 // ============================================================
 fun Route.authRoutes(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
-    deviceRepository: DeviceRepository,
-    setupStateStore: SetupStateStore
+    deviceRepository: DeviceRepository
 ) {
-    licenceRoute(userRepository)
-    welcomeRoute(userRepository, setupStateStore)
-    forgotPasswordRoute(userRepository)
-
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)
         registerRoute(userRepository)

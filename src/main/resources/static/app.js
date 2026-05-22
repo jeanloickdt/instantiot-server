@@ -28,18 +28,9 @@ document.addEventListener('alpine:init', () => {
     showAllBackups: false,
 
     // ── Forms ──────────────────────────────────────────────
-    licenceForm: { key: '', error: '' },
     loginForm: { username: '', password: '', error: '' },
     setupForm: { current: '', newPwd: '', confirm: '', error: '' },
 
-    // ── Welcome (V1 first-launch) ──────────────────────────
-    // bootstrapLicenceId : licence.id remontée par POST /api/licence,
-    // affichée sur l'écran welcome comme default password
-    bootstrapLicenceId: '',
-    welcomeForm: { username: '', password: '', error: '', submitting: false },
-
-    // ── Forgot password ─────────────────────────────────────
-    forgotForm: { key: '', error: '', success: false },
     configForm: {
       httpPort: 8080,
       tcpPort: 9001,
@@ -85,18 +76,11 @@ document.addEventListener('alpine:init', () => {
     },
     devices: [],
     users: [],
-    licenceInfo: null,   // { id, expiresAt } ou null si non activée
     resetUserForm: {
       targetUser: null,
       newPassword: '',
       busy: false,
       error: ''
-    },
-    resetAdminForm: {
-      confirmOpen: false,
-      busy: false,
-      msg: '',
-      msgType: ''
     },
 
     // ── Computed ────────────────────────────────────────────
@@ -136,47 +120,18 @@ document.addEventListener('alpine:init', () => {
     },
 
     // ── Init ───────────────────────────────────────────────
-    // Routing V1 first-launch flow basé sur GET /api/status :
-    //   setup_state = "needs_licence" → /licence (saisie de la clé)
-    //   setup_state = "needs_welcome" → /welcome (set credentials)
-    //   setup_state = "ready"          → /login ou /dashboard si token
-    //
-    // Fallback compat : si /api/status ne renvoie pas setup_state
-    // (ancien serveur), on retombe sur les booléens legacy
-    // licence_required + setup_required.
+    // V1.3 : plus de système de licence ni de first-launch flow.
+    // Le serveur démarre toujours prêt (compte admin créé au boot).
+    // → si on a un token admin valide, on entre dans le dashboard,
+    //   sinon on affiche le login.
     async init() {
       if (this.theme) {
         document.documentElement.setAttribute('data-theme', this.theme);
       }
       document.documentElement.lang = this.lang;
 
-      const status = await this.fetchStatus();
-      const state = this.deriveSetupState(status);
-
-      if (state === 'needs_licence') {
-        this.view = 'licence';
-        return;
-      }
-      if (state === 'needs_welcome') {
-        // Si on a un token (auto-login post-activation), on peut
-        // aller direct sur welcome. Sinon il faut passer par licence
-        // → welcome (cas du browser fraîchement ouvert sur un serveur
-        // dont le welcome n'a pas encore été acté).
-        if (this.token) {
-          this.view = 'welcome';
-        } else {
-          // Pas de token → forcer licence pour qu'activate ré-émette
-          // le token auto-login. Ce cas est rare (il faudrait que
-          // l'user ait fermé le browser entre activation et welcome).
-          this.view = 'licence';
-        }
-        return;
-      }
-
-      // setup_state = "ready"
       if (this.token && this.role === 'admin') {
         if (!this.passwordChanged) {
-          // Compat ancien serveur — sera dead path en V1
           this.view = 'setup';
         } else {
           this.enterDashboard();
@@ -186,32 +141,6 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
-    /**
-     * Récupère /api/status et retourne l'objet ou null si pas joignable.
-     */
-    async fetchStatus() {
-      try {
-        const res = await fetch('/api/status');
-        if (!res.ok) return null;
-        return await res.json();
-      } catch (_) {
-        return null;
-      }
-    },
-
-    /**
-     * Dérive le setup_state depuis la réponse /api/status. Privilège le
-     * champ moderne `setup_state` ; sinon fallback sur les booléens
-     * legacy (rétro-compat ancien serveur).
-     */
-    deriveSetupState(status) {
-      if (!status) return 'needs_licence';   // serveur down → on assume worst case
-      if (status.setup_state) return status.setup_state;
-      if (status.licence_required) return 'needs_licence';
-      if (status.setup_required)   return 'needs_welcome';
-      return 'ready';
-    },
-
     // ── API helper ─────────────────────────────────────────
     async api(path, options = {}) {
       const headers = { 'Content-Type': 'application/json', ...options.headers };
@@ -219,131 +148,6 @@ document.addEventListener('alpine:init', () => {
       const res = await fetch(path, { ...options, headers });
       if (res.status === 401) { this.logout(); return null; }
       return res;
-    },
-
-    // ── Licence ─────────────────────────────────────────────
-    async checkLicence() {
-      try {
-        const res = await fetch('/api/licence');
-        return res.ok;
-      } catch (_) {
-        return false;
-      }
-    },
-
-    async activateLicence() {
-      this.licenceForm.error = '';
-      const key = this.licenceForm.key.trim();
-      if (!key) {
-        this.licenceForm.error = this.t('licence.empty');
-        return;
-      }
-
-      try {
-        const res = await fetch('/api/licence', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ key })
-        });
-
-        if (!res.ok) {
-          this.licenceForm.error = this.t('licence.invalid');
-          return;
-        }
-
-        const data = await res.json();
-        // Stocker l'id pour l'écran welcome qui l'affiche comme
-        // default password
-        this.bootstrapLicenceId = data.id || '';
-
-        if (data.token) {
-          // Bootstrap admin déclenché par l'activation — auto-login
-          // pour enchainer setup → welcome sans friction
-          this.token = data.token;
-          this.role = 'admin';
-          this.passwordChanged = true;  // pas de force-change V1
-          localStorage.setItem('token', data.token);
-          localStorage.setItem('role', 'admin');
-          localStorage.setItem('passwordChanged', 'true');
-          this.view = 'welcome';
-        } else {
-          // Re-activation sur serveur déjà setup — pas de token,
-          // l'user passe par login normal
-          this.view = 'login';
-        }
-
-        this.licenceForm.key = '';   // wipe input
-      } catch (_) {
-        this.licenceForm.error = this.t('licence.error');
-      }
-    },
-
-    // ── Forgot password (V1 first-launch) ───────────────────
-    async submitForgot() {
-      this.forgotForm.error = '';
-      const key = this.forgotForm.key.trim();
-      if (!key) {
-        this.forgotForm.error = this.t('forgot.empty');
-        return;
-      }
-      try {
-        const res = await fetch('/api/setup/forgot-password', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ licenceKey: key })
-        });
-        if (res.ok) {
-          this.forgotForm.success = true;
-          this.forgotForm.key = '';
-        } else {
-          let msg = this.t('forgot.invalid');
-          try { msg = (await res.json()).error || msg; } catch (_) {}
-          this.forgotForm.error = msg;
-        }
-      } catch (_) {
-        this.forgotForm.error = this.t('forgot.error');
-      }
-    },
-
-    // ── Welcome (V1 first-launch) ──────────────────────────
-    async submitWelcome(action) {
-      if (this.welcomeForm.submitting) return;
-      this.welcomeForm.error = '';
-
-      const body = { action };
-      if (action === 'renew') {
-        const u = this.welcomeForm.username.trim();
-        const p = this.welcomeForm.password;
-        if (!u && !p) {
-          this.welcomeForm.error = this.t('welcome.atLeastOne');
-          return;
-        }
-        if (u) body.username = u;
-        if (p) body.password = p;
-      }
-
-      this.welcomeForm.submitting = true;
-      try {
-        const res = await this.api('/api/setup/welcome', {
-          method: 'POST',
-          body: JSON.stringify(body)
-        });
-        if (!res) return;   // 401 → logout déjà déclenché par api()
-
-        if (res.ok) {
-          this.welcomeForm = { username: '', password: '', error: '', submitting: false };
-          this.bootstrapLicenceId = '';
-          this.enterDashboard();
-        } else {
-          let errMsg = this.t('welcome.error');
-          try { errMsg = (await res.json()).error || errMsg; } catch (_) {}
-          this.welcomeForm.error = errMsg;
-        }
-      } catch (_) {
-        this.welcomeForm.error = this.t('welcome.error');
-      } finally {
-        this.welcomeForm.submitting = false;
-      }
     },
 
     // ── Auth ───────────────────────────────────────────────
@@ -441,26 +245,6 @@ document.addEventListener('alpine:init', () => {
       this.loadHistoryConfig();
       this.loadBackupConfig();
       this.loadBackupList();
-      this.loadLicenceInfo();
-    },
-
-    async loadLicenceInfo() {
-      try {
-        const res = await fetch('/api/licence');
-        if (res.ok) {
-          this.licenceInfo = await res.json();
-        } else {
-          this.licenceInfo = null;
-        }
-      } catch (_) {
-        this.licenceInfo = null;
-      }
-    },
-
-    formatLicenceExpiry(ms) {
-      if (!ms || ms === 0) return this.t('licence.lifetime');
-      const d = new Date(ms);
-      return this.t('licence.expiresAt') + ' ' + d.toLocaleDateString();
     },
 
     async loadUsers() {
@@ -512,50 +296,6 @@ document.addEventListener('alpine:init', () => {
       this.resetUserForm.targetUser = null;
       this.resetUserForm.newPassword = '';
       this.resetUserForm.error = '';
-    },
-
-    askResetAdminToLicence() {
-      this.resetAdminForm.confirmOpen = true;
-      this.resetAdminForm.msg = '';
-      this.resetAdminForm.msgType = '';
-    },
-
-    async confirmResetAdminToLicence() {
-      if (!this.licenceInfo || this.resetAdminForm.busy) return;
-      this.resetAdminForm.busy = true;
-      try {
-        // L'admin connecté veut reset au default (licence ID).
-        // On récupère l'admin user (peut avoir été renommé via Renew),
-        // puis appelle le reset-password endpoint avec licence.id.
-        const usersRes = await this.api('/api/admin/users');
-        if (!usersRes || !usersRes.ok) {
-          this.resetAdminForm.msg = this.t('licence.resetAdminError');
-          this.resetAdminForm.msgType = 'error';
-          return;
-        }
-        const data = await usersRes.json();
-        const adminUser = (data.users || []).find(u => u.role === 'admin');
-        if (!adminUser) {
-          this.resetAdminForm.msg = this.t('licence.resetAdminError');
-          this.resetAdminForm.msgType = 'error';
-          return;
-        }
-        const res = await this.api(`/api/admin/users/${adminUser.id}/reset-password`, {
-          method: 'POST',
-          body: JSON.stringify({ newPassword: this.licenceInfo.id })
-        });
-        if (res && res.ok) {
-          this.resetAdminForm.confirmOpen = false;
-          this.resetAdminForm.msg = this.t('licence.resetAdminOk');
-          this.resetAdminForm.msgType = 'success';
-        } else if (res) {
-          const err = await res.json().catch(() => null);
-          this.resetAdminForm.msg = err?.error || this.t('licence.resetAdminError');
-          this.resetAdminForm.msgType = 'error';
-        }
-      } finally {
-        this.resetAdminForm.busy = false;
-      }
     },
 
     async confirmResetUserPassword() {
@@ -823,9 +563,6 @@ document.addEventListener('alpine:init', () => {
         case 'backups':
           this.loadBackupConfig();
           this.loadBackupList();
-          break;
-        case 'licence-info':
-          this.loadLicenceInfo();
           break;
       }
     },

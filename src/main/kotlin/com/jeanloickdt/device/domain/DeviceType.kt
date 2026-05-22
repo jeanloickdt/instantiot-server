@@ -1,16 +1,35 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.device.domain
 
 /**
- * Type de device IoT supporté par InstantIoT.
+ * Type of IoT device supported by InstantIoT.
  *
- * Chaque entrée correspond à un board physique avec ses propres
- * contraintes matérielles (WiFi intégré, Ethernet shield, etc.).
- * La map [DEVICE_CONNECTIVITY_MAP] définit les modes de connectivité
- * disponibles par board.
+ * Each entry corresponds to a physical board with its own hardware
+ * constraints (built-in WiFi, Ethernet shield, etc.).
+ * The [DEVICE_CONNECTIVITY_MAP] map defines the connectivity modes
+ * available per board.
  *
- * ⚠️ Stocké en DB comme String (nom de l'enum) — voir
- * `devices.device_type` colonne. Toute nouvelle entrée doit être
- * ajoutée à la map ET synchronisée côté app Android via
+ * ⚠️ Stored in DB as String (name of the enum) — see the
+ * `devices.device_type` column. Any new entry must be added to the
+ * map AND synchronized on the Android app side via
  * `feature/connectivity/domain/.../DeviceType.kt`.
  */
 enum class DeviceType {
@@ -23,8 +42,8 @@ enum class DeviceType {
 
     companion object {
         /**
-         * Parse case-sensitive d'un String vers [DeviceType].
-         * Retourne null si la valeur ne correspond à aucune entrée.
+         * Case-sensitive parse from a String to [DeviceType].
+         * Returns null if the value matches no entry.
          */
         fun fromString(value: String?): DeviceType? = value?.let {
             entries.firstOrNull { entry -> entry.name == it }
@@ -33,10 +52,10 @@ enum class DeviceType {
 }
 
 /**
- * Mode de connectivité physique d'un device vers le serveur InstantIoT.
+ * Physical connectivity mode of a device toward the InstantIoT server.
  *
- * ⚠️ Stocké en DB comme String (nom de l'enum) — voir
- * `devices.connectivity` colonne.
+ * ⚠️ Stored in DB as String (name of the enum) — see the
+ * `devices.connectivity` column.
  */
 enum class DeviceConnectivity {
     WIFI,
@@ -50,19 +69,19 @@ enum class DeviceConnectivity {
 }
 
 /**
- * Mapping contraint : pour chaque [DeviceType], la liste des modes
- * de connectivité réellement supportés par le board.
+ * Constrained mapping: for each [DeviceType], the list of connectivity
+ * modes actually supported by the board.
  *
  * - `ESP32`               → WIFI + ETHERNET (ESP32-Ethernet, LAN8720, etc.)
- * - `ESP8266`             → WIFI seul
- * - `ARDUINO_UNO_R4_WIFI` → WIFI seul (puce WiFi intégrée)
+ * - `ESP8266`             → WIFI only
+ * - `ARDUINO_UNO_R4_WIFI` → WIFI only (built-in WiFi chip)
  * - `ARDUINO_UNO_R4_MINIMA` → ETHERNET via Ethernet shield
- * - `ARDUINO_MEGA_2560`   → ETHERNET via Ethernet shield (pas de WiFi natif)
- * - `ARDUINO_NANO_33_IOT` → WIFI seul
+ * - `ARDUINO_MEGA_2560`   → ETHERNET via Ethernet shield (no native WiFi)
+ * - `ARDUINO_NANO_33_IOT` → WIFI only
  *
- * ⚠️ À garder synchronisé avec l'app Android côté
- * `feature/connectivity/domain/.../DeviceType.kt`. TODO: partager via
- * un module common Gradle si la duplication devient un problème.
+ * ⚠️ Keep synchronized with the Android app side
+ * `feature/connectivity/domain/.../DeviceType.kt`. TODO: share via
+ * a common Gradle module if the duplication becomes a problem.
  */
 val DEVICE_CONNECTIVITY_MAP: Map<DeviceType, Set<DeviceConnectivity>> = mapOf(
     DeviceType.ESP32                 to setOf(DeviceConnectivity.WIFI, DeviceConnectivity.ETHERNET),
@@ -74,9 +93,9 @@ val DEVICE_CONNECTIVITY_MAP: Map<DeviceType, Set<DeviceConnectivity>> = mapOf(
 )
 
 /**
- * Valide qu'une combinaison `(deviceType, connectivity)` est acceptable
- * selon [DEVICE_CONNECTIVITY_MAP]. Utilisé par `POST /api/devices` pour
- * rejeter avec 400 les paires invalides (ex : ESP8266 + ETHERNET).
+ * Validates that a `(deviceType, connectivity)` combination is acceptable
+ * according to [DEVICE_CONNECTIVITY_MAP]. Used by `POST /api/devices` to
+ * reject invalid pairs with 400 (e.g. ESP8266 + ETHERNET).
  */
 fun isValidDeviceCombination(
     type: DeviceType,

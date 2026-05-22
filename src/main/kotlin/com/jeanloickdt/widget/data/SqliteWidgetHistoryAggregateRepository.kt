@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/data/SqliteWidgetHistoryAggregateRepository.kt
 package com.jeanloickdt.widget.data
 
@@ -9,13 +28,13 @@ import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.transactions.transaction
 
 /**
- * Impl SQLite paramétrée par la [table] (une instance par tier).
+ * SQLite impl parameterized by the [table] (one instance per tier).
  *
- * Architecture Blynk-style (depuis refonte historique iWidgets) : les
- * inserts arrivent en batch depuis le job de flush 5s qui draine les
- * [TierAggregator] RAM. Idempotence via INDEX UNIQUE
- * `(widget_id, COALESCE(series_id, ''), bucket_at)` créé dans
- * `DatabaseFactory.init` → INSERT OR IGNORE silencieux sur doublons.
+ * Blynk-style architecture (since the iWidgets history rework): the
+ * inserts arrive in batch from the 5s flush job that drains the
+ * RAM [TierAggregator]s. Idempotence via UNIQUE INDEX
+ * `(widget_id, COALESCE(series_id, ''), bucket_at)` created in
+ * `DatabaseFactory.init` → silent INSERT OR IGNORE on duplicates.
  */
 class SqliteWidgetHistoryAggregateRepository(
     private val table: WidgetHistoryAggregateTable
@@ -23,16 +42,16 @@ class SqliteWidgetHistoryAggregateRepository(
 
     override fun insertBatch(rows: List<WidgetHistoryAggregateRepository.AggregateInsertRow>) {
         if (rows.isEmpty()) return
-        // SQL brut via JDBC PreparedStatement pour :
-        //   1. Bénéficier du `INSERT OR IGNORE` SQLite — skip silencieux
-        //      des rows qui violeraient l'INDEX UNIQUE (widget_id,
-        //      COALESCE(series_id, ''), bucket_at) défini dans
-        //      DatabaseFactory. Idempotent : un retry après crash
-        //      partiel ne crée pas de doublons.
-        //   2. Éviter les frictions d'inference Kotlin avec
-        //      `batchInsert` sur une abstract Table (les Column<T> ne
-        //      sont pas toujours résolus correctement sur l'abstract).
-        //   3. Performance — une seule prepared statement, exec batch.
+        // Raw SQL via JDBC PreparedStatement to:
+        //   1. Benefit from SQLite's `INSERT OR IGNORE` — silently skip
+        //      rows that would violate the UNIQUE INDEX (widget_id,
+        //      COALESCE(series_id, ''), bucket_at) defined in
+        //      DatabaseFactory. Idempotent: a retry after a partial
+        //      crash does not create duplicates.
+        //   2. Avoid Kotlin inference friction with
+        //      `batchInsert` on an abstract Table (the Column<T> are
+        //      not always resolved correctly on the abstract).
+        //   3. Performance — a single prepared statement, batch exec.
         val tableName = table.tableName
         val sql = """
             INSERT OR IGNORE INTO $tableName

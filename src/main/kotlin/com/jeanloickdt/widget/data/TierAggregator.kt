@@ -1,35 +1,54 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/data/TierAggregator.kt
 package com.jeanloickdt.widget.data
 
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Agrégateur RAM d'un tier (minute, hour ou day).
+ * RAM aggregator for one tier (minute, hour or day).
  *
- * Maintient une [ConcurrentHashMap] de [BucketAccumulator] indexée par
- * (widgetId, seriesId, bucketAt). Quand un sample arrive via [collect],
- * il alimente le bucket courant ; à intervalle régulier, le job de
- * flush appelle [extractClosedBuckets] pour récupérer les buckets
- * dont la fenêtre est terminée et les insérer en DB.
+ * Maintains a [ConcurrentHashMap] of [BucketAccumulator] indexed by
+ * (widgetId, seriesId, bucketAt). When a sample arrives via [collect],
+ * it feeds the current bucket; at regular intervals, the
+ * flush job calls [extractClosedBuckets] to retrieve the buckets
+ * whose window has ended and insert them into the DB.
  *
- * Le bucket "courant" (celui dont la fenêtre n'est pas encore fermée)
- * reste en RAM pour continuer à accumuler les samples qui arrivent.
+ * The "current" bucket (the one whose window has not yet closed)
+ * stays in RAM to keep accumulating incoming samples.
  *
- * Thread-safety : la `ConcurrentHashMap` protège les insertions, et
- * chaque [BucketAccumulator] a son propre lock interne pour les updates
- * atomiques. Pas besoin de lock global → throughput élevé même sous
- * forte charge multi-coroutine.
+ * Thread-safety: the `ConcurrentHashMap` protects the insertions, and
+ * each [BucketAccumulator] has its own internal lock for atomic
+ * updates. No need for a global lock → high throughput even under
+ * heavy multi-coroutine load.
  *
- * Architecture inspirée de Blynk Legacy Server (open source).
+ * Architecture inspired by the Blynk Legacy Server (open source).
  *
- * @param bucketSizeMs taille du bucket en ms (60_000 / 3_600_000 / 86_400_000)
+ * @param bucketSizeMs bucket size in ms (60_000 / 3_600_000 / 86_400_000)
  */
 class TierAggregator(
     val bucketSizeMs: Long
 ) {
     /**
-     * Clé composite identifiant un bucket dans la map. Réduite à un
-     * triplet immutable hashable pour servir de clé `ConcurrentHashMap`.
+     * Composite key identifying a bucket in the map. Reduced to a
+     * hashable immutable triple to serve as a `ConcurrentHashMap` key.
      */
     private data class BucketKey(
         val widgetId: String,
@@ -40,15 +59,15 @@ class TierAggregator(
     private val buckets = ConcurrentHashMap<BucketKey, BucketAccumulator>()
 
     /**
-     * Alimente le bucket correspondant au timestamp `ts` avec `value`.
-     * Crée le bucket si absent (race-free via `computeIfAbsent`).
+     * Feeds the bucket corresponding to timestamp `ts` with `value`.
+     * Creates the bucket if absent (race-free via `computeIfAbsent`).
      *
-     * @param widgetId protocolId du widget
-     * @param seriesId série pour les charts multi-courbes (null = mono)
-     * @param ts timestamp du sample (ms epoch)
-     * @param value valeur numérique du sample
-     * @param projectId propagé jusqu'au bucket pour l'isolation owner
-     * @param ownerId propagé jusqu'au bucket pour l'isolation owner
+     * @param widgetId widget protocolId
+     * @param seriesId series for multi-curve charts (null = single)
+     * @param ts sample timestamp (ms epoch)
+     * @param value numeric value of the sample
+     * @param projectId propagated down to the bucket for owner isolation
+     * @param ownerId propagated down to the bucket for owner isolation
      */
     fun collect(
         widgetId: String,
@@ -73,19 +92,19 @@ class TierAggregator(
     }
 
     /**
-     * Extrait (= retire de la map + retourne) tous les buckets dont la
-     * fenêtre est terminée à `now`. Un bucket est "fermé" quand
-     * `bucketAt + bucketSizeMs <= now` (la fenêtre du bucket commence
-     * à `bucketAt` et finit à `bucketAt + bucketSizeMs`).
+     * Extracts (= removes from the map + returns) all buckets whose
+     * window has ended at `now`. A bucket is "closed" when
+     * `bucketAt + bucketSizeMs <= now` (the bucket's window starts
+     * at `bucketAt` and ends at `bucketAt + bucketSizeMs`).
      *
-     * Appelé par le job de flush toutes les 5s. Le bucket courant
-     * (`bucketAt + bucketSizeMs > now`) reste dans la map pour
-     * continuer à accumuler.
+     * Called by the flush job every 5s. The current bucket
+     * (`bucketAt + bucketSizeMs > now`) stays in the map to
+     * keep accumulating.
      */
     fun extractClosedBuckets(now: Long): List<BucketAccumulator.Snapshot> {
-        // On itère sur les keys ; la map peut être mutée pendant — c'est
-        // safe (ConcurrentHashMap) et les insertions concurrentes sur le
-        // bucket courant ne nous regardent pas.
+        // We iterate over the keys; the map may be mutated meanwhile — that is
+        // safe (ConcurrentHashMap) and concurrent insertions on the
+        // current bucket are none of our concern.
         val closed = mutableListOf<BucketAccumulator.Snapshot>()
         val keysToRemove = mutableListOf<BucketKey>()
 
@@ -96,8 +115,8 @@ class TierAggregator(
             }
         }
 
-        // Remove en deuxième passe pour ne pas muter pendant l'itération
-        // (même si ConcurrentHashMap supporte, ça reste plus clair).
+        // Remove in a second pass to avoid mutating during iteration
+        // (even though ConcurrentHashMap supports it, this stays clearer).
         for (key in keysToRemove) {
             buckets.remove(key)
         }
@@ -106,10 +125,10 @@ class TierAggregator(
     }
 
     /**
-     * Extrait TOUS les buckets, y compris le courant (= dont la
-     * fenêtre n'est pas encore close). Utilisé UNIQUEMENT au shutdown
-     * propre via le hook `ApplicationStopping` pour ne rien perdre
-     * lors d'un restart contrôlé.
+     * Extracts ALL buckets, including the current one (= whose
+     * window has not yet closed). Used ONLY on a clean shutdown
+     * via the `ApplicationStopping` hook to lose nothing
+     * during a controlled restart.
      */
     fun extractAllBuckets(): List<BucketAccumulator.Snapshot> {
         val all = mutableListOf<BucketAccumulator.Snapshot>()
@@ -120,6 +139,6 @@ class TierAggregator(
         return all
     }
 
-    /** Nombre de buckets actuellement en RAM (utile pour metrics / debug). */
+    /** Number of buckets currently in RAM (useful for metrics / debug). */
     fun size(): Int = buckets.size
 }

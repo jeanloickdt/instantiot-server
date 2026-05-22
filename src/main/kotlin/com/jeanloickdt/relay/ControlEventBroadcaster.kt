@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // relay/ControlEventBroadcaster.kt
 package com.jeanloickdt.relay
 
@@ -7,18 +26,18 @@ import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 
 /**
- * Broadcaster de control events vers les apps connectees via WebSocket.
+ * Broadcaster of control events to the apps connected via WebSocket.
  *
- * Les events sont serialises en JSON et envoyes en Frame.Text (pour ne pas
- * entrer en conflit avec les Frame.Binary des trames iWidgets v1).
+ * The events are serialized as JSON and sent as Frame.Text (so as not to
+ * conflict with the Frame.Binary of the iWidgets v1 frames).
  *
- * Trois types d'events :
+ * Three types of events :
  *   - deviceOnline(projectId, deviceId, deviceName)
- *       → broadcast a toutes les apps qui regardent le projet
+ *       → broadcast to all apps watching the project
  *   - deviceOffline(projectId, deviceId, reason)
- *       → broadcast a toutes les apps qui regardent le projet
+ *       → broadcast to all apps watching the project
  *   - commandFailed(session, deviceId, reason)
- *       → envoye a la session emettrice uniquement (pas un broadcast)
+ *       → sent to the emitting session only (not a broadcast)
  */
 object ControlEventBroadcaster {
 
@@ -26,8 +45,8 @@ object ControlEventBroadcaster {
     private val json = Json { encodeDefaults = false }
 
     /**
-     * Device ESP vient de se connecter en TCP.
-     * Broadcast a toutes les apps du projet.
+     * An ESP device has just connected over TCP.
+     * Broadcast to all apps of the project.
      */
     suspend fun deviceOnline(projectId: String, deviceId: String, deviceName: String) {
         val event = ControlEvent(
@@ -39,7 +58,7 @@ object ControlEventBroadcaster {
     }
 
     /**
-     * Device ESP est deconnecte.
+     * An ESP device has disconnected.
      * reason : DISCONNECTED / TOKEN_RENEWED / DELETED
      */
     suspend fun deviceOffline(projectId: String, deviceId: String, reason: String) {
@@ -52,8 +71,8 @@ object ControlEventBroadcaster {
     }
 
     /**
-     * Commande App->Device a echoue.
-     * Envoye uniquement a la session emettrice.
+     * An App->Device command has failed.
+     * Sent to the emitting session only.
      * reason : DEVICE_OFFLINE / FORBIDDEN / RELAY_ERROR
      */
     suspend fun commandFailed(
@@ -70,22 +89,22 @@ object ControlEventBroadcaster {
     }
 
     /**
-     * Un bucket d'agregation vient de fermer cote serveur (RAM aggregator
-     * → DB). Broadcast aux apps qui ont **explicitement souscrit** au
-     * widget via le message inbound "subscribe_history".
+     * An aggregation bucket has just closed on the server side (RAM aggregator
+     * → DB). Broadcast to the apps that have **explicitly subscribed** to the
+     * widget via the inbound "subscribe_history" message.
      *
-     * Filtrage en 2 niveaux :
-     *  1. Project match : la session doit avoir activeProjectId == projectId.
-     *  2. Subscription match : la session doit avoir (widgetId → granularity)
-     *     dans son set `historySubs`.
+     * Filtering at 2 levels :
+     *  1. Project match : the session must have activeProjectId == projectId.
+     *  2. Subscription match : the session must have (widgetId → granularity)
+     *     in its `historySubs` set.
      *
-     * → Une app qui n'a aucun chart actif pour ce widget ne recoit pas
-     *   ce message. Bande passante zero quand inutile.
+     * → An app that has no active chart for this widget does not receive
+     *   this message. Zero bandwidth when useless.
      *
-     * Volume nominal (10 widgets souscrits, 3 tiers) :
-     *  - ~10 msg/min cote minute
-     *  - ~10 msg/h cote hour
-     *  - ~10 msg/jour cote day
+     * Nominal volume (10 subscribed widgets, 3 tiers) :
+     *  - ~10 msg/min on the minute side
+     *  - ~10 msg/h on the hour side
+     *  - ~10 msg/day on the day side
      */
     suspend fun bucketClosed(
         projectId: String,
@@ -125,7 +144,7 @@ object ControlEventBroadcaster {
     }
 
     // ────────────────────────────────────────────────────────────
-    // Helpers internes
+    // Internal helpers
     // ────────────────────────────────────────────────────────────
 
     private suspend fun broadcastToProject(projectId: String, event: ControlEvent) {

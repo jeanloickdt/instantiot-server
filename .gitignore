@@ -36,10 +36,9 @@ out/
 .vscode/*.db
 .instantiot/
 
-# InstantIoT — fichiers sensibles
+# InstantIoT — fichiers sensibles / runtime
 *.db
 .instantiot/
-doc-and-test/licence-keys/licence-private.pem
 .venv/
 build/installer/
 build/jpackage-input/
@@ -47,6 +46,3 @@ build/jpackage-input/
 # macOS
 .DS_Store
 **/.DS_Store
-
-# Python venv pour generate-licence.py
-doc-and-test/.venv/

@@ -1,27 +1,46 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/data/BucketAccumulator.kt
 package com.jeanloickdt.widget.data
 
 /**
- * Accumulateur thread-safe d'un bucket d'agrégation en RAM.
+ * Thread-safe accumulator for an in-RAM aggregation bucket.
  *
- * Une instance représente UN bucket (= UNE paire (widgetId, seriesId)
- * × UN intervalle de temps) en cours de remplissage. Les samples qui
- * arrivent pendant la fenêtre de ce bucket sont accumulés via
- * [addSample], puis le bucket est flushé en DB par [TierAggregator]
- * une fois sa fenêtre fermée.
+ * One instance represents ONE bucket (= ONE (widgetId, seriesId) pair
+ * × ONE time interval) being filled. The samples that
+ * arrive during this bucket's window are accumulated via
+ * [addSample], then the bucket is flushed to the DB by [TierAggregator]
+ * once its window has closed.
  *
- * Thread-safety : tous les champs mutables sont protégés par un lock
- * interne (`synchronized`). Plusieurs samples peuvent arriver
- * simultanément depuis différentes coroutines (relay TCP), c'est ok.
+ * Thread-safety: all mutable fields are protected by an internal
+ * lock (`synchronized`). Several samples may arrive
+ * simultaneously from different coroutines (TCP relay), which is fine.
  *
- * Sérialisation triviale (types primitifs uniquement) — préparation
- * pour le futur SnapshotManager anti-crash.
+ * Trivial serialization (primitive types only) — preparation
+ * for the future anti-crash SnapshotManager.
  *
- * @param widgetId protocolId du widget (clé partagée app/device)
- * @param projectId projet auquel appartient le widget
- * @param ownerId owner du projet (isolation multi-user)
- * @param seriesId série pour les charts multi-courbes (null = mono-série)
- * @param bucketAt timestamp ms du début du bucket (aligné sur bucketSize)
+ * @param widgetId widget protocolId (shared app/device key)
+ * @param projectId project the widget belongs to
+ * @param ownerId project owner (multi-user isolation)
+ * @param seriesId series for multi-curve charts (null = single-series)
+ * @param bucketAt start timestamp of the bucket in ms (aligned on bucketSize)
  */
 class BucketAccumulator(
     val widgetId: String,
@@ -30,17 +49,17 @@ class BucketAccumulator(
     val seriesId: String?,
     val bucketAt: Long
 ) {
-    // Lock interne — synchronized() sur this. Le coût d'un monitor enter
-    // sur quelques nanosecondes est négligeable vs le bénéfice de pouvoir
-    // traiter des bursts (un capteur à 5Hz × 100 widgets = 500 samples/s).
+    // Internal lock — synchronized() on this. The cost of a monitor enter
+    // over a few nanoseconds is negligible vs the benefit of being able to
+    // handle bursts (a sensor at 5Hz × 100 widgets = 500 samples/s).
     private var _minValue: Double = Double.POSITIVE_INFINITY
     private var _maxValue: Double = Double.NEGATIVE_INFINITY
     private var _sumValue: Double = 0.0
     private var _sampleCount: Int = 0
 
     /**
-     * Ajoute un sample dans le bucket. Met à jour min/max/sum/count
-     * de manière atomique.
+     * Adds a sample to the bucket. Updates min/max/sum/count
+     * atomically.
      */
     fun addSample(value: Double) {
         synchronized(this) {
@@ -52,8 +71,8 @@ class BucketAccumulator(
     }
 
     /**
-     * Snapshot immutable des accumulators au moment de l'appel.
-     * Utilisé par [TierAggregator.extractClosedBuckets] avant flush DB.
+     * Immutable snapshot of the accumulators at call time.
+     * Used by [TierAggregator.extractClosedBuckets] before the DB flush.
      */
     fun snapshot(): Snapshot = synchronized(this) {
         Snapshot(
@@ -70,9 +89,9 @@ class BucketAccumulator(
     }
 
     /**
-     * Représentation immutable d'un bucket prêt à être flushé en DB.
-     * Tous les champs sont primitifs / String → sérialisable facilement
-     * pour un futur snapshot anti-crash.
+     * Immutable representation of a bucket ready to be flushed to the DB.
+     * All fields are primitive / String → easily serializable
+     * for a future anti-crash snapshot.
      */
     data class Snapshot(
         val widgetId: String,

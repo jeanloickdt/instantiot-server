@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.discovery
 
 import com.jeanloickdt.common.ServerConfig
@@ -7,20 +26,20 @@ import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
 
 /**
- * Annonce le serveur InstantIoT en Bonjour / mDNS sur le LAN.
+ * Announces the InstantIoT server over Bonjour / mDNS on the LAN.
  *
- * Service publié :
+ * Published service:
  *  - type    : `_instantiot._tcp.local.`
- *  - port    : [ServerConfig.runningHttpPort] (utilisé par /api/status)
- *  - props   : `version`, `tcpPort` (port relay TCP des devices ESP32),
- *              `name` (nom user-facing — futur paramétrage admin).
+ *  - port    : [ServerConfig.runningHttpPort] (used by /api/status)
+ *  - props   : `version`, `tcpPort` (TCP relay port of ESP32 devices),
+ *              `name` (user-facing name — future admin setting).
  *
- * Le bind passe par l'IP LAN détectée par [ServerConfig.localIp]. JmDNS
- * peut écouter sur toutes les interfaces, mais on cible la LAN pour ne
- * pas annoncer sur des bridges Docker / loopback.
+ * The bind goes through the LAN IP detected by [ServerConfig.localIp].
+ * JmDNS can listen on all interfaces, but we target the LAN to avoid
+ * announcing on Docker bridges / loopback.
  *
- * Idempotent : appeler [start] après un [stop] re-publie ; appeler [stop]
- * sans démarrer est un no-op.
+ * Idempotent: calling [start] after a [stop] re-publishes; calling [stop]
+ * without starting is a no-op.
  */
 object MdnsPublisher {
 
@@ -32,12 +51,12 @@ object MdnsPublisher {
     private var serviceInfo: ServiceInfo? = null
 
     fun start(displayName: String) {
-        // ─── macOS : déléguer à dns-sd natif ──────────────────
-        // JmDNS lutte contre mDNSResponder + Chrome + ADB +
-        // Arduino mdns-discovery pour le port 5353 et finit par
-        // échouer ("NoRouteToHostException"). dns-sd dialogue
-        // directement avec mDNSResponder, pas de conflit.
-        // Linux (avahi) et Windows : JmDNS marche bien.
+        // ─── macOS: delegate to native dns-sd ──────────────────
+        // JmDNS fights against mDNSResponder + Chrome + ADB +
+        // Arduino mdns-discovery for port 5353 and ends up
+        // failing ("NoRouteToHostException"). dns-sd talks
+        // directly with mDNSResponder, no conflict.
+        // Linux (avahi) and Windows: JmDNS works fine.
         if (isMacOs()) {
             DnsSdPublisher.start(displayName)
             return
@@ -55,23 +74,23 @@ object MdnsPublisher {
         val bindAddress = resolveBindAddress()
 
         try {
-            // ⚠️ Hostname mDNS explicite — sinon collision avec le
-            // `mDNSResponder` système (macOS) ou `avahi-daemon` (Linux)
-            // qui ont **déjà** publié le hostname `.local.` de la machine.
-            // JmDNS lance alors un probe, voit la réponse du daemon
-            // système pour le même nom, croit à un conflit, tente un
-            // recover, time out, et meurt avec "Could not recover we
-            // are Down!".
+            // ⚠️ Explicit mDNS hostname — otherwise collision with the
+            // system `mDNSResponder` (macOS) or `avahi-daemon` (Linux)
+            // which have **already** published the machine's `.local.`
+            // hostname. JmDNS then launches a probe, sees the system
+            // daemon's reply for the same name, believes there's a
+            // conflict, attempts a recover, times out, and dies with
+            // "Could not recover we are Down!".
             //
-            // Le hash mélange l'IP de bind (unique par machine sur un
-            // LAN sain — DHCP garantit l'unicité) ET le displayName,
-            // pour qu'un même utilisateur lançant 2 serveurs sur 2
-            // machines distinctes (même `displayName` "InstantIoT
-            // Server" par défaut) n'aboutisse pas au même hostname.
-            // Si **par malchance** collision quand même : JmDNS
-            // suffixe automatiquement le **service instance name**
-            // (`Name (2)._instantiot._tcp.`), donc l'app voit deux
-            // entrées distinctes — pas de perte d'info pour l'user.
+            // The hash mixes the bind IP (unique per machine on a
+            // healthy LAN — DHCP guarantees uniqueness) AND the
+            // displayName, so that the same user running 2 servers on
+            // 2 distinct machines (same default `displayName`
+            // "InstantIoT Server") doesn't end up with the same
+            // hostname. If a collision happens anyway **by bad luck**:
+            // JmDNS automatically suffixes the **service instance name**
+            // (`Name (2)._instantiot._tcp.`), so the app sees two
+            // distinct entries — no info loss for the user.
             val seed = "$displayName|${bindAddress.hostAddress}"
             val mdnsHostname = "instantiot-${kotlin.math.abs(seed.hashCode())}"
             val instance = JmDNS.create(bindAddress, mdnsHostname)
@@ -128,13 +147,13 @@ object MdnsPublisher {
         System.getProperty("os.name").lowercase().contains("mac")
 
     /**
-     * Résout l'adresse IPv4 LAN pour le bind JmDNS. Utilise le scoring
-     * intelligent de [ServerConfig.bestLanInterface] qui filtre les
-     * interfaces VPN (utun/tun/tap), virtuelles, sans multicast — sinon
-     * JmDNS bind sur l'interface VPN et on prend des
-     * `NoRouteToHostException` au premier paquet multicast `224.0.0.251`.
+     * Resolves the LAN IPv4 address for the JmDNS bind. Uses the smart
+     * scoring of [ServerConfig.bestLanInterface] which filters out VPN
+     * interfaces (utun/tun/tap), virtual ones, those without multicast —
+     * otherwise JmDNS binds on the VPN interface and we get
+     * `NoRouteToHostException` on the first `224.0.0.251` multicast packet.
      *
-     * Fallback `InetAddress.getLocalHost()` en dernier recours.
+     * Falls back to `InetAddress.getLocalHost()` as a last resort.
      */
     private fun resolveBindAddress(): InetAddress = try {
         val best = ServerConfig.bestLanInterface()

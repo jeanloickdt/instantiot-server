@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.relay
 
 import com.jeanloickdt.project.domain.ProjectRepository
@@ -16,12 +35,12 @@ import kotlin.time.Duration.Companion.seconds
 private val logger = LoggerFactory.getLogger("AppRelay")
 
 /**
- * Message inbound app → server pour s'abonner aux bucket_updated d'un set
- * de widgets. L'app envoie le set COMPLET à chaque changement (mount/dispose
- * de chart, ouverture/fermeture de bottom sheet, toggle "Enable history"). Pas
- * de delta — le server replace le set à chaque message reçu.
+ * Inbound app → server message to subscribe to the bucket_updated of a set
+ * of widgets. The app sends the COMPLETE set on each change (chart
+ * mount/dispose, bottom sheet open/close, "Enable history" toggle). No
+ * delta — the server replaces the set on each message received.
  *
- * Exemple :
+ * Example :
  * ```json
  * {"type":"subscribe_history","widgets":[
  *   {"widgetId":"gauge1","granularity":"minute"},
@@ -29,8 +48,8 @@ private val logger = LoggerFactory.getLogger("AppRelay")
  * ]}
  * ```
  *
- * Empty array = unsubscribe de tout (= server n'émet plus de bucket_updated
- * vers cette session).
+ * Empty array = unsubscribe from everything (= the server no longer emits
+ * bucket_updated to this session).
  */
 @Serializable
 private data class AppInboundMessage(
@@ -47,23 +66,23 @@ private data class HistorySubscriptionDto(
 private val appInboundJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
 /**
- * WebSocket relay — connexions app Android.
+ * WebSocket relay — Android app connections.
  *
  * Protocol :
- *   1. App se connecte → JWT vérifié
- *   2. Premier message texte = projectId → activeProjectId enregistré
- *   3. Tous les messages suivants = trames binaires iWidgets v1
- *   4. App se déconnecte → session retirée
+ *   1. App connects → JWT verified
+ *   2. First text message = projectId → activeProjectId registered
+ *   3. All subsequent messages = iWidgets v1 binary frames
+ *   4. App disconnects → session removed
  *
- * Chaque connexion app tourne dans sa propre coroutine Ktor — non-bloquant.
- * 50 apps connectées = 50 coroutines légères.
+ * Each app connection runs in its own Ktor coroutine — non-blocking.
+ * 50 connected apps = 50 lightweight coroutines.
  */
 fun Application.configureAppRelay(projectRepository: ProjectRepository) {
 
     install(WebSockets) {
-        pingPeriod = 15.seconds  // Ktor gère ping/pong automatiquement
-        timeout    = 30.seconds  // ferme si pas de réponse après 30s
-        maxFrameSize = 8192  // 8 KB — largement suffisant pour les trames iWidgets v1
+        pingPeriod = 15.seconds  // Ktor handles ping/pong automatically
+        timeout    = 30.seconds  // closes if no response after 30s
+        maxFrameSize = 8192  // 8 KB — largely sufficient for iWidgets v1 frames
     }
 
     routing {
@@ -71,14 +90,14 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
 
             webSocket("/ws/app") {
 
-                // récupérer le userId depuis le JWT
+                // retrieve the userId from the JWT
                 val userId = call.principal<JWTPrincipal>()?.subject
                 if (userId == null) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Unauthorized"))
                     return@webSocket
                 }
 
-                // handshake — premier message = projectId
+                // handshake — first message = projectId
                 val handshakeFrame = incoming.receive()
                 if (handshakeFrame !is Frame.Text) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Expected projectId as first message"))
@@ -91,11 +110,11 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                     return@webSocket
                 }
 
-                // 2e message = connectionInstanceId (UUID v4 par install).
-                // Permet le dedup fin sur (userId, projectId, instanceId) au
-                // lieu de (userId, projectId) — plusieurs devices du même
-                // user peuvent regarder le même projet en parallèle, seul
-                // le même install qui reconnect kick son zombie.
+                // 2nd message = connectionInstanceId (UUID v4 per install).
+                // Enables fine-grained dedup on (userId, projectId, instanceId)
+                // instead of (userId, projectId) — several devices of the same
+                // user can watch the same project in parallel, only the same
+                // install reconnecting kicks its own zombie.
                 val instanceFrame = incoming.receive()
                 if (instanceFrame !is Frame.Text) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Expected connectionInstanceId as second message"))
@@ -107,23 +126,23 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                     return@webSocket
                 }
 
-                // vérifier que le user est bien propriétaire du projet
+                // verify that the user actually owns the project
                 val project = projectRepository.findById(projectId)
                 if (project == null || project.ownerId != userId) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Project not found"))
                     return@webSocket
                 }
 
-                // Dedup par (userId, projectId, connectionInstanceId) : on
-                // ne kick que les sessions précédentes du **même install**.
-                // Devices différents (téléphone A + téléphone B du même user)
-                // cohabitent sur le même projet.
+                // Dedup by (userId, projectId, connectionInstanceId) : we
+                // only kick the previous sessions of the **same install**.
+                // Different devices (phone A + phone B of the same user)
+                // coexist on the same project.
                 //
-                // Cas typique du kick : l'app était en background, l'OS a
-                // freeze la socket TCP ; quand elle revient au foreground
-                // elle ouvre une nouvelle WS avec le même instanceId →
-                // l'ancienne fantôme est fermée immédiatement (au lieu
-                // d'attendre ~25s le ping timeout).
+                // Typical kick case : the app was in the background, the OS
+                // froze the TCP socket ; when it returns to the foreground
+                // it opens a new WS with the same instanceId → the old
+                // ghost is closed immediately (instead of waiting ~25s for
+                // the ping timeout).
                 val priorSessions = SessionRegistry.appSessions[userId]
                     ?.filter {
                         it.activeProjectId == projectId &&
@@ -135,26 +154,26 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                         prior.session.close(
                             CloseReason(CloseReason.Codes.NORMAL, "Superseded by new session")
                         )
-                    } catch (_: Exception) { /* déjà fermée — on s'en fiche */ }
+                    } catch (_: Exception) { /* already closed — does not matter */ }
                     SessionRegistry.unregisterApp(userId, prior.session)
                 }
                 if (priorSessions.isNotEmpty()) {
                     logger.info("Closed ${priorSessions.size} prior session(s) — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
                 }
 
-                // enregistrer la session app avec le projet actif
+                // register the app session with the active project
                 val appSession = SessionRegistry.registerApp(userId, this, connectionInstanceId)
                 SessionRegistry.setActiveProject(appSession, projectId)
                 logger.info("App connected — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
 
                 try {
-                    // Le dispatch est **séquentiel** (pas de `launch` par frame) :
-                    // chaque device a son `DeviceOutbox` qui serialize les writes
-                    // TCP + applique la backpressure. Lancer une coroutine par
-                    // frame casserait cette backpressure.
+                    // The dispatch is **sequential** (no `launch` per frame) :
+                    // each device has its `DeviceOutbox` which serializes the
+                    // TCP writes + applies backpressure. Launching a coroutine
+                    // per frame would break that backpressure.
                     //
-                    // Deux types de frames acceptés après le handshake :
-                    //   - Frame.Binary : trames iWidgets v1 (commandes app → device)
+                    // Two types of frames accepted after the handshake :
+                    //   - Frame.Binary : iWidgets v1 frames (app → device commands)
                     //   - Frame.Text   : control messages (subscribe_history, ...)
                     for (incomingFrame in incoming) {
 
@@ -174,7 +193,7 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
                         }
                     }
                 } finally {
-                    // déconnexion — retirer cette session spécifique
+                    // disconnection — remove this specific session
                     SessionRegistry.unregisterApp(userId, this@webSocket)
                     logger.info("App disconnected — userId=$userId")
                 }
@@ -184,11 +203,11 @@ fun Application.configureAppRelay(projectRepository: ProjectRepository) {
 }
 
 /**
- * Parse et applique un message inbound texte de l'app.
+ * Parse and apply an inbound text message from the app.
  *
- * Aujourd'hui un seul type : `subscribe_history` — met à jour le set
- * de widgets dont l'app veut recevoir les bucket_updated. Replace
- * l'ensemble (pas de delta) à chaque message.
+ * Today a single type : `subscribe_history` — updates the set of
+ * widgets for which the app wants to receive the bucket_updated.
+ * Replaces the whole set (no delta) on each message.
  */
 private fun handleAppTextMessage(appSession: AppSession, text: String) {
     val msg = try {
@@ -211,22 +230,22 @@ private fun handleAppTextMessage(appSession: AppSession, text: String) {
 }
 
 /**
- * Relay une trame binaire de l'app vers les devices ciblés.
+ * Relay a binary frame from the app to the targeted devices.
  *
  * Flow :
- *   1. Extraire les device UUIDs de la trame
- *   2. Classifier la trame (streaming ou discrète) pour la backpressure outbox
- *   3. Pour chaque UUID → trouver la session TCP dans SessionRegistry
- *      - Si absente/fermée → envoyer command_failed (reason=device_offline) a l'app
- *   4. Vérifier que le user est propriétaire du device (in-memory, pas de DB)
- *      - Si non-owner → envoyer command_failed (reason=forbidden) a l'app
- *   5. Trim le header DEV de la trame
- *   6. Envoyer la trame trimée au device via l'**outbox** du device
- *      - L'outbox sérialise les writes TCP (1 coroutine consommatrice par
- *        device) et applique la backpressure (drop streaming si plein)
- *      - Si l'outbox est fermée (device déconnecté entre-temps) → command_failed
- *      - Si trame discrète et outbox plein → `send` suspend brièvement —
- *        la réception WS de l'app est ainsi backpressured proprement
+ *   1. Extract the device UUIDs from the frame
+ *   2. Classify the frame (streaming or discrete) for the outbox backpressure
+ *   3. For each UUID → find the TCP session in SessionRegistry
+ *      - If absent/closed → send command_failed (reason=device_offline) to the app
+ *   4. Verify that the user owns the device (in-memory, no DB)
+ *      - If non-owner → send command_failed (reason=forbidden) to the app
+ *   5. Trim the DEV header from the frame
+ *   6. Send the trimmed frame to the device via the device's **outbox**
+ *      - The outbox serializes the TCP writes (1 consumer coroutine per
+ *        device) and applies backpressure (drops streaming if full)
+ *      - If the outbox is closed (device disconnected meanwhile) → command_failed
+ *      - If discrete frame and outbox full → `send` suspends briefly —
+ *        the app's WS reception is thus backpressured cleanly
  */
 private suspend fun relayFrameToDevices(
     session: io.ktor.server.websocket.DefaultWebSocketServerSession,
@@ -243,7 +262,7 @@ private suspend fun relayFrameToDevices(
     targetDeviceIds.forEach { targetDeviceId ->
         val deviceSession = SessionRegistry.deviceSessions[targetDeviceId]
 
-        // device offline (session absente ou socket ferme)
+        // device offline (session absent or socket closed)
         if (deviceSession == null || deviceSession.socket.isClosed) {
             logger.info("Command to offline device — userId=$userId deviceId=$targetDeviceId")
             ControlEventBroadcaster.commandFailed(
@@ -254,7 +273,7 @@ private suspend fun relayFrameToDevices(
             return@forEach
         }
 
-        // ownership check — device appartient a un autre user
+        // ownership check — device belongs to another user
         if (deviceSession.device.ownerId != userId) {
             logger.warn("Ownership violation — userId=$userId tried to relay to device=$targetDeviceId owned by ${deviceSession.device.ownerId}")
             ControlEventBroadcaster.commandFailed(
@@ -265,12 +284,12 @@ private suspend fun relayFrameToDevices(
             return@forEach
         }
 
-        // relay TCP via l'outbox (serialise writes + drop streaming si plein)
+        // TCP relay via the outbox (serializes writes + drops streaming if full)
         val outbox = SessionRegistry.deviceOutboxes[targetDeviceId]
         if (outbox == null) {
-            // registre incohérent — session présente mais pas d'outbox.
-            // Ne devrait pas arriver après registerDevice. Tolérance :
-            // on notifie l'app plutôt que silent drop.
+            // inconsistent registry — session present but no outbox.
+            // Should not happen after registerDevice. Tolerance :
+            // we notify the app rather than silently dropping.
             logger.warn("Missing outbox for device=$targetDeviceId (session exists) — treating as relay error")
             ControlEventBroadcaster.commandFailed(
                 session  = session,
@@ -282,9 +301,9 @@ private suspend fun relayFrameToDevices(
 
         val enqueued = outbox.send(trimmedFrame, isStreaming)
         if (!enqueued) {
-            // Outbox fermée = socket mort, déjà détecté par la coroutine
-            // consommatrice. On clean la session au passage et on notifie
-            // l'app pour qu'elle puisse surfacer l'erreur.
+            // Closed outbox = dead socket, already detected by the consumer
+            // coroutine. We clean up the session along the way and notify
+            // the app so it can surface the error.
             logger.warn("Outbox closed for device=$targetDeviceId — removing session")
             SessionRegistry.unregisterDevice(targetDeviceId)
             ControlEventBroadcaster.commandFailed(

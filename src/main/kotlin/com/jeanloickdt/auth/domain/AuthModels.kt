@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.auth.domain
 
 import kotlinx.serialization.Serializable
@@ -46,8 +65,8 @@ data class ServerInfoResponse(
     val javaVersion: String,
     val osName: String,
     val localIp: String,
-    val serverDisplayName: String,         // valeur configurée (vide = auto)
-    val effectiveDisplayName: String       // valeur réellement utilisée par mDNS
+    val serverDisplayName: String,         // configured value (empty = auto)
+    val effectiveDisplayName: String       // value actually used by mDNS
 )
 
 @Serializable
@@ -55,56 +74,6 @@ data class UpdateConfigRequest(
     val httpPort: Int? = null,
     val tcpPort: Int? = null,
     val serverDisplayName: String? = null
-)
-
-@Serializable
-data class LicenceRequest(
-    val key: String
-)
-
-@Serializable
-data class LicenceResponse(
-    val id: String,
-    /**
-     * 0 = lifetime (claim `exp` absent du JWT). Sinon timestamp ms epoch.
-     */
-    val expiresAt: Long,
-    /**
-     * Token JWT auto-login généré uniquement quand l'activation
-     * a aussi déclenché le bootstrap admin (V1 first-launch flow).
-     * Null sinon (re-activation, simple GET) — l'user passera par
-     * /api/login normalement.
-     */
-    val token: String? = null
-)
-
-/**
- * Body de POST /api/setup/forgot-password.
- * L'user présente sa clé licence pour prouver qu'il est bien le
- * propriétaire du serveur. Si la clé matche celle activée, on reset
- * le password de l'user "admin" à `licence.id` (le default original).
- */
-@Serializable
-data class ForgotPasswordRequest(
-    val licenceKey: String
-)
-
-/**
- * Body de POST /api/setup/welcome (V1 first-launch flow).
- *
- *   action = "renew" : update credentials admin (au moins un de
- *                      `username`/`password` doit être fourni)
- *   action = "skip"  : conserve les credentials par défaut
- *                      (admin / licence.id)
- *
- * Dans les deux cas, le marker `~/.instantiot/setup.done` est créé
- * → welcome ne réapparaîtra plus.
- */
-@Serializable
-data class WelcomeRequest(
-    val action: String,
-    val username: String? = null,
-    val password: String? = null
 )
 
 @Serializable
@@ -116,21 +85,21 @@ data class UpdateConfigResponse(
 )
 
 // ============================================================
-// HISTORIQUE — config exposée dans le panel admin
+// HISTORY — config exposed in the admin panel
 // ============================================================
 
 @Serializable
 data class HistoryConfigResponse(
     /**
-     * Active le tier RAW (fidélité parfaite, off par défaut).
-     * Quand off, les courbes utilisent les tiers agrégés (min/hour/day).
+     * Enables the RAW tier (perfect fidelity, off by default).
+     * When off, the curves use the aggregated tiers (min/hour/day).
      */
     val rawEnabled: Boolean,
     val retentionRawDays: Int,
     val retentionOpaqueDays: Int,
     val retentionMinDays: Int,
     val retentionHourDays: Int,
-    val retentionDayDays: Int     // -1 = infini
+    val retentionDayDays: Int     // -1 = unlimited
 )
 
 @Serializable
@@ -151,9 +120,9 @@ data class BackupConfigResponse(
     val enabled: Boolean,
     val intervalHours: Int,
     val retentionCount: Int,
-    val lastBackupAtMs: Long,        // 0 si jamais
-    val backupCount: Int,            // nombre de backups actuellement présents
-    val backupDirPath: String        // pour info dans l'UI
+    val lastBackupAtMs: Long,        // 0 if never
+    val backupCount: Int,            // number of backups currently present
+    val backupDirPath: String        // for info in the UI
 )
 
 @Serializable
@@ -193,8 +162,8 @@ data class RestoreBackupRequest(
 
 @Serializable
 data class RestoreBackupResponse(
-    val message: String,             // ex: "Restart required to load restored DB"
-    val safetyNetFilename: String    // ancien DB renommé
+    val message: String,             // e.g. "Restart required to load restored DB"
+    val safetyNetFilename: String    // old DB renamed
 )
 
 // ============================================================

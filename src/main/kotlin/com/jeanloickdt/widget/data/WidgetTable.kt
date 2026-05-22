@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // widget/data/WidgetTable.kt
 package com.jeanloickdt.widget.data
 
@@ -7,8 +26,8 @@ object WidgetTable : Table("widgets") {
     val id          = text("id")
     val projectId   = text("project_id")
     val ownerId     = text("owner_id")
-    val type        = text("type")                     // "display" | "command" — pour widget_history
-    val lastPayload = text("last_payload").nullable()  // PAYLOAD brut base64 — écrit par relay uniquement
-    val lastSeenAt  = long("last_seen_at").nullable()  // timestamp dernière trame ESP — écrit par relay
+    val type        = text("type")                     // "display" | "command" — for widget_history
+    val lastPayload = text("last_payload").nullable()  // raw base64 PAYLOAD — written by relay only
+    val lastSeenAt  = long("last_seen_at").nullable()  // timestamp of last ESP frame — written by relay
     override val primaryKey = PrimaryKey(id)
 }

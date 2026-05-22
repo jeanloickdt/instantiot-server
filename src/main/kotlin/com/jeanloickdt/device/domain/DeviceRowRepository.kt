@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.device.domain
 
 // device/domain/DeviceRepository.kt
@@ -18,16 +37,16 @@ interface DeviceRepository {
     fun findAllByProject(projectId: String): List<DeviceRow>
     fun updateOnlineStatus(id: String, isOnline: Boolean)
     /**
-     * Bulk reset : marque tous les devices `isOnline = false`.
+     * Bulk reset: marks all devices `isOnline = false`.
      *
-     * Appelé au démarrage du serveur pour nettoyer les états stales
-     * après un kill abrupt (Ctrl+C qui skip le `finally` de `handleDevice`).
-     * Sans ça, la DB peut garder `isOnline=true` alors qu'aucune session
-     * TCP n'est active → l'app affiche des devices "online" fantômes.
+     * Called at server startup to clean up stale states after an abrupt
+     * kill (Ctrl+C that skips the `finally` of `handleDevice`).
+     * Without this, the DB may keep `isOnline=true` while no TCP session
+     * is active → the app shows phantom "online" devices.
      */
     fun markAllOffline()
     fun updateLastSeen(id: String, timestamp: Long)
-    /** Renomme un device. La session TCP active reste ouverte. */
+    /** Renames a device. The active TCP session stays open. */
     fun updateName(id: String, newName: String)
     fun delete(id: String): Boolean
     fun deleteAllByProject(projectId: String)

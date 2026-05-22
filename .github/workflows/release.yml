@@ -15,6 +15,7 @@ on:
   workflow_dispatch:
 
 permissions:
+
   contents: write   # nécessaire pour créer la Release + uploader les assets
 
 jobs:

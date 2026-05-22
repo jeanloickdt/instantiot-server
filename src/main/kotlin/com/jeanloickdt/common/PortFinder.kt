@@ -1,31 +1,50 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 package com.jeanloickdt.common
 
 import org.slf4j.LoggerFactory
 import java.net.ServerSocket
 
 /**
- * Trouve un port TCP libre à partir d'un port préféré, en essayant
- * `preferred`, `preferred+1`, ... jusqu'à `preferred + maxOffset`.
+ * Finds a free TCP port starting from a preferred port, trying
+ * `preferred`, `preferred+1`, ... up to `preferred + maxOffset`.
  *
- * Use case V1 : le serveur InstantIoT auto-démarre via jpackage /
- * systemd. Si le port 8080 est occupé (Tomcat, Jenkins, autre app),
- * on ne veut PAS planter — on essaie 8081, 8082, etc., pour donner
- * une chance au maker d'utiliser le serveur sans toucher la config.
+ * V1 use case: the InstantIoT server auto-starts via jpackage /
+ * systemd. If port 8080 is taken (Tomcat, Jenkins, another app),
+ * we do NOT want to crash — we try 8081, 8082, etc., to give
+ * the maker a chance to use the server without touching the config.
  *
- * **Limitations** :
- *   - Race condition théorique : entre `findAvailable` et le vrai
- *     bind du serveur, un autre process peut grab le port. En
- *     pratique on n'a jamais vu ça. L'init serveur va planter avec
- *     `Address already in use` au pire.
- *   - Test = open + close ServerSocket : ça libère le port ms après.
+ * **Limitations**:
+ *   - Theoretical race condition: between `findAvailable` and the
+ *     server's actual bind, another process could grab the port. In
+ *     practice we have never seen this. The server init will crash with
+ *     `Address already in use` at worst.
+ *   - Test = open + close ServerSocket: this frees the port ms later.
  */
 object PortFinder {
 
     private val log = LoggerFactory.getLogger("PortFinder")
 
     /**
-     * Retourne le 1er port disponible à partir de `preferred`.
-     * Throws [IllegalStateException] si aucun port libre dans la fenêtre.
+     * Returns the 1st available port starting from `preferred`.
+     * Throws [IllegalStateException] if no port is free within the window.
      */
     fun findAvailable(preferred: Int, maxOffset: Int = 5, label: String = "port"): Int {
         for (offset in 0..maxOffset) {
@@ -46,10 +65,10 @@ object PortFinder {
     }
 
     /**
-     * Test si un port TCP est libre en essayant de le bind brièvement.
+     * Tests whether a TCP port is free by trying to bind it briefly.
      */
     fun isAvailable(port: Int): Boolean = try {
-        ServerSocket(port).use { /* bind ok → port libre */ }
+        ServerSocket(port).use { /* bind ok → port free */ }
         true
     } catch (_: Exception) {
         false

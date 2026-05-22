@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // common/Models.kt
 package com.jeanloickdt.common
 
@@ -5,40 +24,18 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
- * Réponse de `GET /api/status` — exposé sans authentification.
+ * Response of `GET /api/status` — exposed without authentication.
  *
- * Le frontend admin panel utilise [setupState] (V1 first-launch) pour
- * router vers la bonne page : "needs_licence" → /setup, "needs_welcome"
- * → /welcome, "ready" → /login.
- *
- * Les champs [setup_required] et [licence_required] sont conservés pour
- * compat ascendante avec l'ancien admin panel — ils peuvent être
- * dérivés de [setupState] mais on les sérialise en double pour ne rien
- * casser pendant la transition vers le nouveau flow.
- *
- * [licence] est null tant que la licence n'est pas activée. Une fois
- * activée, le frontend l'affiche dans la page Settings → Licence.
+ * V1.3: no more licensing system. The server always starts ready
+ * (admin account created automatically on first boot). [setupState]
+ * is therefore always `"ready"` — field kept for backward compat
+ * with the admin panel that routes on it.
  */
 @Serializable
 data class StatusResponse(
     val status: String,
     @SerialName("setup_state")
     val setupState: String,
-    val licence: LicenceSummary? = null,
-    // ── Legacy — gardés pour compat avec l'ancien admin panel ──
-    val setup_required: Boolean,
-    val licence_required: Boolean
-)
-
-/**
- * Résumé licence inclus dans /api/status quand activée.
- * Plus léger que LicenceResponse (pas de token notamment).
- *
- * V1 : pas de `plan` — toutes les licences sont équivalentes.
- * `expiresAt = 0` signifie lifetime.
- */
-@Serializable
-data class LicenceSummary(
-    val id: String,
-    val expiresAt: Long
+    // Legacy — kept for compat with the old admin panel.
+    val setup_required: Boolean
 )

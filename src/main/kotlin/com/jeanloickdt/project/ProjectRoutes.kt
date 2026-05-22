@@ -1,3 +1,22 @@
+/*
+ * InstantIoT Server — self-hosted IoT relay for makers.
+ * Copyright (C) 2026 InstantIoT
+ * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
 // project/ProjectRoutes.kt
 package com.jeanloickdt.project
 
@@ -35,7 +54,7 @@ fun Route.projectRoutes(
     authenticate("jwt") {
 
         // ============================================================
-        // GET /api/projects — liste projets du user connecté
+        // GET /api/projects — list projects of the authenticated user
         // ============================================================
         get("/api/projects") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -55,7 +74,7 @@ fun Route.projectRoutes(
         }
 
         // ============================================================
-        // POST /api/projects — créer un projet
+        // POST /api/projects — create a project
         // ============================================================
         post("/api/projects") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -75,7 +94,7 @@ fun Route.projectRoutes(
         }
 
         // ============================================================
-        // GET /api/projects/{id} — détails projet + layoutJson complet
+        // GET /api/projects/{id} — project details + full layoutJson
         // ============================================================
         get("/api/projects/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -101,7 +120,7 @@ fun Route.projectRoutes(
         }
 
         // ============================================================
-        // PATCH /api/projects/{id}/name — renommer un projet
+        // PATCH /api/projects/{id}/name — rename a project
         // ============================================================
         patch("/api/projects/{id}/name") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -131,9 +150,9 @@ fun Route.projectRoutes(
         }
 
         // ============================================================
-        // PATCH /api/projects/{id}/layout — sync layout complet
-        // Appelé avec debounce depuis l'app après chaque modification
-        // Le server stocke layoutJson comme blob opaque — ne l'interprète pas
+        // PATCH /api/projects/{id}/layout — sync full layout
+        // Called with debounce from the app after each modification
+        // The server stores layoutJson as an opaque blob — does not interpret it
         // ============================================================
         patch("/api/projects/{id}/layout") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -159,7 +178,7 @@ fun Route.projectRoutes(
         }
 
         // ============================================================
-        // DELETE /api/projects/{id} — supprimer projet + cascade widgets
+        // DELETE /api/projects/{id} — delete project + cascade widgets
         // ============================================================
         delete("/api/projects/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -175,15 +194,15 @@ fun Route.projectRoutes(
                 return@delete
             }
 
-            // ─── Step 1 : kicker les devices encore connectes en TCP ──
-            // Avant le cascade delete, on recupere la liste des devices
-            // du projet et pour chacun on :
-            //   1. broadcast device_offline (reason=deleted) — informe
-            //      les apps qui regardent le projet (dashboard ouvert)
-            //   2. ferme la socket TCP si elle est active — sinon le
-            //      device ESP reste un fantome cote serveur, affiche
-            //      "online" alors que le projet est supprime
-            // Meme pattern que DELETE /api/devices/{id}.
+            // ─── Step 1 : kick devices still connected over TCP ───────
+            // Before the cascade delete, we fetch the list of devices
+            // for the project and for each one we:
+            //   1. broadcast device_offline (reason=deleted) — informs
+            //      the apps watching the project (dashboard open)
+            //   2. close the TCP socket if it is active — otherwise the
+            //      ESP device stays a ghost on the server side, shown
+            //      "online" even though the project is deleted
+            // Same pattern as DELETE /api/devices/{id}.
             val devicesToKick = deviceRepository.findAllByProject(projectId)
             devicesToKick.forEach { d ->
                 ControlEventBroadcaster.deviceOffline(
@@ -195,20 +214,20 @@ fun Route.projectRoutes(
                     try {
                         active.socket.close()
                     } catch (_: Exception) {
-                        // socket deja ferme ou I/O error — peu importe
+                        // socket already closed or I/O error — does not matter
                     }
-                    // le finally du handleDeviceConnection retire la
-                    // session du SessionRegistry automatiquement
+                    // the finally block of handleDeviceConnection removes
+                    // the session from SessionRegistry automatically
                 }
             }
 
-            // ─── Step 2 : fermer les WS app-sessions de ce projet ────
-            // Les apps qui avaient ce dashboard ouvert (phone2, tablet,
-            // autre appareil du meme user…) restaient sur une WS qui
-            // handshake un projectId defunct. On les ferme proprement
-            // avec un CloseReason.NORMAL + message → cote client la B6
-            // "disconnect dialog" se declenche et l'user peut revenir
-            // a la liste.
+            // ─── Step 2 : close the WS app-sessions of this project ──
+            // The apps that had this dashboard open (phone2, tablet,
+            // another device of the same user…) stayed on a WS that
+            // handshook a defunct projectId. We close them cleanly
+            // with a CloseReason.NORMAL + message → on the client side
+            // the B6 "disconnect dialog" triggers and the user can
+            // return to the list.
             val appSessionsToKick = SessionRegistry.getAppSessionsForProject(projectId)
             appSessionsToKick.forEach { appSession ->
                 try {
@@ -219,14 +238,14 @@ fun Route.projectRoutes(
                         )
                     )
                 } catch (_: Exception) {
-                    // WS deja ferme ou I/O error — peu importe
+                    // WS already closed or I/O error — does not matter
                 }
-                // le finally du appWebSocket handler retire la session
-                // du SessionRegistry automatiquement
+                // the finally block of the appWebSocket handler removes
+                // the session from SessionRegistry automatically
             }
 
             // ─── Step 3 : cascade delete DB ───────────────────────────
-            // ordre : history (tous tiers) → widgets → devices → projet
+            // order : history (all tiers) → widgets → devices → project
             widgetHistoryRepository.deleteAllByProject(projectId)
             widgetHistoryNumericRepository.deleteAllByProject(projectId)
             widgetHistoryMinRepository.deleteAllByProject(projectId)
