@@ -1,0 +1,26 @@
+meta {
+  name: 6. History Config — Update
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/api/admin/history-config
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "rawEnabled": false,
+    "retentionRawDays": 2,
+    "retentionOpaqueDays": 7,
+    "retentionMinDays": 7,
+    "retentionHourDays": 30,
+    "retentionDayDays": -1
+  }
+}

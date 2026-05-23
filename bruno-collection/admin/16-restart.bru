@@ -1,0 +1,15 @@
+meta {
+  name: 16. Restart Server
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/api/admin/restart
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

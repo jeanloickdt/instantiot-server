@@ -1,0 +1,15 @@
+meta {
+  name: 14. Registration Config — Get
+  type: http
+  seq: 14
+}
+
+get {
+  url: {{baseUrl}}/api/admin/registration/config
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
