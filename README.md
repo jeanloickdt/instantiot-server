@@ -4,8 +4,7 @@
 communication between IoT boards (ESP32 / Arduino) and the InstantIoT mobile
 app — multi-device connections, time-series history, web admin panel.
 
-No cloud, no subscription: install it on your own computer or a Raspberry Pi,
-it runs at home.
+Install it on your own computer or a Raspberry Pi, it runs at home.
 
 > Stack: **Kotlin · Ktor · Netty · SQLite (Exposed)** · JDK 21.
 > License: **GNU AGPLv3** (see [§ License](#license)).
@@ -162,7 +161,7 @@ also be published under AGPLv3 with its source code. This is copyleft designed
 for server software.
 
 ```
-Copyright (C) 2026 InstantIoT
+Copyright (C) 2026 Djoufack Tsobeng Jean Loick (InstantIoT)
 Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
 
 This program is free software: you can redistribute it and/or modify it

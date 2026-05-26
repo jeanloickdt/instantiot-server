@@ -135,7 +135,7 @@ val packageInstaller by tasks.registering(Exec::class) {
         },
         "--vendor", "InstantIoT",
         "--description", "Self-hosted IoT dashboard server for makers",
-        "--copyright", "© 2026 InstantIoT",
+        "--copyright", "© 2026 Djoufack Tsobeng Jean Loick (InstantIoT)",
         "--dest", outDir.absolutePath,
         // -Xmx128m suffit largement (relay TCP léger + SQLite local)
         // -Dfile.encoding=UTF-8 pour cohérence cross-platform

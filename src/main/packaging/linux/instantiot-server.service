@@ -7,42 +7,42 @@ Wants=network-online.target
 [Service]
 Type=simple
 
-# User/Group dédiés — créés par le post-install script du .deb.
-# Évite que le serveur tourne en root et limite l'impact d'une compromission.
+# Dedicated User/Group — created by the .deb post-install script.
+# Prevents the server from running as root and limits the impact of a compromise.
 User=instantiot
 Group=instantiot
 
-# Working directory + home : où le serveur stocke ses fichiers d'état.
-# ~/.instantiot devient /var/lib/instantiot/.instantiot (cf. HOME ci-dessous)
+# Working directory + home: where the server stores its state files.
+# ~/.instantiot becomes /var/lib/instantiot/.instantiot (see HOME below)
 Environment="HOME=/var/lib/instantiot"
 WorkingDirectory=/var/lib/instantiot
 
-# Un serveur géré par systemd est TOUJOURS headless (Pi OS Lite, Ubuntu
-# Server, VPS — aucun X11). On force java.awt.headless=true : SystemTray
-# .isSupported() / Desktop renvoient false de façon déterministe, AWT ne
-# tente jamais de connexion X11 → zéro AWTError possible. Le JVM applique
-# JAVA_TOOL_OPTIONS automatiquement. Scopé au service Linux : les installs
-# desktop .dmg/.msi gardent leur system tray (vrai display).
+# A server managed by systemd is ALWAYS headless (Pi OS Lite, Ubuntu
+# Server, VPS — no X11). We force java.awt.headless=true: SystemTray
+# .isSupported() / Desktop return false deterministically, AWT never
+# attempts an X11 connection → zero AWTError possible. The JVM applies
+# JAVA_TOOL_OPTIONS automatically. Scoped to the Linux service: desktop
+# .dmg/.msi installs keep their system tray (real display).
 Environment="JAVA_TOOL_OPTIONS=-Djava.awt.headless=true"
 
-# Lance le binaire jpackage. Le path /opt/instantiot-server est défini
-# par jpackage (--linux-package-name instantiot-server → /opt/<name>/).
+# Launches the jpackage binary. The path /opt/instantiot-server is defined
+# by jpackage (--linux-package-name instantiot-server → /opt/<name>/).
 ExecStart=/opt/instantiot-server/bin/InstantIoT\x20Server
 
-# Redémarrage automatique en cas de crash. 5s entre les tentatives.
-# Évite la storm si le serveur boucle sur une erreur fatale.
+# Automatic restart on crash. 5s between attempts.
+# Avoids the storm if the server loops on a fatal error.
 Restart=on-failure
 RestartSec=5s
 
-# Limites resource — généreux mais bornés pour ne pas faire couler un Pi.
-# 512 MB RAM = largement assez (typique : ~150-200 MB)
+# Resource limits — generous but bounded to avoid sinking a Pi.
+# 512 MB RAM = plenty (typical: ~150-200 MB)
 MemoryMax=512M
 
-# Logging vers journald — accessible via `journalctl -u instantiot-server`
+# Logging to journald — accessible via `journalctl -u instantiot-server`
 StandardOutput=journal
 StandardError=journal
 
-# Hardening basique
+# Basic hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict

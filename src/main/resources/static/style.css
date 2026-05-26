@@ -1,8 +1,8 @@
 /* ================================================================
    InstantIoT Admin — Design System v2
-   Brand: violet-dominant, teal en accent rare
-   Dark by default, light via [data-theme="light"] ou prefers-color-scheme
-   100% self-hosted: aucune dépendance externe, fonctionne offline
+   Brand: violet-dominant, teal as rare accent
+   Dark by default, light via [data-theme="light"] or prefers-color-scheme
+   100% self-hosted: no external dependency, works offline
    ================================================================ */
 
 /* ================================================================
@@ -53,7 +53,7 @@
   --radius-full: 999px;
 
   /* ── Typography ────────────────────────────────────────────── */
-  /* System font stack — zéro dépendance externe, rendu natif sur chaque OS */
+  /* System font stack — zero external dependency, native rendering on each OS */
   --font-sans:
           system-ui,
           -apple-system,
@@ -1519,7 +1519,7 @@ td code {
 
 /* ================================================================
    ================================================================
-   ÉTAPE 2 — APP SHELL: SIDEBAR + DRAWER + RESPONSIVE CARDS + ICONS
+   STEP 2 — APP SHELL: SIDEBAR + DRAWER + RESPONSIVE CARDS + ICONS
    ================================================================
    ================================================================ */
 
@@ -2358,7 +2358,7 @@ td code {
 
 /* ================================================================
    ================================================================
-   ÉTAPE 3 — PAGE LAYOUTS, FORMS, BUTTONS REFAIT PROPREMENT
+   STEP 3 — PAGE LAYOUTS, FORMS, BUTTONS REDONE CLEANLY
    ================================================================
    ================================================================ */
 
@@ -2901,7 +2901,7 @@ td code {
 }
 
 /* ================================================================
-   OVERRIDE — disable old `.section .config-form` from étape 1
+   OVERRIDE — disable old `.section .config-form` from step 1
    These are no longer used in HTML but keeping no styles applied
    to legacy class names doesn't matter visually. Just ensuring
    the new buttons inside form-actions don't inherit from old rules.

@@ -1,16 +1,16 @@
 #!/bin/bash
 # Post-install script Debian (.deb) — InstantIoT Server
-# Exécuté par dpkg après l'extraction du paquet.
+# Executed by dpkg after package extraction.
 #
-# Étapes :
-#   1. Créer l'user system `instantiot` (no shell, no login)
-#   2. Créer /var/lib/instantiot/ (home + état persistant)
-#   3. Installer le service systemd
-#   4. Enable + start au boot
+# Steps:
+#   1. Create the `instantiot` system user (no shell, no login)
+#   2. Create /var/lib/instantiot/ (home + persistent state)
+#   3. Install the systemd service
+#   4. Enable + start at boot
 
 set -e
 
-# 1. User system dédié — id < 1000, pas de shell, pas de home interactif
+# 1. Dedicated system user — id < 1000, no shell, no interactive home
 if ! id -u instantiot >/dev/null 2>&1; then
     useradd --system \
             --no-create-home \
@@ -23,11 +23,11 @@ fi
 # 2. Home / data directory
 install -d -o instantiot -g instantiot -m 0750 /var/lib/instantiot
 
-# 3. Service systemd — contenu inliné à build-time par la task Gradle
-#    packageInstaller (le marqueur ci-dessous est substitué par le
-#    contenu réel de src/main/packaging/linux/instantiot-server.service).
-#    On évite ainsi de devoir bundler un fichier séparé dans le .deb que
-#    jpackage --resource-dir ne sait pas embarquer.
+# 3. Systemd service — contents inlined at build-time by the Gradle
+#    packageInstaller task (the marker below is substituted with the
+#    actual contents of src/main/packaging/linux/instantiot-server.service).
+#    This avoids having to bundle a separate file in the .deb that
+#    jpackage --resource-dir cannot embed.
 cat > /etc/systemd/system/instantiot-server.service <<'__INSTANTIOT_SERVICE_EOF__'
 @@SERVICE_INLINE_MARKER@@
 __INSTANTIOT_SERVICE_EOF__
@@ -37,7 +37,7 @@ chmod 0644      /etc/systemd/system/instantiot-server.service
 
 systemctl daemon-reload
 
-# 4. Enable au boot + démarre maintenant
+# 4. Enable at boot + start now
 systemctl enable instantiot-server.service >/dev/null 2>&1 || true
 systemctl start instantiot-server.service >/dev/null 2>&1 || true
 

@@ -1,6 +1,6 @@
 /*
  * InstantIoT Server — self-hosted IoT relay for makers.
- * Copyright (C) 2026 InstantIoT
+ * Copyright (C) 2026 Djoufack Tsobeng Jean Loick (InstantIoT)
  * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
  *
  * This program is free software: you can redistribute it and/or modify

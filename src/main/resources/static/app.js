@@ -9,11 +9,11 @@ document.addEventListener('alpine:init', () => {
     view: 'login',
     token: localStorage.getItem('token'),
     role: localStorage.getItem('role'),
-    // Legacy flag — le serveur ne l'envoie plus (V1 first-launch flow).
-    // On default à 'true' (= setup done, va direct au dashboard) si absent
-    // ou si stocké à une valeur différente de 'false'. L'écran 'setup'
-    // reste accessible si le serveur (ancien) renvoie explicitement false,
-    // ou si une install legacy avait stocké 'false' dans localStorage.
+    // Legacy flag — the server no longer sends it (V1 first-launch flow).
+    // We default to 'true' (= setup done, goes straight to dashboard) if absent
+    // or if stored as a value different from 'false'. The 'setup' screen
+    // remains accessible if the (old) server explicitly returns false,
+    // or if a legacy install stored 'false' in localStorage.
     passwordChanged: localStorage.getItem('passwordChanged') !== 'false',
     lang: localStorage.getItem('lang') || 'en',
     theme: localStorage.getItem('theme') || null,
@@ -120,10 +120,10 @@ document.addEventListener('alpine:init', () => {
     },
 
     // ── Init ───────────────────────────────────────────────
-    // V1.3 : plus de système de licence ni de first-launch flow.
-    // Le serveur démarre toujours prêt (compte admin créé au boot).
-    // → si on a un token admin valide, on entre dans le dashboard,
-    //   sinon on affiche le login.
+    // V1.3: no more license system or first-launch flow.
+    // The server always boots ready (admin account created at boot).
+    // → if we have a valid admin token, we enter the dashboard,
+    //   otherwise we display the login.
     async init() {
       if (this.theme) {
         document.documentElement.setAttribute('data-theme', this.theme);
@@ -166,7 +166,7 @@ document.addEventListener('alpine:init', () => {
         const data = await res.json();
         this.token = data.token;
         this.role = data.role;
-        // Tolère absence du champ (V1 server) → considère setup done
+        // Tolerates missing field (V1 server) → considers setup done
         this.passwordChanged = data.passwordChanged !== false;
         localStorage.setItem('token', data.token);
         localStorage.setItem('role', data.role);
@@ -281,7 +281,7 @@ document.addEventListener('alpine:init', () => {
         const data = await res.json().catch(() => null);
         this.registrationForm.msg = data?.error || this.t('reg.saveError');
         this.registrationForm.msgType = 'error';
-        // revert le toggle visuel si le save a échoué
+        // revert the visual toggle if the save failed
         await this.loadRegistrationConfig();
       }
     },
@@ -490,7 +490,7 @@ document.addEventListener('alpine:init', () => {
           const data = await res.json();
           this.backupForm.msg = data.message ||
               this.t('backup.restoreOk');
-          // Force le user à restart maintenant
+          // Force the user to restart now
           this.backupForm.restoreModalFor = null;
           this.showRestartModal = true;
         } else if (res) {
@@ -603,9 +603,9 @@ document.addEventListener('alpine:init', () => {
         await navigator.clipboard.writeText(text);
       } catch (_) { return; }
 
-      // Si le bouton contient un <svg> (nouveau design), on swap l'icône
-      // vers #icon-check temporairement. Sinon (ancien fallback), on
-      // remplace textContent comme avant.
+      // If the button contains an <svg> (new design), swap the icon
+      // to #icon-check temporarily. Otherwise (old fallback), replace
+      // textContent as before.
       const useEl = btn.querySelector('svg use');
       if (useEl) {
         const original = useEl.getAttribute('href') || useEl.getAttribute('xlink:href');

@@ -1,8 +1,8 @@
 #!/bin/bash
-# Pre-remove script Debian — exécuté avant désinstallation du paquet.
-# Stop + disable le service. On garde l'user `instantiot` et ses
-# données dans /var/lib/instantiot/ — l'admin peut les wiper
-# manuellement s'il veut un nettoyage complet.
+# Pre-remove script Debian — executed before package uninstall.
+# Stop + disable the service. We keep the `instantiot` user and its
+# data in /var/lib/instantiot/ — the admin can wipe them
+# manually for a full cleanup.
 
 set -e
 
