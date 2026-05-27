@@ -147,22 +147,29 @@ object MdnsPublisher {
         System.getProperty("os.name").lowercase().contains("mac")
 
     /**
-     * Resolves the LAN IPv4 address for the JmDNS bind. Uses the smart
-     * scoring of [ServerConfig.bestLanInterface] which filters out VPN
-     * interfaces (utun/tun/tap), virtual ones, those without multicast —
-     * otherwise JmDNS binds on the VPN interface and we get
-     * `NoRouteToHostException` on the first `224.0.0.251` multicast packet.
+     * Resolves the LAN IPv4 address for the JmDNS bind. Delegates to
+     * [ServerConfig.localIp] which itself runs a UDP socket-connect probe
+     * (8.8.8.8:10002, no data sent) to ask the OS for the real outbound
+     * interface via its routing table — then falls back to the legacy
+     * `bestLanInterface` scoring heuristic, and finally to `getLocalHost`.
      *
-     * Falls back to `InetAddress.getLocalHost()` as a last resort.
+     * The probe is critical on Windows + VMware / VirtualBox / Hyper-V / WSL:
+     * those create virtual adapters with private IPs (e.g. 192.168.109.1)
+     * that the scoring heuristic cannot tell apart from a real LAN.
+     * Binding mDNS on such an adapter sends the announcement on the wrong
+     * network (the phone never sees it) and triggers name-conflict
+     * resolution that can make other instances disappear from the LAN.
+     *
+     * The bind address must match what the admin panel reports — otherwise
+     * the app discovers the server at an IP it cannot reach.
      */
     private fun resolveBindAddress(): InetAddress = try {
-        val best = ServerConfig.bestLanInterface()
-        if (best != null) {
-            val (ip, name) = best
-            log.info("mDNS bind selected interface: {} ({})", name, ip)
+        val ip = ServerConfig.localIp
+        if (ip != "unknown" && ip.isNotBlank()) {
+            log.info("mDNS bind address: {}", ip)
             InetAddress.getByName(ip)
         } else {
-            log.warn("No suitable LAN interface found — falling back to localhost (mDNS may not work)")
+            log.warn("No LAN IP detected — falling back to localhost (mDNS may not work)")
             InetAddress.getLocalHost()
         }
     } catch (e: Exception) {
