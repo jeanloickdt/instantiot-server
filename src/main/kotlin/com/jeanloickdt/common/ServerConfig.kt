@@ -20,6 +20,7 @@
 package com.jeanloickdt.common
 
 import java.io.File
+import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.util.Properties
@@ -218,23 +219,43 @@ object ServerConfig {
      * Resolves the server's LAN IP, favoring the "real" Wi-Fi/Ethernet
      * interface, not a VPN or virtual interface.
      *
-     * Why a scoring: on macOS with an active VPN (Cisco, Wireguard,
-     * Tailscale, etc.), `getNetworkInterfaces` may return the `utun`
-     * tunnel interface BEFORE the `en0` Wi-Fi interface. If we take the
-     * 1st found, mDNS binds on the tunnel → multicast `224.0.0.251` → "No
-     * route to host" → mDNS down.
+     * Primary strategy: a UDP socket "connect" probe — we open a
+     * DatagramSocket and ask it to connect to a public IP without
+     * sending any data. The OS fills the socket's local endpoint by
+     * resolving its routing table, which gives us the real outbound
+     * interface. This is the only reliable way on Windows where
+     * VMware / VirtualBox / Hyper-V / WSL adapters with private IPs
+     * (e.g. 192.168.109.1) would otherwise fool any name- or
+     * prefix-based heuristic.
      *
-     * Filters + scoring:
-     *   - Skip: loopback, down, virtual, point-to-point, no multicast
-     *   - IP score: 192.168.* (home LAN) > 10.* (corporate LAN) >
-     *               172.16-31.* (often VPN/Docker) > other
-     *   - Tie-break: interface name (en0 < en1 < etc.)
+     * Fallback strategy: the legacy [bestLanInterface] heuristic (kept
+     * as a safety net for offline environments where the probe socket
+     * cannot resolve a route). It scores interfaces by IP prefix and
+     * by name, penalizing utun/tun/tap/docker/br- patterns.
+     *
+     * Last-resort fallback: [InetAddress.getLocalHost].
      */
     val localIp: String get() = try {
-        bestLanInterface()?.first ?: InetAddress.getLocalHost().hostAddress
+        detectLocalIpViaSocketConnect()
+            ?: bestLanInterface()?.first
+            ?: InetAddress.getLocalHost().hostAddress
     } catch (_: Exception) {
         "unknown"
     }
+
+    /**
+     * Opens a DatagramSocket and "connects" it to a public IP without
+     * actually sending data. UDP has no real connection — this only
+     * populates the socket's local endpoint, which the OS chooses via
+     * its routing table. Cross-platform and instantaneous.
+     */
+    private fun detectLocalIpViaSocketConnect(): String? = try {
+        DatagramSocket().use { probeSocket ->
+            probeSocket.connect(InetAddress.getByName("8.8.8.8"), 10002)
+            probeSocket.localAddress?.hostAddress
+                ?.takeUnless { it == "0.0.0.0" || it.isBlank() }
+        }
+    } catch (_: Exception) { null }
 
     /**
      * Returns (ipAddress, interfaceName) of the "best" LAN interface

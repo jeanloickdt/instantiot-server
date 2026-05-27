@@ -260,8 +260,13 @@ fun Route.adminServerInfoRoute(userRepository: UserRepository) {
             ?: "InstantIoT Server"
         call.respond(ServerInfoResponse(
             version     = ServerConfig.version,
-            httpPort    = ServerConfig.httpPort,
-            tcpPort     = ServerConfig.tcpPort,
+            // Effective ports — what the engine actually bound at startup
+            // after PortFinder resolved any conflict. The admin panel and
+            // mDNS publication must agree, so we read the running values
+            // (not the configured ones, which may differ if 8080/9001
+            // were already taken on this machine).
+            httpPort    = ServerConfig.runningHttpPort,
+            tcpPort     = ServerConfig.runningTcpPort,
             uptimeMs    = ServerConfig.uptimeMs,
             dbSizeBytes = ServerConfig.dbSizeBytes,
             javaVersion = System.getProperty("java.version") ?: "unknown",

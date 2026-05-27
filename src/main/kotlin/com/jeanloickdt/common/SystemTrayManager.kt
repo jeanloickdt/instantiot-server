@@ -146,7 +146,10 @@ object SystemTrayManager {
      */
     private fun showServerInfo(httpPort: Int) {
         val ip = detectLocalIp()
-        val tcpPort = ServerConfig.tcpPort
+        // Effective port — must match what the engine actually bound,
+        // not the configured preference (which may differ if 9001 was
+        // taken when PortFinder ran).
+        val tcpPort = ServerConfig.runningTcpPort
         val version = ServerConfig.version
 
         val text = buildString {
