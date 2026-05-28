@@ -409,7 +409,8 @@ fun Application.module() {
             call.respond(StatusResponse(
                 status         = "ok",
                 setupState     = "ready",
-                setup_required = userRepository.count() == 0L
+                setup_required = userRepository.count() == 0L,
+                tcpPort        = com.jeanloickdt.common.ServerConfig.runningTcpPort
             ))
         }
 

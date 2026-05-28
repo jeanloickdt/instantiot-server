@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "com.jeanloickdt"
-version = "1.1.2"
+version = "1.1.3"
 
 application {
     mainClass = "com.jeanloickdt.ApplicationKt"

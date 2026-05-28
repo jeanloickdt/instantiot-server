@@ -37,5 +37,17 @@ data class StatusResponse(
     @SerialName("setup_state")
     val setupState: String,
     // Legacy — kept for compat with the old admin panel.
-    val setup_required: Boolean
+    val setup_required: Boolean,
+    /**
+     * TCP relay port (effective `runningTcpPort`) where ESP devices
+     * must connect. Exposed publicly here so the mobile app can fetch
+     * it before generating an Arduino sketch — without requiring admin
+     * role (the admin-only `/api/admin/server-info` returns it too,
+     * but that endpoint is gated on role=admin so non-admin users
+     * couldn't generate code with the correct port).
+     *
+     * Optional in the response for forward compat with older clients,
+     * but always set by current servers (v1.1.3+).
+     */
+    val tcpPort: Int? = null
 )
