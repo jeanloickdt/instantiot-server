@@ -25,15 +25,21 @@ import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.sqlite.SQLiteConfig
 import org.sqlite.SQLiteDataSource
+import java.io.File
 import java.sql.DriverManager
 
 object DatabaseFactory {
-    fun init(vararg tables: Table) {
+    /**
+     * @param dbFile the SQLite file to open. Defaults to the production
+     *   `~/.instantiot/instantiot.db`; tests pass a throwaway temp file to get
+     *   an isolated database without touching the real one.
+     */
+    fun init(vararg tables: Table, dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile) {
         // DB stored in ~/.instantiot/ (next to licence.key, secret.key,
         // setup.done) — single source of truth for all server state files.
         // Prevents the process CWD (systemd, jpackage, gradlew run from
         // anywhere) from influencing the DB location.
-        val url = "jdbc:sqlite:${com.jeanloickdt.common.ServerConfig.dbFile.absolutePath}"
+        val url = "jdbc:sqlite:${dbFile.absolutePath}"
 
         // SQLite hardening — applied to the REAL connections Exposed uses,
         // via a configured DataSource. The previous code set these PRAGMAs on

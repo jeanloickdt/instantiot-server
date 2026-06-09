@@ -135,7 +135,9 @@ object ServerConfig {
      *  by license activation (separate path), never blocked by this
      *  flag. Gitea/Vaultwarden SIGNUPS_ALLOWED pattern. */
     var registrationOpen: Boolean = false
-        private set
+        internal set   // internal (not private) so integration tests can toggle it
+                       // in-memory without going through saveRegistrationConfig (which
+                       // would rewrite the whole server.properties file).
 
     /** Saves the registration flag. Hot-reload — no restart. */
     fun saveRegistrationConfig(open: Boolean) {
