@@ -24,21 +24,28 @@ interface UserRepository {
     /**
      * Create a new user in the users table.
      *
-     * Note: the legacy `passwordChanged` flag has been removed. The V1
-     * first-launch flow handles credential bootstrap differently
-     * (licence-key-based admin password + welcome screen with
-     * Renew/Skip choice). See V1_PLAN.md.
+     * @param passwordChanged whether the supplied password is the user's own
+     *   chosen one (`true`, the default — e.g. self-registration) or a
+     *   server-assigned default that must be changed (`false` — the bootstrap
+     *   `admin/admin`). Drives the `passwordChanged` field returned at login.
      */
     fun create(
         username: String,
         pwdHash: String,
-        role: String = "user"
+        role: String = "user",
+        passwordChanged: Boolean = true
     ): String
 
     fun findByUsername(username: String): UserRow?
     fun findById(id: String): UserRow?
     fun findAll(): List<UserRow>
-    fun updatePassword(id: String, newHash: String)
+
+    /**
+     * @param passwordChanged `true` (default) when the user sets their own
+     *   password; `false` when the server assigns a default (e.g. the
+     *   reset-admin recovery flow resetting back to `admin`).
+     */
+    fun updatePassword(id: String, newHash: String, passwordChanged: Boolean = true)
 
     /**
      * Partial update: if an argument is `null`, the corresponding field

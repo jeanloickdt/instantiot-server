@@ -190,7 +190,7 @@ object ServerConfig {
     // ============================================================
     // HISTORY — Aggregated tiers (fed in RAM, flushed every 5s)
     //
-    // Blynk-style architecture: the 3 tiers consume the raw
+    // tiered-aggregation architecture: the 3 tiers consume the raw
     // samples directly via the RAM TierAggregators, no deferred
     // SQL cascade. Always up to date in real time (lag ≤ 5s).
     // ============================================================
@@ -332,7 +332,7 @@ object ServerConfig {
             httpPort = props.getProperty("http.port", "8080").toIntOrNull() ?: 8080
             tcpPort = props.getProperty("tcp.port", "9001").toIntOrNull() ?: 9001
 
-            // History — iWidgets rework (Blynk-style architecture)
+            // History — iWidgets rework (tiered-aggregation architecture)
             historyRawEnabled = props.getProperty("history.raw.enabled", "true")
                 .toBooleanStrictOrNull() ?: true
             historyRetentionRawDays = props.getProperty("history.retention.raw.days", "1")

@@ -36,7 +36,16 @@ data class LoginRequest(
 @Serializable
 data class AuthResponse(
     val token: String,
-    val role: String
+    val role: String,
+    /**
+     * `false` while the account still uses a server-assigned default password
+     * (the bootstrap `admin/admin`). The admin panel already consumes this exact
+     * field (`app.js`: `this.passwordChanged = data.passwordChanged !== false`)
+     * and routes a `false` login straight to the forced change-password
+     * ("setup") screen. Defaults to `true` (= setup done) so a missing field
+     * never forces a change spuriously and stays backward-compatible.
+     */
+    val passwordChanged: Boolean = true
 )
 
 @Serializable

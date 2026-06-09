@@ -108,7 +108,7 @@ object SessionRegistry {
     // widget_history_numeric.
     //
     // No more throttle: since the iWidgets history rework, we
-    // favor a Blynk-style architecture where the min/hour/day tiers
+    // favor a tiered-aggregation architecture where the min/hour/day tiers
     // (always active via the RAM aggregators) are enough to
     // visualize the signal envelope. The raw tier, when enabled,
     // keeps ALL samples without server-side filtering — protection

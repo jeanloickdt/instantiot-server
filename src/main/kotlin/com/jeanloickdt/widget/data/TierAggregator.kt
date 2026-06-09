@@ -39,7 +39,7 @@ import java.util.concurrent.ConcurrentHashMap
  * updates. No need for a global lock → high throughput even under
  * heavy multi-coroutine load.
  *
- * Architecture inspired by the Blynk Legacy Server (open source).
+ * Tiered time-series design (live RAM aggregators + downsampled tiers).
  *
  * @param bucketSizeMs bucket size in ms (60_000 / 3_600_000 / 86_400_000)
  */

@@ -39,7 +39,7 @@ import kotlinx.serialization.Serializable
  *   - "bucket_updated"  : an aggregation bucket has just closed (min/hour/day),
  *                         emitted when the RAM aggregator flushes to DB. Lets charts
  *                         in historical preset mode update their window without
- *                         re-fetching over HTTP (Blynk SuperChart pattern).
+ *                         re-fetching over HTTP (live-chart pattern).
  */
 @Serializable
 data class ControlEvent(

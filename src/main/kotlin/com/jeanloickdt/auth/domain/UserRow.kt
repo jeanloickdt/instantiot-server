@@ -24,5 +24,12 @@ data class UserRow(
     val username: String,
     val pwdHash: String,
     val role: String,
+    /**
+     * `false` while the account still uses a server-assigned default
+     * password (the bootstrap `admin/admin`, or an admin reset). Flipped to
+     * `true` the moment the owner sets their own password. Drives the
+     * `passwordChanged` field returned at login.
+     */
+    val passwordChanged: Boolean,
     val createdAt: Long
 )

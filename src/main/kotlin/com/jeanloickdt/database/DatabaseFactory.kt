@@ -23,6 +23,8 @@ import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.sqlite.SQLiteConfig
+import org.sqlite.SQLiteDataSource
 import java.sql.DriverManager
 
 object DatabaseFactory {
@@ -33,16 +35,29 @@ object DatabaseFactory {
         // anywhere) from influencing the DB location.
         val url = "jdbc:sqlite:${com.jeanloickdt.common.ServerConfig.dbFile.absolutePath}"
 
-        DriverManager.getConnection(url).use { conn ->
-            conn.createStatement().use { stmt ->
-                stmt.execute("PRAGMA journal_mode=WAL")
-                stmt.execute("PRAGMA synchronous=NORMAL")
-                stmt.execute("PRAGMA cache_size=-32000")
-                stmt.execute("PRAGMA temp_store=MEMORY")
-            }
+        // SQLite hardening — applied to the REAL connections Exposed uses,
+        // via a configured DataSource. The previous code set these PRAGMAs on
+        // a throwaway DriverManager connection that was closed BEFORE Exposed
+        // connected, so synchronous/cache_size/temp_store were silently lost
+        // and busy_timeout was never set at all.
+        //
+        // busy_timeout is the critical one: in WAL mode one writer + N readers
+        // run concurrently, but two concurrent WRITERS (the 5s history flush +
+        // the relay's updateLastPayload + the hourly cleanup + the backup +
+        // a REST write) would otherwise fail INSTANTLY with SQLITE_BUSY
+        // ("database is locked"). A 5s busy timeout makes the loser wait for
+        // the lock instead of throwing — eliminating the lock-storm under the
+        // exact concurrent load this server is designed for.
+        val config = SQLiteConfig().apply {
+            setJournalMode(SQLiteConfig.JournalMode.WAL)
+            setSynchronous(SQLiteConfig.SynchronousMode.NORMAL)
+            setBusyTimeout(5_000)                                 // ms
+            setPragma(SQLiteConfig.Pragma.CACHE_SIZE, "-32000")   // ~32 MB page cache
+            setTempStore(SQLiteConfig.TempStore.MEMORY)
         }
+        val dataSource = SQLiteDataSource(config).apply { setUrl(url) }
 
-        Database.connect(url = url, driver = "org.sqlite.JDBC")
+        Database.connect(dataSource)
 
         transaction {
             // ─── Auto-migration of new columns/tables ───
@@ -116,6 +131,27 @@ object DatabaseFactory {
             exec("CREATE INDEX IF NOT EXISTS idx_history_min_project  ON widget_history_min  (project_id)")
             exec("CREATE INDEX IF NOT EXISTS idx_history_hour_project ON widget_history_hour (project_id)")
             exec("CREATE INDEX IF NOT EXISTS idx_history_day_project  ON widget_history_day  (project_id)")
+        }
+    }
+
+    /**
+     * Reclaim disk space by rebuilding the database file.
+     *
+     * The hourly retention job DELETEs old rows but SQLite never returns the
+     * freed pages to the OS — the file only grows toward its high-water mark.
+     * On a Raspberry Pi / SD card this slowly eats the disk. `VACUUM` rewrites
+     * the file compactly, returning the freed space.
+     *
+     * Runs on a dedicated raw connection because VACUUM **cannot** execute
+     * inside an open transaction (which Exposed's `transaction {}` would
+     * create). It takes a brief exclusive lock and rewrites the whole file, so
+     * it's meant to run rarely (weekly) and off-peak — the 5s busy timeout set
+     * in [init] makes concurrent writers wait rather than fail during it.
+     */
+    fun vacuum() {
+        val url = "jdbc:sqlite:${com.jeanloickdt.common.ServerConfig.dbFile.absolutePath}"
+        DriverManager.getConnection(url).use { conn ->
+            conn.createStatement().use { stmt -> stmt.execute("VACUUM") }
         }
     }
 }

@@ -207,7 +207,17 @@ fun Application.module() {
     // iWidgets rework: we ALSO flush all RAM buckets (including
     // in-progress buckets not yet closed) → zero loss on a controlled
     // restart. On a hard crash, we lose at worst 1 min/h/24h per tier.
-    monitor.subscribe(ApplicationStopping) {
+    //
+    // Registered on BOTH paths because they don't overlap:
+    //   - Ktor ApplicationStopping → fires on a graceful engine stop (SIGTERM,
+    //     systemd, embeddedServer's own shutdown hook).
+    //   - JVM shutdown hook → fires on System.exit(0), which the system-tray
+    //     "Quit"/"Restart" actions call directly. Without this, the tray path
+    //     could skip the flush and lose up to 24h of the in-progress day
+    //     bucket — breaking the "zero loss on controlled restart" guarantee.
+    // The flush is idempotent (drains queues/buckets), so running it twice on
+    // a path where both fire is harmless — the second pass finds nothing.
+    val finalFlush: () -> Unit = {
         kotlinx.coroutines.runBlocking {
             flushHistoryBuffer(widgetHistoryRepository)
             flushNumericHistoryBuffer(widgetHistoryNumericRepository)
@@ -218,6 +228,11 @@ fun Application.module() {
             )
         }
     }
+    monitor.subscribe(ApplicationStopping) { finalFlush() }
+    Runtime.getRuntime().addShutdownHook(Thread {
+        runCatching { finalFlush() }
+            .onFailure { LoggerFactory.getLogger("InstantIoT").error("Shutdown-hook flush failed", it) }
+    })
 
     // mDNS / Bonjour — unregisters the service before the sockets close
     // so that apps see the server disappear cleanly.
@@ -250,7 +265,9 @@ fun Application.module() {
         when {
             existingAdmin == null -> {
                 val pwdHash = BCrypt.hashpw("admin", BCrypt.gensalt())
-                userRepository.create("admin", pwdHash, role = "admin")
+                // passwordChanged = false → login returns passwordChanged=false,
+                // forcing the admin off the default admin/admin credentials.
+                userRepository.create("admin", pwdHash, role = "admin", passwordChanged = false)
                 bootLog.warn(
                     "Bootstrap: admin user created with default credentials " +
                         "admin/admin — change the password after first login"
@@ -258,7 +275,8 @@ fun Application.module() {
             }
             resetMarker.exists() -> {
                 val pwdHash = BCrypt.hashpw("admin", BCrypt.gensalt())
-                userRepository.updatePassword(existingAdmin.id, pwdHash)
+                // reset back to the default → must be changed again at next login
+                userRepository.updatePassword(existingAdmin.id, pwdHash, passwordChanged = false)
                 bootLog.warn(
                     "Admin password reset to default 'admin' (reset-admin marker found)"
                 )
@@ -303,7 +321,7 @@ fun Application.module() {
     // ============================================================
     // Flush history buffer → SQLite WAL batch every 5s
     //
-    // iWidgets rework (Blynk-style architecture): a single 5s job
+    // iWidgets rework (tiered-aggregation architecture): a single 5s job
     // drains the 5 sources and persists in batch:
     //   - historyBuffer        → widget_history (opaque events)
     //   - numericHistoryBuffer → widget_history_numeric (raw, opt-in)
@@ -313,16 +331,27 @@ fun Application.module() {
     //
     // The DB is NEVER on the critical path of the device relay.
     // ============================================================
+    // Shared logger for the background maintenance loops below. Each loop
+    // body is wrapped in try/catch so a transient failure (e.g. a SQLITE_BUSY
+    // that slipped past the busy timeout) logs and retries on the next tick
+    // instead of killing the coroutine permanently — a dead flush loop would
+    // silently stop persisting and let the RAM buffers grow until OOM.
+    val bgLog = LoggerFactory.getLogger("InstantIoT.maintenance")
+
     launch(Dispatchers.IO) {
         while (true) {
             delay(5_000)
-            flushHistoryBuffer(widgetHistoryRepository)
-            flushNumericHistoryBuffer(widgetHistoryNumericRepository)
-            flushClosedAggregatorBuckets(
-                minRepo  = widgetHistoryMinRepository,
-                hourRepo = widgetHistoryHourRepository,
-                dayRepo  = widgetHistoryDayRepository
-            )
+            try {
+                flushHistoryBuffer(widgetHistoryRepository)
+                flushNumericHistoryBuffer(widgetHistoryNumericRepository)
+                flushClosedAggregatorBuckets(
+                    minRepo  = widgetHistoryMinRepository,
+                    hourRepo = widgetHistoryHourRepository,
+                    dayRepo  = widgetHistoryDayRepository
+                )
+            } catch (e: Exception) {
+                bgLog.error("History flush round failed — retrying in 5s", e)
+            }
         }
     }
 
@@ -339,30 +368,34 @@ fun Application.module() {
     launch(Dispatchers.IO) {
         while (true) {
             delay(60.minutes)
-            val now = System.currentTimeMillis()
-            val dayMs = 24L * 3600_000L
+            try {
+                val now = System.currentTimeMillis()
+                val dayMs = 24L * 3600_000L
 
-            // opaque (widget_history) — non-numeric events
-            val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * dayMs
-            widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
+                // opaque (widget_history) — non-numeric events
+                val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * dayMs
+                widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
 
-            // raw numeric (widget_history_numeric) — opt-in
-            val rawCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * dayMs
-            widgetHistoryNumericRepository.deleteOlderThan(rawCutoff)
+                // raw numeric (widget_history_numeric) — opt-in
+                val rawCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * dayMs
+                widgetHistoryNumericRepository.deleteOlderThan(rawCutoff)
 
-            // 1 min buckets
-            val minCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionMinDays.toLong() * dayMs
-            widgetHistoryMinRepository.deleteOlderThan(minCutoff)
+                // 1 min buckets
+                val minCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionMinDays.toLong() * dayMs
+                widgetHistoryMinRepository.deleteOlderThan(minCutoff)
 
-            // 1 h buckets
-            val hourCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionHourDays.toLong() * dayMs
-            widgetHistoryHourRepository.deleteOlderThan(hourCutoff)
+                // 1 h buckets
+                val hourCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionHourDays.toLong() * dayMs
+                widgetHistoryHourRepository.deleteOlderThan(hourCutoff)
 
-            // 1 day buckets — purge IF retention > 0, otherwise keep indefinitely
-            val dayRetention = com.jeanloickdt.common.ServerConfig.historyRetentionDayDays
-            if (dayRetention > 0) {
-                val dayCutoff = now - dayRetention.toLong() * dayMs
-                widgetHistoryDayRepository.deleteOlderThan(dayCutoff)
+                // 1 day buckets — purge IF retention > 0, otherwise keep indefinitely
+                val dayRetention = com.jeanloickdt.common.ServerConfig.historyRetentionDayDays
+                if (dayRetention > 0) {
+                    val dayCutoff = now - dayRetention.toLong() * dayMs
+                    widgetHistoryDayRepository.deleteOlderThan(dayCutoff)
+                }
+            } catch (e: Exception) {
+                bgLog.error("History retention cleanup round failed — retrying next hour", e)
             }
         }
     }
@@ -379,14 +412,39 @@ fun Application.module() {
         // (lets the server settle / do its DB init)
         delay(60_000)
         while (true) {
-            if (com.jeanloickdt.common.ServerConfig.backupEnabled) {
-                com.jeanloickdt.backup.BackupManager.snapshotNow()
-                com.jeanloickdt.backup.BackupManager.cleanup()
+            try {
+                if (com.jeanloickdt.common.ServerConfig.backupEnabled) {
+                    com.jeanloickdt.backup.BackupManager.snapshotNow()
+                    com.jeanloickdt.backup.BackupManager.cleanup()
+                }
+            } catch (e: Exception) {
+                bgLog.error("Backup snapshot round failed — retrying next interval", e)
             }
             // Re-read the interval on each iter — hot-reload friendly
             val intervalMs = com.jeanloickdt.common.ServerConfig.backupIntervalHours
                 .toLong() * 3600_000L
             delay(intervalMs)
+        }
+    }
+
+    // ============================================================
+    // Weekly VACUUM — reclaim disk space freed by retention DELETEs
+    //
+    // Without this the DB file only ever grows (SQLite keeps freed pages).
+    // Runs once a week after a 6h initial delay so it never coincides with
+    // boot or the first backup. VACUUM rewrites the whole file under a brief
+    // lock — the busy timeout (DatabaseFactory) lets writers wait it out.
+    // ============================================================
+    launch(Dispatchers.IO) {
+        delay(6L * 3600_000L)
+        while (true) {
+            try {
+                DatabaseFactory.vacuum()
+                bgLog.info("Weekly VACUUM completed — database file compacted")
+            } catch (e: Exception) {
+                bgLog.error("Weekly VACUUM failed — retrying next week", e)
+            }
+            delay(7L * 24 * 3600_000L)
         }
     }
 

@@ -29,6 +29,8 @@ import io.ktor.server.application.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.slf4j.LoggerFactory
@@ -61,6 +63,13 @@ private const val MAX_SESSION_TIMEOUT_MS = 120_000L
 // Legacy fallback — device that does not send `:heartbeatMs` at the handshake.
 // Historical value (90s) to keep compatibility.
 private const val LEGACY_SESSION_TIMEOUT_MS = 90_000L
+
+// Max number of devices connected simultaneously. Each TCP connection parks
+// one thread in a blocking read, so this cap bounds the relay thread pool and
+// guards against socket / file-descriptor exhaustion (a connection-flood DoS).
+// Past the cap, new connections are rejected cleanly rather than starving the
+// server. Generous for a self-hosted LAN appliance; can be made configurable.
+private const val MAX_CONCURRENT_DEVICES = 256
 
 // ════════════════════════════════════════════════════════════════════
 // iWidgets v1 protocol — type byte dedicated to the heartbeat
@@ -96,21 +105,45 @@ fun Application.startDeviceRelay(
 ) {
     val applicationScope: CoroutineScope = this
 
-    applicationScope.launch(Dispatchers.IO) {
-        val serverSocket = ServerSocket(tcpPort)
-        logger.info("Device TCP relay listening on port $tcpPort")
+    // Dedicated thread pool for the relay's BLOCKING socket reads, isolated
+    // from Dispatchers.IO (which is shared with every DB write). Without this,
+    // many parked device reads would starve the DB / REST work sitting on the
+    // shared 64-thread IO pool. Threads are daemon + named for diagnosis; the
+    // connection semaphore below bounds how many ever run at once.
+    val relayThreadId = java.util.concurrent.atomic.AtomicInteger(0)
+    val relayExecutor = java.util.concurrent.Executors.newCachedThreadPool { r ->
+        Thread(r, "device-relay-${relayThreadId.incrementAndGet()}").apply { isDaemon = true }
+    }
+    val relayDispatcher = relayExecutor.asCoroutineDispatcher()
+    val connectionLimiter = java.util.concurrent.Semaphore(MAX_CONCURRENT_DEVICES)
 
-        // close the ServerSocket cleanly at shutdown
+    applicationScope.launch(relayDispatcher) {
+        val serverSocket = ServerSocket(tcpPort)
+        logger.info("Device TCP relay listening on port $tcpPort (max $MAX_CONCURRENT_DEVICES devices)")
+
+        // close the ServerSocket + relay pool cleanly at shutdown
         monitor.subscribe(ApplicationStopping) {
             serverSocket.close()
+            relayDispatcher.close()
         }
 
         while (!serverSocket.isClosed) {
             try {
                 val clientSocket = serverSocket.accept()
 
-                // each device in its own coroutine — total isolation
-                applicationScope.launch(Dispatchers.IO) {
+                // Reject cleanly when at capacity instead of spawning unbounded
+                // threads / starving the server (connection-flood guard).
+                if (!connectionLimiter.tryAcquire()) {
+                    logger.warn(
+                        "Device connection limit ($MAX_CONCURRENT_DEVICES) reached — " +
+                            "rejecting ${clientSocket.inetAddress?.hostAddress}"
+                    )
+                    runCatching { clientSocket.close() }
+                    continue
+                }
+
+                // each device in its own coroutine on the relay pool — total isolation
+                val job = applicationScope.launch(relayDispatcher) {
                     handleDeviceConnection(
                         clientSocket     = clientSocket,
                         deviceRepository = deviceRepository,
@@ -118,9 +151,15 @@ fun Application.startDeviceRelay(
                         applicationScope = applicationScope
                     )
                 }
+                // release the permit when the connection ends (normal/error/cancel)
+                job.invokeOnCompletion { connectionLimiter.release() }
             } catch (e: Exception) {
                 if (!serverSocket.isClosed) {
                     logger.error("Error accepting device connection — ${e.message}")
+                    // Backoff to avoid a tight error-spin loop on FD exhaustion
+                    // (EMFILE): accept() would otherwise throw immediately and
+                    // we'd busy-loop, pegging the CPU and flooding the logs.
+                    delay(100)
                 }
             }
         }
@@ -306,7 +345,7 @@ private suspend fun handleDeviceFrame(
     // NUMERIC history — decode the value if the widget is analog
     // (gauge/metric/level/slider/chart).
     //
-    // Blynk-style architecture (iWidgets history rework) :
+    // tiered-aggregation architecture (iWidgets history rework) :
     //  - Raw tier (widget_history_numeric) : OPT-IN via admin. If enabled,
     //    each sample is buffered without throttling (perfect fidelity).
     //  - Tiers min/hour/day : ALWAYS fed in parallel via the

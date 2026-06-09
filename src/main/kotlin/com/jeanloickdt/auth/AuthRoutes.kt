@@ -81,7 +81,10 @@ fun Route.loginRoute(userRepository: UserRepository) {
         val token = JwtConfig.generateToken(user.id)
         call.respond(AuthResponse(
             token = token,
-            role  = user.role
+            role  = user.role,
+            // the admin panel forces its change-password ("setup") screen when
+            // this is false (still on the bootstrap admin/admin default)
+            passwordChanged = user.passwordChanged
         ))
     }
 }

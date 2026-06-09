@@ -30,7 +30,8 @@ class SqliteUserRepository : UserRepository {
     override fun create(
         username: String,
         pwdHash: String,
-        role: String
+        role: String,
+        passwordChanged: Boolean
     ): String {
         val id = UUID.randomUUID().toString()
         transaction {
@@ -39,12 +40,9 @@ class SqliteUserRepository : UserRepository {
                 it[UserTable.username]        = username
                 it[UserTable.pwdHash]         = pwdHash
                 it[UserTable.role]            = role
-                // password_changed column kept for backward DB compat,
-                // forced to true on insert (legacy "needs change" flag
-                // is no longer used — V1 first-launch flow handles
-                // bootstrap differently). Default value still satisfied
-                // for any existing rows.
-                it[UserTable.passwordChanged] = true
+                // false for the bootstrap admin/admin (must be changed),
+                // true for self-registration (user picked their own password).
+                it[UserTable.passwordChanged] = passwordChanged
                 it[UserTable.createdAt]       = System.currentTimeMillis()
             }
         }
@@ -79,10 +77,11 @@ class SqliteUserRepository : UserRepository {
         }
     }
 
-    override fun updatePassword(id: String, newHash: String) {
+    override fun updatePassword(id: String, newHash: String, passwordChanged: Boolean) {
         transaction {
             UserTable.update({ UserTable.id eq id }) {
                 it[pwdHash] = newHash
+                it[UserTable.passwordChanged] = passwordChanged
             }
         }
     }
@@ -92,7 +91,11 @@ class SqliteUserRepository : UserRepository {
         transaction {
             UserTable.update({ UserTable.id eq id }) {
                 if (newUsername != null) it[username] = newUsername
-                if (newPwdHash != null)  it[pwdHash]  = newPwdHash
+                // setting one's own password clears the "must change" flag
+                if (newPwdHash != null) {
+                    it[pwdHash] = newPwdHash
+                    it[UserTable.passwordChanged] = true
+                }
             }
         }
     }
@@ -104,10 +107,11 @@ class SqliteUserRepository : UserRepository {
     }
 
     private fun ResultRow.toUserRow() = UserRow(
-        id        = this[UserTable.id],
-        username  = this[UserTable.username],
-        pwdHash   = this[UserTable.pwdHash],
-        role      = this[UserTable.role],
-        createdAt = this[UserTable.createdAt]
+        id              = this[UserTable.id],
+        username        = this[UserTable.username],
+        pwdHash         = this[UserTable.pwdHash],
+        role            = this[UserTable.role],
+        passwordChanged = this[UserTable.passwordChanged],
+        createdAt       = this[UserTable.createdAt]
     )
 }

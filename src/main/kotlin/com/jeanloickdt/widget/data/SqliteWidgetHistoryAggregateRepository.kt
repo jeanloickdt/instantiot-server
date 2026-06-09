@@ -30,7 +30,7 @@ import org.jetbrains.exposed.sql.transactions.transaction
 /**
  * SQLite impl parameterized by the [table] (one instance per tier).
  *
- * Blynk-style architecture (since the iWidgets history rework): the
+ * tiered-aggregation architecture (since the iWidgets history rework): the
  * inserts arrive in batch from the 5s flush job that drains the
  * RAM [TierAggregator]s. Idempotence via UNIQUE INDEX
  * `(widget_id, COALESCE(series_id, ''), bucket_at)` created in
