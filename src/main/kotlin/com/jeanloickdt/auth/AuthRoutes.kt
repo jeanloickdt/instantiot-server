@@ -184,20 +184,35 @@ fun Route.changePasswordRoute(userRepository: UserRepository) {
 // ============================================================
 // 📊 ADMIN STATS — admin only
 // ============================================================
+/**
+ * Centralized admin guard. Responds 401 if unauthenticated, 403 ("Admin only")
+ * if the caller is not an admin, and returns null in both cases so a handler can
+ * bail with `?: return@get`. Replaces the per-route inline checks and the
+ * duplicated local `checkAdmin` helpers (same behaviour, single definition).
+ */
+internal suspend fun io.ktor.server.application.ApplicationCall.requireAdmin(
+    userRepository: UserRepository
+): com.jeanloickdt.auth.domain.UserRow? {
+    val userId = principal<JWTPrincipal>()?.subject
+    if (userId == null) {
+        respond(HttpStatusCode.Unauthorized)
+        return null
+    }
+    val user = userRepository.findById(userId)
+    if (user == null || user.role != "admin") {
+        respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
+        return null
+    }
+    return user
+}
+
 fun Route.adminStatsRoute(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository
 ) {
     get("/api/admin/stats") {
-        val userId = call.principal<JWTPrincipal>()?.subject
-            ?: return@get call.respond(HttpStatusCode.Unauthorized)
-
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return@get
-        }
+        call.requireAdmin(userRepository) ?: return@get
 
         call.respond(AdminStatsResponse(
             users                = userRepository.count(),
@@ -218,14 +233,7 @@ fun Route.adminDevicesRoute(
     deviceRepository: DeviceRepository
 ) {
     get("/api/admin/devices") {
-        val userId = call.principal<JWTPrincipal>()?.subject
-            ?: return@get call.respond(HttpStatusCode.Unauthorized)
-
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return@get
-        }
+        call.requireAdmin(userRepository) ?: return@get
 
         // return ALL devices — not filtered by owner
         val devices = deviceRepository.findAll().map {
@@ -247,14 +255,7 @@ fun Route.adminDevicesRoute(
 // ============================================================
 fun Route.adminServerInfoRoute(userRepository: UserRepository) {
     get("/api/admin/server-info") {
-        val userId = call.principal<JWTPrincipal>()?.subject
-            ?: return@get call.respond(HttpStatusCode.Unauthorized)
-
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return@get
-        }
+        call.requireAdmin(userRepository) ?: return@get
 
         val configured = ServerConfig.serverDisplayName
         val effective = configured.takeIf { it.isNotBlank() }
@@ -287,14 +288,7 @@ fun Route.adminServerInfoRoute(userRepository: UserRepository) {
 // ============================================================
 fun Route.adminConfigRoute(userRepository: UserRepository) {
     patch("/api/admin/config") {
-        val userId = call.principal<JWTPrincipal>()?.subject
-            ?: return@patch call.respond(HttpStatusCode.Unauthorized)
-
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return@patch
-        }
+        call.requireAdmin(userRepository) ?: return@patch
 
         val body = call.receive<UpdateConfigRequest>()
 
@@ -366,28 +360,13 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
 // ============================================================
 fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
 
-    // shared admin-only guard
-    suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
-        val userId = call.principal<JWTPrincipal>()?.subject
-        if (userId == null) {
-            call.respond(HttpStatusCode.Unauthorized)
-            return false
-        }
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return false
-        }
-        return true
-    }
-
     get("/api/admin/history-config") {
-        if (!checkAdmin(call)) return@get
+        call.requireAdmin(userRepository) ?: return@get
         call.respond(HttpStatusCode.OK, currentHistoryConfig())
     }
 
     patch("/api/admin/history-config") {
-        if (!checkAdmin(call)) return@patch
+        call.requireAdmin(userRepository) ?: return@patch
 
         val body = call.receive<UpdateHistoryConfigRequest>()
 
@@ -446,23 +425,9 @@ private fun currentHistoryConfig(): HistoryConfigResponse = HistoryConfigRespons
 // ============================================================
 fun Route.adminUsersRoute(userRepository: UserRepository) {
 
-    suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
-        val userId = call.principal<JWTPrincipal>()?.subject
-        if (userId == null) {
-            call.respond(HttpStatusCode.Unauthorized)
-            return false
-        }
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return false
-        }
-        return true
-    }
-
     // ── List (read-only) ──────────────────────────────────
     get("/api/admin/users") {
-        if (!checkAdmin(call)) return@get
+        call.requireAdmin(userRepository) ?: return@get
         val list = userRepository.findAll().map { row ->
             AdminUserEntry(
                 id          = row.id,
@@ -479,7 +444,7 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
     // session revoke in V1). On the next logout/expiry, they will
     // have to use the new password.
     post("/api/admin/users/{id}/reset-password") {
-        if (!checkAdmin(call)) return@post
+        call.requireAdmin(userRepository) ?: return@post
         val targetId = call.parameters["id"]
             ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing user id"))
 
@@ -508,7 +473,7 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
     // Controls public registration. Closed by default. The admin opens it
     // while onboarding their users then closes it. Hot-reload.
     get("/api/admin/registration/config") {
-        if (!checkAdmin(call)) return@get
+        call.requireAdmin(userRepository) ?: return@get
         call.respond(
             HttpStatusCode.OK,
             RegistrationConfigResponse(open = ServerConfig.registrationOpen)
@@ -516,7 +481,7 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
     }
 
     patch("/api/admin/registration/config") {
-        if (!checkAdmin(call)) return@patch
+        call.requireAdmin(userRepository) ?: return@patch
         val body = call.receive<UpdateRegistrationConfigRequest>()
         ServerConfig.saveRegistrationConfig(body.open)
         LoggerFactory.getLogger("InstantIoT").info(
@@ -534,20 +499,6 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
 // ============================================================
 fun Route.adminBackupRoute(userRepository: UserRepository) {
 
-    suspend fun checkAdmin(call: io.ktor.server.application.ApplicationCall): Boolean {
-        val userId = call.principal<JWTPrincipal>()?.subject
-        if (userId == null) {
-            call.respond(HttpStatusCode.Unauthorized)
-            return false
-        }
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return false
-        }
-        return true
-    }
-
     fun configResponse() = BackupConfigResponse(
         enabled         = ServerConfig.backupEnabled,
         intervalHours   = ServerConfig.backupIntervalHours,
@@ -559,12 +510,12 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
 
     // ── Config (GET / PATCH) ───────────────────────────────
     get("/api/admin/backup/config") {
-        if (!checkAdmin(call)) return@get
+        call.requireAdmin(userRepository) ?: return@get
         call.respond(HttpStatusCode.OK, configResponse())
     }
 
     patch("/api/admin/backup/config") {
-        if (!checkAdmin(call)) return@patch
+        call.requireAdmin(userRepository) ?: return@patch
 
         val body = call.receive<UpdateBackupConfigRequest>()
         body.intervalHours?.let {
@@ -590,7 +541,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
 
     // ── Manual snapshot ────────────────────────────────────
     post("/api/admin/backup/now") {
-        if (!checkAdmin(call)) return@post
+        call.requireAdmin(userRepository) ?: return@post
         val file = com.jeanloickdt.backup.BackupManager.snapshotNow()
         if (file == null) {
             return@post call.respond(
@@ -604,7 +555,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
 
     // ── List ───────────────────────────────────────────────
     get("/api/admin/backup/list") {
-        if (!checkAdmin(call)) return@get
+        call.requireAdmin(userRepository) ?: return@get
         val backups = com.jeanloickdt.backup.BackupManager.list().map { info ->
             BackupListEntry(
                 filename           = info.filename,
@@ -618,7 +569,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
 
     // ── Restore (restart required) ─────────────────────────
     post("/api/admin/backup/restore") {
-        if (!checkAdmin(call)) return@post
+        call.requireAdmin(userRepository) ?: return@post
         val body = call.receive<RestoreBackupRequest>()
         if (body.filename.isBlank()) {
             return@post call.respond(
@@ -647,14 +598,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
 // ============================================================
 fun Route.adminRestartRoute(userRepository: UserRepository) {
     post("/api/admin/restart") {
-        val userId = call.principal<JWTPrincipal>()?.subject
-            ?: return@post call.respond(HttpStatusCode.Unauthorized)
-
-        val user = userRepository.findById(userId)
-        if (user == null || user.role != "admin") {
-            call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
-            return@post
-        }
+        call.requireAdmin(userRepository) ?: return@post
 
         call.respond(HttpStatusCode.OK, mapOf("message" to "Server shutting down..."))
 
