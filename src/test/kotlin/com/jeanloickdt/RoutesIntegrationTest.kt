@@ -278,4 +278,19 @@ class RoutesIntegrationTest {
         }
         assertEquals(HttpStatusCode.Created, open.status)
     }
+
+    @Test
+    fun `error responses use the unified ApiError JSON envelope`() = testApplication {
+        installTestApp()
+        createUser("bob", "secret123")
+
+        val res = client.post("/api/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"username":"bob","password":"wrong"}""")
+        }
+        assertEquals(HttpStatusCode.Unauthorized, res.status)
+        // P1-2 contract: every error is a JSON object with an `error` field
+        // (this path was a bare string before — would have failed to parse here).
+        assertEquals("Invalid credentials", jsonOf(res.bodyAsText())["error"]!!.jsonPrimitive.content)
+    }
 }

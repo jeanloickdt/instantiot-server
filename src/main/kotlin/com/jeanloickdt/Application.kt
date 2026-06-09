@@ -158,7 +158,10 @@ fun Application.module() {
     install(StatusPages) {
         exception<Throwable> { call, cause ->
             logger.error("Unhandled exception on ${call.request.local.uri}", cause)
-            call.respondText("500: Internal Server Error", status = HttpStatusCode.InternalServerError)
+            call.respond(
+                HttpStatusCode.InternalServerError,
+                com.jeanloickdt.common.ApiError("Internal Server Error")
+            )
         }
     }
 

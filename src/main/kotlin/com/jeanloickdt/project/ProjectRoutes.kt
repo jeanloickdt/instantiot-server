@@ -20,6 +20,8 @@
 // project/ProjectRoutes.kt
 package com.jeanloickdt.project
 
+import com.jeanloickdt.common.ApiError
+
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.project.domain.CreateProjectRequest
 import com.jeanloickdt.project.domain.ProjectRepository
@@ -101,12 +103,12 @@ fun Route.projectRoutes(
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["id"]
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val project = projectRepository.findById(projectId)
 
             if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Project not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
                 return@get
             }
 
@@ -127,12 +129,12 @@ fun Route.projectRoutes(
                 ?: return@patch call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["id"]
-                ?: return@patch call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val project = projectRepository.findById(projectId)
 
             if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Project not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
                 return@patch
             }
 
@@ -159,12 +161,12 @@ fun Route.projectRoutes(
                 ?: return@patch call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["id"]
-                ?: return@patch call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val project = projectRepository.findById(projectId)
 
             if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Project not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
                 return@patch
             }
 
@@ -185,12 +187,12 @@ fun Route.projectRoutes(
                 ?: return@delete call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["id"]
-                ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val project = projectRepository.findById(projectId)
 
             if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Project not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
                 return@delete
             }
 

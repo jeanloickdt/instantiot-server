@@ -20,6 +20,8 @@
 // device/DeviceRoutes.kt
 package com.jeanloickdt.device
 
+import com.jeanloickdt.common.ApiError
+
 import com.jeanloickdt.device.domain.CreateDeviceRequest
 import com.jeanloickdt.device.domain.CreateDeviceResponse
 import com.jeanloickdt.device.domain.DeviceConnectivity
@@ -74,7 +76,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["projectId"]
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectId"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing projectId"))
 
             val devices = deviceRepository.findAllByProject(projectId)
                 .filter { it.ownerId == ownerId }
@@ -160,12 +162,12 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 ?: return@patch call.respond(HttpStatusCode.Unauthorized)
 
             val deviceId = call.parameters["id"]
-                ?: return@patch call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val device = deviceRepository.findById(deviceId)
 
             if (device == null || device.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Device not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
                 return@patch
             }
 
@@ -174,7 +176,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             if (trimmed.length < 2 || trimmed.length > 64) {
                 call.respond(
                     HttpStatusCode.BadRequest,
-                    mapOf("error" to "Name must be 2-64 characters")
+                    ApiError("Name must be 2-64 characters")
                 )
                 return@patch
             }
@@ -201,12 +203,12 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 ?: return@delete call.respond(HttpStatusCode.Unauthorized)
 
             val deviceId = call.parameters["id"]
-                ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val device = deviceRepository.findById(deviceId)
 
             if (device == null || device.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Device not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
                 return@delete
             }
 
@@ -247,12 +249,12 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
                 ?: return@post call.respond(HttpStatusCode.Unauthorized)
 
             val deviceId = call.parameters["id"]
-                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val device = deviceRepository.findById(deviceId)
 
             if (device == null || device.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Device not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
                 return@post
             }
 

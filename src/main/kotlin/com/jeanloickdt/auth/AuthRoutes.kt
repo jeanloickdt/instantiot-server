@@ -19,6 +19,8 @@
 
 package com.jeanloickdt.auth
 
+import com.jeanloickdt.common.ApiError
+
 import com.jeanloickdt.auth.domain.*
 import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.device.domain.DeviceRepository
@@ -74,7 +76,7 @@ fun Route.loginRoute(userRepository: UserRepository) {
 
         val user = userRepository.findByUsername(body.username)
         if (user == null || !BCrypt.checkpw(body.password, user.pwdHash)) {
-            call.respond(HttpStatusCode.Unauthorized, "Invalid credentials")
+            call.respond(HttpStatusCode.Unauthorized, ApiError("Invalid credentials"))
             return@post
         }
 
@@ -104,7 +106,7 @@ fun Route.registerRoute(userRepository: UserRepository) {
         if (!ServerConfig.registrationOpen) {
             call.respond(
                 HttpStatusCode.Forbidden,
-                mapOf("error" to "Registration is closed")
+                ApiError("Registration is closed")
             )
             return@post
         }
@@ -113,22 +115,22 @@ fun Route.registerRoute(userRepository: UserRepository) {
 
         // username validation — 3-32 alphanumeric characters + underscore
         if (!USERNAME_REGEX.matches(body.username)) {
-            call.respond(HttpStatusCode.BadRequest, mapOf(
-                "error" to "Username must be 3-32 characters, alphanumeric and underscores only"
+            call.respond(HttpStatusCode.BadRequest, ApiError(
+                "Username must be 3-32 characters, alphanumeric and underscores only"
             ))
             return@post
         }
 
         // password validation — 8-128 characters
         if (body.password.length < PASSWORD_MIN_LENGTH || body.password.length > PASSWORD_MAX_LENGTH) {
-            call.respond(HttpStatusCode.BadRequest, mapOf(
-                "error" to "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
+            call.respond(HttpStatusCode.BadRequest, ApiError(
+                "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
             ))
             return@post
         }
 
         if (userRepository.findByUsername(body.username) != null) {
-            call.respond(HttpStatusCode.Conflict, "Username already exists")
+            call.respond(HttpStatusCode.Conflict, ApiError("Username already exists"))
             return@post
         }
 
@@ -162,14 +164,14 @@ fun Route.changePasswordRoute(userRepository: UserRepository) {
 
         // verify the old password
         if (!BCrypt.checkpw(body.currentPassword, user.pwdHash)) {
-            call.respond(HttpStatusCode.Unauthorized, mapOf("error" to "Invalid current password"))
+            call.respond(HttpStatusCode.Unauthorized, ApiError("Invalid current password"))
             return@patch
         }
 
         // validate the new password
         if (body.newPassword.length < PASSWORD_MIN_LENGTH || body.newPassword.length > PASSWORD_MAX_LENGTH) {
-            call.respond(HttpStatusCode.BadRequest, mapOf(
-                "error" to "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
+            call.respond(HttpStatusCode.BadRequest, ApiError(
+                "Password must be between $PASSWORD_MIN_LENGTH and $PASSWORD_MAX_LENGTH characters"
             ))
             return@patch
         }
@@ -200,7 +202,7 @@ internal suspend fun io.ktor.server.application.ApplicationCall.requireAdmin(
     }
     val user = userRepository.findById(userId)
     if (user == null || user.role != "admin") {
-        respond(HttpStatusCode.Forbidden, mapOf("error" to "Admin only"))
+        respond(HttpStatusCode.Forbidden, ApiError("Admin only"))
         return null
     }
     return user
@@ -297,26 +299,26 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
         val tcpPort = body.tcpPort
 
         if (httpPort != null && (httpPort < 1 || httpPort > 65535)) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "HTTP port must be between 1 and 65535"))
+            call.respond(HttpStatusCode.BadRequest, ApiError("HTTP port must be between 1 and 65535"))
             return@patch
         }
         if (tcpPort != null && (tcpPort < 1 || tcpPort > 65535)) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "TCP port must be between 1 and 65535"))
+            call.respond(HttpStatusCode.BadRequest, ApiError("TCP port must be between 1 and 65535"))
             return@patch
         }
         if (httpPort != null && tcpPort != null && httpPort == tcpPort) {
-            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "HTTP and TCP ports must be different"))
+            call.respond(HttpStatusCode.BadRequest, ApiError("HTTP and TCP ports must be different"))
             return@patch
         }
 
         // verify the ports are available (not used by another service)
         // we skip the check for the ports currently used by THIS server
         if (httpPort != null && httpPort != ServerConfig.runningHttpPort && httpPort != ServerConfig.runningTcpPort && !isPortAvailable(httpPort)) {
-            call.respond(HttpStatusCode.Conflict, mapOf("error" to "HTTP port $httpPort is already in use"))
+            call.respond(HttpStatusCode.Conflict, ApiError("HTTP port $httpPort is already in use"))
             return@patch
         }
         if (tcpPort != null && tcpPort != ServerConfig.runningHttpPort && tcpPort != ServerConfig.runningTcpPort && !isPortAvailable(tcpPort)) {
-            call.respond(HttpStatusCode.Conflict, mapOf("error" to "TCP port $tcpPort is already in use"))
+            call.respond(HttpStatusCode.Conflict, ApiError("TCP port $tcpPort is already in use"))
             return@patch
         }
 
@@ -327,14 +329,14 @@ fun Route.adminConfigRoute(userRepository: UserRepository) {
             if (displayName.length > 64) {
                 return@patch call.respond(
                     HttpStatusCode.BadRequest,
-                    mapOf("error" to "serverDisplayName must be <= 64 characters")
+                    ApiError("serverDisplayName must be <= 64 characters")
                 )
             }
             // Reject control chars
             if (displayName.any { it.code < 32 }) {
                 return@patch call.respond(
                     HttpStatusCode.BadRequest,
-                    mapOf("error" to "serverDisplayName cannot contain control characters")
+                    ApiError("serverDisplayName cannot contain control characters")
                 )
             }
         }
@@ -373,24 +375,24 @@ fun Route.adminHistoryConfigRoute(userRepository: UserRepository) {
         // validations — positive bounds (except day which accepts -1 = unlimited)
         body.retentionRawDays?.let {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "retentionRawDays must be >= 1"))
+                ApiError("retentionRawDays must be >= 1"))
         }
         body.retentionOpaqueDays?.let {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "retentionOpaqueDays must be >= 1"))
+                ApiError("retentionOpaqueDays must be >= 1"))
         }
         body.retentionMinDays?.let {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "retentionMinDays must be >= 1"))
+                ApiError("retentionMinDays must be >= 1"))
         }
         body.retentionHourDays?.let {
             if (it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "retentionHourDays must be >= 1"))
+                ApiError("retentionHourDays must be >= 1"))
         }
         body.retentionDayDays?.let {
             // -1 = unlimited, otherwise >= 1
             if (it != -1 && it < 1) return@patch call.respond(HttpStatusCode.BadRequest,
-                mapOf("error" to "retentionDayDays must be >= 1 or -1 for unlimited"))
+                ApiError("retentionDayDays must be >= 1 or -1 for unlimited"))
         }
 
         ServerConfig.saveHistoryConfig(
@@ -446,17 +448,17 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
     post("/api/admin/users/{id}/reset-password") {
         call.requireAdmin(userRepository) ?: return@post
         val targetId = call.parameters["id"]
-            ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing user id"))
+            ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing user id"))
 
         val target = userRepository.findById(targetId)
-            ?: return@post call.respond(HttpStatusCode.NotFound, mapOf("error" to "User not found"))
+            ?: return@post call.respond(HttpStatusCode.NotFound, ApiError("User not found"))
 
         val body = call.receive<ResetUserPasswordRequest>()
         val newPassword = body.newPassword
         if (newPassword.length < PASSWORD_MIN_LENGTH || newPassword.length > PASSWORD_MAX_LENGTH) {
             return@post call.respond(
                 HttpStatusCode.BadRequest,
-                mapOf("error" to "Password must be $PASSWORD_MIN_LENGTH-$PASSWORD_MAX_LENGTH characters")
+                ApiError("Password must be $PASSWORD_MIN_LENGTH-$PASSWORD_MAX_LENGTH characters")
             )
         }
 
@@ -521,13 +523,13 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
         body.intervalHours?.let {
             if (it < 1) return@patch call.respond(
                 HttpStatusCode.BadRequest,
-                mapOf("error" to "intervalHours must be >= 1")
+                ApiError("intervalHours must be >= 1")
             )
         }
         body.retentionCount?.let {
             if (it < 1) return@patch call.respond(
                 HttpStatusCode.BadRequest,
-                mapOf("error" to "retentionCount must be >= 1")
+                ApiError("retentionCount must be >= 1")
             )
         }
 
@@ -546,7 +548,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
         if (file == null) {
             return@post call.respond(
                 HttpStatusCode.InternalServerError,
-                mapOf("error" to "Backup failed — see server logs")
+                ApiError("Backup failed — see server logs")
             )
         }
         com.jeanloickdt.backup.BackupManager.cleanup()
@@ -574,14 +576,14 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
         if (body.filename.isBlank()) {
             return@post call.respond(
                 HttpStatusCode.BadRequest,
-                mapOf("error" to "filename required")
+                ApiError("filename required")
             )
         }
         val result = com.jeanloickdt.backup.BackupManager.restore(body.filename)
         if (result == null) {
             return@post call.respond(
                 HttpStatusCode.NotFound,
-                mapOf("error" to "Backup not found or restore failed — see server logs")
+                ApiError("Backup not found or restore failed — see server logs")
             )
         }
         val (_, safetyNet) = result

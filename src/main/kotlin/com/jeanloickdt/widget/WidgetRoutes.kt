@@ -20,6 +20,8 @@
 // widget/WidgetRoutes.kt
 package com.jeanloickdt.widget
 
+import com.jeanloickdt.common.ApiError
+
 import com.jeanloickdt.relay.SessionRegistry
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsRequest
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
@@ -60,7 +62,7 @@ fun Route.widgetRoutes(
                 ?: return@post call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["projectId"]
-                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectId"))
+                ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing projectId"))
 
             val body = call.receive<RegisterWidgetRequest>()
 
@@ -93,7 +95,7 @@ fun Route.widgetRoutes(
                 ?: return@post call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["projectId"]
-                ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing projectId"))
+                ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing projectId"))
 
             val body = call.receive<BulkRegisterWidgetsRequest>()
 
@@ -129,12 +131,12 @@ fun Route.widgetRoutes(
                 ?: return@delete call.respond(HttpStatusCode.Unauthorized)
 
             val widgetId = call.parameters["id"]
-                ?: return@delete call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val widget = widgetRepository.findById(widgetId)
 
             if (widget == null || widget.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Widget not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Widget not found"))
                 return@delete
             }
 
@@ -161,7 +163,7 @@ fun Route.widgetRoutes(
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
             val projectId = call.parameters["id"]
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val states = widgetRepository.findAllByProject(projectId)
                 .filter { it.ownerId == ownerId } // isolation
@@ -193,13 +195,13 @@ fun Route.widgetRoutes(
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
             val widgetId = call.parameters["id"]
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val from = call.parameters["from"]?.toLongOrNull()
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing from"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing from"))
 
             val to = call.parameters["to"]?.toLongOrNull()
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing to"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing to"))
 
             val seriesId = call.parameters["seriesId"]?.takeIf { it.isNotBlank() }
             val granularity = (call.parameters["granularity"] ?: "raw").lowercase()
@@ -207,7 +209,7 @@ fun Route.widgetRoutes(
             val widget = widgetRepository.findById(widgetId)
 
             if (widget == null || widget.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Widget not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Widget not found"))
                 return@get
             }
 
@@ -239,8 +241,8 @@ fun Route.widgetRoutes(
                     }
                 }
                 else -> {
-                    call.respond(HttpStatusCode.BadRequest, mapOf(
-                        "error" to "Invalid granularity (use raw|min|hour|day)"
+                    call.respond(HttpStatusCode.BadRequest, ApiError(
+                        "Invalid granularity (use raw|min|hour|day)"
                     ))
                     return@get
                 }
@@ -266,18 +268,18 @@ fun Route.widgetRoutes(
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
             val widgetId = call.parameters["id"]
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing id"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
             val from = call.parameters["from"]?.toLongOrNull()
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing from"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing from"))
 
             val to = call.parameters["to"]?.toLongOrNull()
-                ?: return@get call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Missing to"))
+                ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing to"))
 
             val widget = widgetRepository.findById(widgetId)
 
             if (widget == null || widget.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Widget not found"))
+                call.respond(HttpStatusCode.NotFound, ApiError("Widget not found"))
                 return@get
             }
 
