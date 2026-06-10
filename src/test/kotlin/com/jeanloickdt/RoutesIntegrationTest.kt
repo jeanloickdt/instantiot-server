@@ -24,6 +24,7 @@ import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.common.ServerConfig
+import com.jeanloickdt.common.systemRoutes
 import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.device.deviceRoutes
@@ -112,6 +113,7 @@ class RoutesIntegrationTest {
             }
             configureAuth(userRepository)
             routing {
+                systemRoutes()
                 authRoutes(userRepository, projectRepository, deviceRepository)
                 projectRoutes(
                     projectRepository, deviceRepository, widgetRepository,
@@ -277,6 +279,19 @@ class RoutesIntegrationTest {
             setBody("""{"username":"newuser","password":"password12"}""")
         }
         assertEquals(HttpStatusCode.Created, open.status)
+    }
+
+    @Test
+    fun `health and version endpoints are public`() = testApplication {
+        installTestApp()
+
+        val health = client.get("/health") // no Authorization header
+        assertEquals(HttpStatusCode.OK, health.status)
+        assertEquals("ok", jsonOf(health.bodyAsText())["status"]!!.jsonPrimitive.content)
+
+        val version = client.get("/api/version")
+        assertEquals(HttpStatusCode.OK, version.status)
+        assertTrue(jsonOf(version.bodyAsText())["version"]!!.jsonPrimitive.content.isNotBlank())
     }
 
     @Test

@@ -25,6 +25,7 @@ import com.jeanloickdt.auth.data.SqliteUserRepository
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.auth.domain.UserRepository
 import com.jeanloickdt.common.StatusResponse
+import com.jeanloickdt.common.systemRoutes
 import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.device.data.SqliteDeviceRepository
@@ -461,6 +462,9 @@ fun Application.module() {
     // ============================================================
     routing {
         staticResources("/", "static")
+
+        // Unauthenticated liveness + version (separate from /api/status)
+        systemRoutes()
 
         // GET /api/status — server state — always accessible.
         // V1.3: no more license or first-launch flow → the server
