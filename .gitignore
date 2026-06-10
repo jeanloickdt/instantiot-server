@@ -46,3 +46,6 @@ build/jpackage-input/
 # macOS
 .DS_Store
 **/.DS_Store
+
+# Kotlin incremental build cache
+.kotlin/
