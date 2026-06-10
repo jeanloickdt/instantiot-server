@@ -74,6 +74,7 @@ class DeviceRelayIntegrationTest {
     private val deviceToken = "esp-token-abcdef-123456"
     private lateinit var jwt: String
     private lateinit var projectId: String
+    private lateinit var deviceId: String
     private val widgetId = "w1"
 
     @BeforeTest
@@ -90,7 +91,7 @@ class DeviceRelayIntegrationTest {
         val userId = userRepository.create("alice", BCrypt.hashpw("pw", BCrypt.gensalt()))
         jwt = JwtConfig.generateToken(userId)
         projectId = projectRepository.create(ownerId = userId, name = "P")
-        deviceRepository.create(
+        deviceId = deviceRepository.create(
             name = "esp1",
             projectId = projectId,
             ownerId = userId,
@@ -180,7 +181,74 @@ class DeviceRelayIntegrationTest {
         }
     }
 
+    @Test
+    fun `app to device — a binary command is trimmed and delivered to the device socket`() = testApplication {
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort)
+        val ws = createClient { install(WebSockets) }
+
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.soTimeout = 4000
+                // ESP authenticates → registered + outbox created (online)
+                esp.getOutputStream().apply { write(handshake(deviceToken)); flush() }
+                // wait for device_online so we know the device is registered before we command it
+                val online = mutableListOf<String>()
+                withTimeoutOrNull(5000) {
+                    while (online.none { it.contains("device_online") }) {
+                        (incoming.receive() as? Frame.Text)?.let { online += it.readText() }
+                    }
+                }
+                assertTrue(online.any { it.contains("device_online") }, "device must come online first")
+
+                // the app sends a DISCRETE command (HSlider SetValue) targeting the device UUID.
+                // DEV_COUNT=1 with the device id; never dropped (non-streaming → suspending send).
+                val payload = floatLE(0.5f)
+                val appFrame = appCommandFrame(listOf(deviceId), widgetId, TYPE_HSLIDER, EV_SETVALUE, payload)
+                send(Frame.Binary(true, appFrame))
+
+                // the ESP must receive the SAME frame trimmed to DEV_COUNT=0 (LEN+CRC recomputed),
+                // which is byte-identical to the device-direction frame for the same widget/payload.
+                val expected = deviceFrame(widgetId, TYPE_HSLIDER, EV_SETVALUE, payload)
+                val received = readExactly(esp.getInputStream(), expected.size)
+                assertEquals(0, received[4].toInt(), "DEV_COUNT byte must be 0 (header trimmed)")
+                assertContentEquals(expected, received)
+            }
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────
+
+    /** Reads exactly [n] bytes from a blocking InputStream (or fails on timeout/EOF). */
+    private fun readExactly(input: java.io.InputStream, n: Int): ByteArray {
+        val out = ByteArray(n)
+        var read = 0
+        while (read < n) {
+            val r = input.read(out, read, n - read)
+            if (r == -1) error("device socket closed after $read/$n bytes")
+            read += r
+        }
+        return out
+    }
+
+    /** App→device command frame: AA|VER|LEN|DEV_COUNT(N)|[DEV_LEN|DEV_ID]xN|WID_LEN|WID|TYPE|EVENT|PAYLOAD|CRC8 */
+    private fun appCommandFrame(deviceIds: List<String>, widgetId: String, type: Int, event: Int, payload: ByteArray): ByteArray {
+        var dev = byteArrayOf(deviceIds.size.toByte())
+        for (d in deviceIds) {
+            val db = d.toByteArray()
+            dev = dev + byteArrayOf(db.size.toByte()) + db
+        }
+        val wid = widgetId.toByteArray()
+        val body = dev +
+            byteArrayOf(wid.size.toByte()) + wid +
+            byteArrayOf(type.toByte(), event.toByte()) + payload
+        val len = body.size
+        return byteArrayOf(0xAA.toByte(), 0x01, (len and 0xFF).toByte(), ((len ushr 8) and 0xFF).toByte()) +
+            body + byteArrayOf(crc8(body))
+    }
 
     /**
      * The ONLY place relay wiring lives. The 3 test assertions are the
@@ -245,6 +313,7 @@ class DeviceRelayIntegrationTest {
 
     // ── iWidgets v1 frame builders (mirror of FrameParser's wire format) ──
     private val TYPE_GAUGE = 0x03
+    private val TYPE_HSLIDER = 0x0A
     private val EV_SETVALUE = 0x01
 
     private fun crc8(data: ByteArray): Byte {
