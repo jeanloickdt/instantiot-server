@@ -86,7 +86,16 @@ data class NumericHistoryEntry(
     val recordedAt: Long
 )
 
-object SessionRegistry {
+/**
+ * Live relay state for THIS node: app/device sessions, outboxes, RAM buffers.
+ *
+ * Injected by constructor (one instance built in `Application.module()` and
+ * passed to the relays, the broadcaster, the routes and the flush jobs) —
+ * no global singleton, so tests build an isolated instance per test and the
+ * future SRP split (ConnectionRegistry / LastValueCache / PresenceStore) can
+ * happen behind this seam without touching call sites again.
+ */
+class SessionRegistry {
 
     // userId → list of WebSocket app sessions (multi-device: phone + tablet)
     val appSessions = ConcurrentHashMap<UserId, CopyOnWriteArrayList<AppSession>>()

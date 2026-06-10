@@ -101,6 +101,8 @@ internal const val TYPE_HEARTBEAT: UByte = 0xFEu
 fun Application.startDeviceRelay(
     deviceRepository: DeviceRepository,
     widgetRepository: WidgetRepository,
+    registry: SessionRegistry,
+    events: ControlEventBroadcaster,
     tcpPort: Int = 9001
 ) {
     val applicationScope: CoroutineScope = this
@@ -148,6 +150,8 @@ fun Application.startDeviceRelay(
                         clientSocket     = clientSocket,
                         deviceRepository = deviceRepository,
                         widgetRepository = widgetRepository,
+                        registry         = registry,
+                        events           = events,
                         applicationScope = applicationScope
                     )
                 }
@@ -174,6 +178,8 @@ private suspend fun handleDeviceConnection(
     clientSocket: Socket,
     deviceRepository: DeviceRepository,
     widgetRepository: WidgetRepository,
+    registry: SessionRegistry,
+    events: ControlEventBroadcaster,
     applicationScope: CoroutineScope
 ) {
     val deviceAddress = clientSocket.inetAddress.hostAddress
@@ -220,7 +226,7 @@ private suspend fun handleDeviceConnection(
         // We pass `applicationScope` to the outbox → its consumer
         // coroutine outlives the `handleDeviceConnection` coroutine
         // and stops cleanly via `unregisterDevice`.
-        SessionRegistry.registerDevice(device.id, device, clientSocket, applicationScope)
+        registry.registerDevice(device.id, device, clientSocket, applicationScope)
         withContext(Dispatchers.IO) {
             deviceRepository.updateOnlineStatus(device.id, isOnline = true)
             deviceRepository.updateLastSeen(device.id, System.currentTimeMillis())
@@ -228,7 +234,7 @@ private suspend fun handleDeviceConnection(
         logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceAddress")
 
         // broadcast device_online to the apps of the project
-        ControlEventBroadcaster.deviceOnline(
+        events.deviceOnline(
             projectId  = device.projectId,
             deviceId   = device.id,
             deviceName = device.name
@@ -250,13 +256,14 @@ private suspend fun handleDeviceConnection(
                         frameBytes       = frameBytes,
                         device           = device,
                         widgetRepository = widgetRepository,
+                        registry         = registry,
                         applicationScope = applicationScope
                     )
                 }
             }
         } finally {
             // disconnection — mark offline + remove session
-            SessionRegistry.unregisterDevice(device.id)
+            registry.unregisterDevice(device.id)
             withContext(Dispatchers.IO) {
                 deviceRepository.updateOnlineStatus(device.id, isOnline = false)
             }
@@ -267,7 +274,7 @@ private suspend fun handleDeviceConnection(
             // reason = DISCONNECTED (normal TCP disconnect or timeout)
             // If renew-token or delete already broadcast with a specific reason,
             // the app receives 2 events — acceptable, it deduplicates on deviceId offline.
-            ControlEventBroadcaster.deviceOffline(
+            events.deviceOffline(
                 projectId = device.projectId,
                 deviceId  = device.id,
                 reason    = DeviceOfflineReason.DISCONNECTED
@@ -296,6 +303,7 @@ private suspend fun handleDeviceFrame(
     frameBytes: ByteArray,
     device: DeviceRow,
     widgetRepository: WidgetRepository,
+    registry: SessionRegistry,
     applicationScope: CoroutineScope
 ) {
     // Heartbeat (TYPE = 0xFE) : receiving the byte automatically resets
@@ -314,7 +322,7 @@ private suspend fun handleDeviceFrame(
     //    into the `widgets` table (+ add to the RAM Set). Lets the REST
     //    history lookups work without the app needing to POST
     //    explicitly. RAM cache → 0 DB hit when the widget is known.
-    if (SessionRegistry.knownWidgetIds.add(widgetId)) {
+    if (registry.knownWidgetIds.add(widgetId)) {
         applicationScope.launch(Dispatchers.IO) {
             val created = widgetRepository.registerIfAbsent(
                 id        = widgetId,
@@ -329,10 +337,10 @@ private suspend fun handleDeviceFrame(
     }
 
     // update lastPayloads in RAM — sub-millisecond access
-    SessionRegistry.lastPayloads[widgetId] = payloadBase64
+    registry.lastPayloads[widgetId] = payloadBase64
 
     // add to the history buffer — flushed every 5s to a SQLite WAL batch
-    SessionRegistry.historyBuffer.add(
+    registry.historyBuffer.add(
         HistoryEntry(
             widgetId   = widgetId,
             projectId  = device.projectId,
@@ -358,7 +366,7 @@ private suspend fun handleDeviceFrame(
     FrameParser.extractNumericValue(frameBytes)?.let { sample ->
         // Raw tier : opt-in only (off by default)
         if (ServerConfig.historyRawEnabled) {
-            SessionRegistry.numericHistoryBuffer.add(
+            registry.numericHistoryBuffer.add(
                 NumericHistoryEntry(
                     widgetId   = widgetId,
                     projectId  = device.projectId,
@@ -405,21 +413,21 @@ private suspend fun handleDeviceFrame(
     }
 
     // broadcast the intact frame to the apps watching this project
-    broadcastToApps(device.projectId, frameBytes)
+    broadcastToApps(registry, device.projectId, frameBytes)
 }
 
 /**
  * Broadcasts a binary frame to all connected apps watching a project.
  */
-private suspend fun broadcastToApps(projectId: String, frameBytes: ByteArray) {
-    val appSessions = SessionRegistry.getAppSessionsForProject(projectId)
+private suspend fun broadcastToApps(registry: SessionRegistry, projectId: String, frameBytes: ByteArray) {
+    val appSessions = registry.getAppSessionsForProject(projectId)
 
     appSessions.forEach { appSession ->
         try {
             appSession.session.send(Frame.Binary(true, frameBytes))
         } catch (e: Exception) {
             logger.warn("Failed to broadcast to userId=${appSession.userId} — removing session")
-            SessionRegistry.unregisterApp(appSession.userId, appSession.session)
+            registry.unregisterApp(appSession.userId, appSession.session)
         }
     }
 }

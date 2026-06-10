@@ -49,7 +49,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.mindrot.jbcrypt.BCrypt
 import java.net.ServerSocket
 import java.net.Socket
-import kotlin.test.AfterTest
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -99,13 +98,6 @@ class DeviceRelayIntegrationTest {
             deviceType = DeviceType.ESP32,
             connectivity = DeviceConnectivity.WIFI
         )
-    }
-
-    @AfterTest
-    fun cleanup() {
-        // best-effort: clear any device session left registered between tests
-        com.jeanloickdt.relay.SessionRegistry.deviceSessions.keys.toList()
-            .forEach { com.jeanloickdt.relay.SessionRegistry.unregisterDevice(it) }
     }
 
     @Test
@@ -191,17 +183,18 @@ class DeviceRelayIntegrationTest {
     // ── helpers ─────────────────────────────────────────────────
 
     /**
-     * The ONLY place relay wiring lives. The DI migration (global SessionRegistry
-     * → injected instance + the ConnectionRegistry/LastValueCache/PresenceStore
-     * seams) must touch ONLY this function. The 3 test assertions are the
-     * behavioural contract and never change. When DI lands, this builds a
-     * per-test registry instance and the global @AfterTest cleanup disappears.
+     * The ONLY place relay wiring lives. The 3 test assertions are the
+     * behavioural contract and never change — only this wiring evolves.
+     * With DI, every test builds its OWN SessionRegistry + broadcaster:
+     * no shared global state, so no cross-test cleanup is needed.
      */
     private fun io.ktor.server.testing.ApplicationTestBuilder.wireRelay(tcpPort: Int) {
+        val registry = com.jeanloickdt.relay.SessionRegistry()
+        val events   = com.jeanloickdt.relay.ControlEventBroadcaster(registry)
         application {
             configureAuth(userRepository)
-            configureAppRelay(projectRepository)
-            startDeviceRelay(deviceRepository, widgetRepository, tcpPort = tcpPort)
+            configureAppRelay(projectRepository, registry, events)
+            startDeviceRelay(deviceRepository, widgetRepository, registry, events, tcpPort = tcpPort)
         }
     }
 

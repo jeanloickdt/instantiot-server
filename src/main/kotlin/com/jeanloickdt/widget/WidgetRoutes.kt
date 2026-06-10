@@ -47,7 +47,8 @@ fun Route.widgetRoutes(
     widgetHistoryNumericRepository: WidgetHistoryNumericRepository,
     widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
     widgetHistoryHourRepository: WidgetHistoryAggregateRepository,
-    widgetHistoryDayRepository: WidgetHistoryAggregateRepository
+    widgetHistoryDayRepository: WidgetHistoryAggregateRepository,
+    registry: SessionRegistry
 ) {
 
     authenticate("jwt") {
@@ -72,7 +73,7 @@ fun Route.widgetRoutes(
                 ownerId   = ownerId,
                 type      = body.type
             )
-            if (created) SessionRegistry.knownWidgetIds.add(body.id)
+            if (created) registry.knownWidgetIds.add(body.id)
 
             call.respond(
                 if (created) HttpStatusCode.Created else HttpStatusCode.OK,
@@ -110,7 +111,7 @@ fun Route.widgetRoutes(
                     type      = w.type
                 )
                 if (inserted) {
-                    SessionRegistry.knownWidgetIds.add(w.id)
+                    registry.knownWidgetIds.add(w.id)
                     created++
                 } else {
                     existing++

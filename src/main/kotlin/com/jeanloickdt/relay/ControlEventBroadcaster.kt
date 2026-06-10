@@ -39,7 +39,9 @@ import org.slf4j.LoggerFactory
  *   - commandFailed(session, deviceId, reason)
  *       → sent to the emitting session only (not a broadcast)
  */
-object ControlEventBroadcaster {
+class ControlEventBroadcaster(
+    private val registry: SessionRegistry
+) {
 
     private val logger = LoggerFactory.getLogger("ControlEventBroadcaster")
     private val json = Json { encodeDefaults = false }
@@ -129,7 +131,7 @@ object ControlEventBroadcaster {
             granularity = granularity
         )
         val jsonText = json.encodeToString(event)
-        val targetSessions = SessionRegistry.getAppSessionsForProject(projectId)
+        val targetSessions = registry.getAppSessionsForProject(projectId)
             .filter { it.historySubs[widgetId] == granularity }
         if (targetSessions.isEmpty()) return
 
@@ -138,7 +140,7 @@ object ControlEventBroadcaster {
                 appSession.session.send(Frame.Text(jsonText))
             } catch (e: Exception) {
                 logger.warn("Failed to send bucket_updated to userId=${appSession.userId} — removing session")
-                SessionRegistry.unregisterApp(appSession.userId, appSession.session)
+                registry.unregisterApp(appSession.userId, appSession.session)
             }
         }
     }
@@ -149,14 +151,14 @@ object ControlEventBroadcaster {
 
     private suspend fun broadcastToProject(projectId: String, event: ControlEvent) {
         val jsonText = json.encodeToString(event)
-        val appSessions = SessionRegistry.getAppSessionsForProject(projectId)
+        val appSessions = registry.getAppSessionsForProject(projectId)
 
         appSessions.forEach { appSession ->
             try {
                 appSession.session.send(Frame.Text(jsonText))
             } catch (e: Exception) {
                 logger.warn("Failed to send event to userId=${appSession.userId} — removing session")
-                SessionRegistry.unregisterApp(appSession.userId, appSession.session)
+                registry.unregisterApp(appSession.userId, appSession.session)
             }
         }
     }

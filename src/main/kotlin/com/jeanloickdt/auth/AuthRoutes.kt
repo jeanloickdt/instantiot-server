@@ -211,7 +211,8 @@ internal suspend fun io.ktor.server.application.ApplicationCall.requireAdmin(
 fun Route.adminStatsRoute(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
-    deviceRepository: DeviceRepository
+    deviceRepository: DeviceRepository,
+    registry: SessionRegistry
 ) {
     get("/api/admin/stats") {
         call.requireAdmin(userRepository) ?: return@get
@@ -220,9 +221,9 @@ fun Route.adminStatsRoute(
             users                = userRepository.count(),
             projects             = projectRepository.count(),
             devicesTotal         = deviceRepository.count(),
-            devicesOnline        = SessionRegistry.deviceSessions.size,
-            appSessionsActive    = SessionRegistry.appSessions.size,
-            deviceSessionsActive = SessionRegistry.deviceSessions.size
+            devicesOnline        = registry.deviceSessions.size,
+            appSessionsActive    = registry.appSessions.size,
+            deviceSessionsActive = registry.deviceSessions.size
         ))
     }
 }
@@ -620,7 +621,8 @@ fun Route.adminRestartRoute(userRepository: UserRepository) {
 fun Route.authRoutes(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
-    deviceRepository: DeviceRepository
+    deviceRepository: DeviceRepository,
+    registry: SessionRegistry
 ) {
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)
@@ -629,7 +631,7 @@ fun Route.authRoutes(
 
     authenticate("jwt") {
         changePasswordRoute(userRepository)
-        adminStatsRoute(userRepository, projectRepository, deviceRepository)
+        adminStatsRoute(userRepository, projectRepository, deviceRepository, registry)
         adminDevicesRoute(userRepository, deviceRepository)
         adminServerInfoRoute(userRepository)
         adminConfigRoute(userRepository)

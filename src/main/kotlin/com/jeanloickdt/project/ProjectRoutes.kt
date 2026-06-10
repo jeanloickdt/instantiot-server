@@ -50,7 +50,9 @@ fun Route.projectRoutes(
     widgetHistoryNumericRepository: com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository,
     widgetHistoryMinRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
     widgetHistoryHourRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
-    widgetHistoryDayRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
+    widgetHistoryDayRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
+    registry: SessionRegistry,
+    events: ControlEventBroadcaster
 ) {
 
     authenticate("jwt") {
@@ -207,12 +209,12 @@ fun Route.projectRoutes(
             // Same pattern as DELETE /api/devices/{id}.
             val devicesToKick = deviceRepository.findAllByProject(projectId)
             devicesToKick.forEach { d ->
-                ControlEventBroadcaster.deviceOffline(
+                events.deviceOffline(
                     projectId = projectId,
                     deviceId  = d.id,
                     reason    = DeviceOfflineReason.DELETED
                 )
-                SessionRegistry.getDeviceSession(d.id)?.let { active ->
+                registry.getDeviceSession(d.id)?.let { active ->
                     try {
                         active.socket.close()
                     } catch (_: Exception) {
@@ -230,7 +232,7 @@ fun Route.projectRoutes(
             // with a CloseReason.NORMAL + message → on the client side
             // the B6 "disconnect dialog" triggers and the user can
             // return to the list.
-            val appSessionsToKick = SessionRegistry.getAppSessionsForProject(projectId)
+            val appSessionsToKick = registry.getAppSessionsForProject(projectId)
             appSessionsToKick.forEach { appSession ->
                 try {
                     appSession.session.close(

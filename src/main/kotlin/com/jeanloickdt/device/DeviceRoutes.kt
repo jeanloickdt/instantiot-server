@@ -42,7 +42,11 @@ import io.ktor.server.routing.*
 import java.security.MessageDigest
 import java.util.UUID
 
-fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
+fun Route.deviceRoutes(
+    deviceRepository: DeviceRepository,
+    registry: SessionRegistry,
+    events: ControlEventBroadcaster
+) {
 
     authenticate("jwt") {
 
@@ -214,14 +218,14 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 
             // broadcast device_offline (reason=deleted) BEFORE closing the session
             // so the apps know why the device is leaving
-            ControlEventBroadcaster.deviceOffline(
+            events.deviceOffline(
                 projectId = device.projectId,
                 deviceId  = deviceId,
                 reason    = DeviceOfflineReason.DELETED
             )
 
             // force disconnect of the existing TCP session if the device was connected
-            SessionRegistry.getDeviceSession(deviceId)?.let { activeSession ->
+            registry.getDeviceSession(deviceId)?.let { activeSession ->
                 try {
                     activeSession.socket.close()
                 } catch (_: Exception) {
@@ -265,7 +269,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
 
             // broadcast device_offline (reason=token_renewed) BEFORE closing the session
             // so the apps know it's not a crash but a renewal
-            ControlEventBroadcaster.deviceOffline(
+            events.deviceOffline(
                 projectId = device.projectId,
                 deviceId  = deviceId,
                 reason    = DeviceOfflineReason.TOKEN_RENEWED
@@ -274,7 +278,7 @@ fun Route.deviceRoutes(deviceRepository: DeviceRepository) {
             // force disconnect of the old TCP session
             // the device will reconnect with its old token → server rejects it (red LED)
             // until reflashed with the new token
-            SessionRegistry.getDeviceSession(deviceId)?.let { activeSession ->
+            registry.getDeviceSession(deviceId)?.let { activeSession ->
                 try {
                     activeSession.socket.close()
                 } catch (_: Exception) {

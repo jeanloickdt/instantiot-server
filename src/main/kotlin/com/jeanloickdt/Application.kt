@@ -207,6 +207,16 @@ fun Application.module() {
     // reconnect and send their handshake.
     deviceRepository.markAllOffline()
 
+    // ============================================================
+    // Relay state (DI) — single instances for this node, injected by
+    // parameter into the relays, the broadcaster, the routes and the
+    // flush jobs. No global singleton: tests build their own isolated
+    // instances, and the future SRP split (ConnectionRegistry /
+    // LastValueCache / PresenceStore) happens behind this seam.
+    // ============================================================
+    val sessionRegistry = SessionRegistry()
+    val controlEvents = com.jeanloickdt.relay.ControlEventBroadcaster(sessionRegistry)
+
     // final flush at shutdown — no buffer data lost
     // iWidgets rework: we ALSO flush all RAM buckets (including
     // in-progress buckets not yet closed) → zero loss on a controlled
@@ -223,12 +233,13 @@ fun Application.module() {
     // a path where both fire is harmless — the second pass finds nothing.
     val finalFlush: () -> Unit = {
         kotlinx.coroutines.runBlocking {
-            flushHistoryBuffer(widgetHistoryRepository)
-            flushNumericHistoryBuffer(widgetHistoryNumericRepository)
+            flushHistoryBuffer(sessionRegistry, widgetHistoryRepository)
+            flushNumericHistoryBuffer(sessionRegistry, widgetHistoryNumericRepository)
             flushAllAggregatorBuckets(
                 minRepo  = widgetHistoryMinRepository,
                 hourRepo = widgetHistoryHourRepository,
-                dayRepo  = widgetHistoryDayRepository
+                dayRepo  = widgetHistoryDayRepository,
+                events   = controlEvents
             )
         }
     }
@@ -304,7 +315,12 @@ fun Application.module() {
     // Device relay — TCP port 9001
     // Each ESP connection in its own IO coroutine
     // ============================================================
-    startDeviceRelay(deviceRepository, widgetRepository, tcpPort = com.jeanloickdt.common.ServerConfig.runningTcpPort)
+    startDeviceRelay(
+        deviceRepository, widgetRepository,
+        registry = sessionRegistry,
+        events   = controlEvents,
+        tcpPort  = com.jeanloickdt.common.ServerConfig.runningTcpPort
+    )
 
     // ============================================================
     // mDNS / Bonjour — announces the _instantiot._tcp service
@@ -346,12 +362,13 @@ fun Application.module() {
         while (true) {
             delay(5_000)
             try {
-                flushHistoryBuffer(widgetHistoryRepository)
-                flushNumericHistoryBuffer(widgetHistoryNumericRepository)
+                flushHistoryBuffer(sessionRegistry, widgetHistoryRepository)
+                flushNumericHistoryBuffer(sessionRegistry, widgetHistoryNumericRepository)
                 flushClosedAggregatorBuckets(
                     minRepo  = widgetHistoryMinRepository,
                     hourRepo = widgetHistoryHourRepository,
-                    dayRepo  = widgetHistoryDayRepository
+                    dayRepo  = widgetHistoryDayRepository,
+                    events   = controlEvents
                 )
             } catch (e: Exception) {
                 bgLog.error("History flush round failed — retrying in 5s", e)
@@ -455,7 +472,7 @@ fun Application.module() {
     // ============================================================
     // App relay — WebSocket /ws/app
     // ============================================================
-    configureAppRelay(projectRepository)
+    configureAppRelay(projectRepository, sessionRegistry, controlEvents)
 
     // ============================================================
     // REST routes
@@ -479,16 +496,18 @@ fun Application.module() {
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository)
+        authRoutes(userRepository, projectRepository, deviceRepository, sessionRegistry)
         projectRoutes(
             projectRepository, deviceRepository, widgetRepository,
             widgetHistoryRepository, widgetHistoryNumericRepository,
-            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository
+            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+            sessionRegistry, controlEvents
         )
-        deviceRoutes(deviceRepository)
+        deviceRoutes(deviceRepository, sessionRegistry, controlEvents)
         widgetRoutes(
             widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
-            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository
+            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+            sessionRegistry
         )
 
         // TODO: add the routes of new modules here
@@ -499,10 +518,10 @@ fun Application.module() {
 // Flush history buffer → SQLite WAL batch insert
 // Called every 5s + at shutdown
 // ============================================================
-private suspend fun flushHistoryBuffer(widgetHistoryRepository: WidgetHistoryRepository) {
+private suspend fun flushHistoryBuffer(registry: SessionRegistry, widgetHistoryRepository: WidgetHistoryRepository) {
     val batch = mutableListOf<HistoryEntry>()
-    while (SessionRegistry.historyBuffer.isNotEmpty()) {
-        batch.add(SessionRegistry.historyBuffer.poll() ?: break)
+    while (registry.historyBuffer.isNotEmpty()) {
+        batch.add(registry.historyBuffer.poll() ?: break)
     }
 
     if (batch.isEmpty()) return
@@ -524,10 +543,10 @@ private suspend fun flushHistoryBuffer(widgetHistoryRepository: WidgetHistoryRep
 // ============================================================
 // Flush numeric history buffer → SQLite WAL batch insert
 // ============================================================
-private suspend fun flushNumericHistoryBuffer(repo: WidgetHistoryNumericRepository) {
+private suspend fun flushNumericHistoryBuffer(registry: SessionRegistry, repo: WidgetHistoryNumericRepository) {
     val batch = mutableListOf<NumericHistoryEntry>()
-    while (SessionRegistry.numericHistoryBuffer.isNotEmpty()) {
-        batch.add(SessionRegistry.numericHistoryBuffer.poll() ?: break)
+    while (registry.numericHistoryBuffer.isNotEmpty()) {
+        batch.add(registry.numericHistoryBuffer.poll() ?: break)
     }
 
     if (batch.isEmpty()) return
@@ -557,12 +576,13 @@ private suspend fun flushNumericHistoryBuffer(repo: WidgetHistoryNumericReposito
 private suspend fun flushClosedAggregatorBuckets(
     minRepo: WidgetHistoryAggregateRepository,
     hourRepo: WidgetHistoryAggregateRepository,
-    dayRepo: WidgetHistoryAggregateRepository
+    dayRepo: WidgetHistoryAggregateRepository,
+    events: com.jeanloickdt.relay.ControlEventBroadcaster
 ) {
     val now = System.currentTimeMillis()
-    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractClosedBuckets(now), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = true)
-    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractClosedBuckets(now),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = true)
-    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractClosedBuckets(now),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = true)
+    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractClosedBuckets(now), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = true, events = events)
+    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractClosedBuckets(now),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = true, events = events)
+    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractClosedBuckets(now),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = true, events = events)
 }
 
 // ============================================================
@@ -580,11 +600,12 @@ private suspend fun flushClosedAggregatorBuckets(
 private suspend fun flushAllAggregatorBuckets(
     minRepo: WidgetHistoryAggregateRepository,
     hourRepo: WidgetHistoryAggregateRepository,
-    dayRepo: WidgetHistoryAggregateRepository
+    dayRepo: WidgetHistoryAggregateRepository,
+    events: com.jeanloickdt.relay.ControlEventBroadcaster
 ) {
-    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractAllBuckets(), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = false)
-    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractAllBuckets(),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = false)
-    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractAllBuckets(),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = false)
+    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractAllBuckets(), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = false, events = events)
+    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractAllBuckets(),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = false, events = events)
+    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractAllBuckets(),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = false, events = events)
 }
 
 /**
@@ -598,7 +619,8 @@ private suspend fun flushAggregatorTier(
     repo: WidgetHistoryAggregateRepository,
     snapshots: List<com.jeanloickdt.widget.data.BucketAccumulator.Snapshot>,
     granularity: String,
-    broadcast: Boolean
+    broadcast: Boolean,
+    events: com.jeanloickdt.relay.ControlEventBroadcaster
 ) {
     if (snapshots.isEmpty()) return
     val rows = snapshots.map { snap ->
@@ -618,7 +640,7 @@ private suspend fun flushAggregatorTier(
 
     if (broadcast) {
         snapshots.forEach { snap ->
-            com.jeanloickdt.relay.ControlEventBroadcaster.bucketClosed(
+            events.bucketClosed(
                 projectId   = snap.projectId,
                 widgetId    = snap.widgetId,
                 seriesId    = snap.seriesId,
