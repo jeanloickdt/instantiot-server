@@ -177,11 +177,13 @@ changement de ports, récupération d'un admin perdu.
 - [x] Flush garanti à l'arrêt (tray + signal) via JVM shutdown hook *(P0-4)*
 - [x] `VACUUM` hebdomadaire en place → le fichier DB ne creuse plus le disque *(P0-5)*
 - [x] `admin/admin` renvoie `passwordChanged=false` au login → le panel admin force l'écran de changement *(P0-6)*
-- [ ] Tests : FrameParser + auth + ownership couverts ; intégration login/admin/CRUD *(P1)*
-- [ ] Un seul format d'erreur JSON sur toutes les routes (y compris 500) *(P1)*
-- [ ] Rotation de logs vers `~/.instantiot/logs/` *(P1)*
-- [ ] `/health` + `/api/version` non authentifiés *(P1)*
-- [ ] `OPERATIONS.md` : install / data / backup / restore / logs / recovery *(P1)*
+- [x] Tests : FrameParser + auth + agrégation + ownership + intégration (77 tests, harness isolé) *(P1-1)*
+- [x] Un seul format d'erreur JSON sur toutes les routes (type `ApiError`, y compris 500) *(P1-2)*
+- [x] Garde admin centralisée (`requireAdmin`) *(P1-3)*
+- [x] Rotation de logs vers `~/.instantiot/logs/` *(P1-4)*
+- [x] `/health` + `/api/version` non authentifiés *(P1-5)*
+- [ ] `OPERATIONS.md` : install / data / backup / restore / logs / recovery *(P1-6 — reste)*
+- [ ] Migrer `ApplicationTest` sur le slim harness *(reste)*
 
 > **Branche `stabilization/p0-reliability`** : les 6 P0 sont implémentés, compilent, les tests
 > passent et le serveur boote proprement (`Application started`, relais sur pool dédié, pas de lock).
