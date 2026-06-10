@@ -2,7 +2,7 @@
 
 > **Self-hosted** server that relays, in real time, the communication between
 > IoT boards (ESP32 / Arduino) and the InstantIoT mobile app.
-> Stack: **Kotlin 2.3 + Ktor 3.4 + Netty + SQLite (Exposed)**. JDK 21. AGPLv3.
+> Stack: **Kotlin 2.3 + Ktor 3.4 (Netty + ktor-network) + SQLite (Exposed)**. JDK 21. AGPLv3.
 >
 > Entry point for picking up the code. Read end to end (~12 min) and you can
 > start coding. For the stabilization backlog see [`STABILIZATION.md`](STABILIZATION.md).
@@ -20,7 +20,7 @@ The server exposes **3 distinct network surfaces** in **one JVM process**.
                          │       (1 JVM process)             │
    ESP32 / Arduino       │   ┌───────────────────────────┐   │
    ───────────────TCP────┼──▶│  TCP Device Relay  :9001  │   │
-   binary frames         │   │  (dedicated thread pool)  │   │
+   binary frames         │   │ (non-blocking, ktor-net)  │   │
                          │   └────────────┬──────────────┘   │
    Mobile app            │   ┌────────────▼──────────────┐   │
    ───────────WebSocket──┼──▶│  WS App Relay  /ws/app    │   │
@@ -46,37 +46,47 @@ The server exposes **3 distinct network surfaces** in **one JVM process**.
 
 ## 2. The core: the RELAY
 
-The server is first and foremost a **bidirectional relay**. The
-`SessionRegistry` (global singleton) holds every live session and buffer in RAM.
+The server is first and foremost a **bidirectional relay**. Its live state is
+held in RAM behind **constructor-injected** seams (no global singleton — built
+once in `Application.module()` and passed down; tests build isolated instances):
 
 ```
-                    ┌──────────────────────────────────────┐
-                    │          SessionRegistry             │
-                    ├──────────────────────────────────────┤
-                    │ deviceSessions  : DeviceId → Session  │
-                    │ appSessions     : UserId   → [Session]│  (multi-device)
-                    │ deviceOutboxes  : DeviceId → Outbox   │  (bounded, backpressure)
-                    │ lastPayloads    : WidgetId → payload  │  ← RAM, sub-ms read
-                    │ historyBuffer        (opaque events)  │  ← 5s flush
-                    │ numericHistoryBuffer (raw numeric)    │  ← 5s flush
-                    │ knownWidgetIds  (auto-register cache) │
-                    └──────────────────────────────────────┘
+  ConnectionRegistry          HistoryBuffers           LastValueCache (iface)
+  ┌────────────────────┐      ┌──────────────────┐     ┌─────────────────────┐
+  │ appSessions        │      │ historyBuffer    │     │ put/get/drainDirty  │
+  │ deviceSessions     │      │ numericHistory…  │     │ evict — RAM now,     │
+  │ deviceOutboxes     │      │ knownWidgetIds   │     │ Redis later (seam)   │
+  └────────────────────┘      └──────────────────┘     └─────────────────────┘
+  PresenceStore (iface)       ControlEventBroadcaster
+  ┌────────────────────┐      ┌──────────────────┐
+  │ markOnline/Offline │      │ device_online/…  │   NOT posed yet (uncertain
+  │ isOnline/lastSeen  │      │ command_failed   │   multi-node seam): MessageBus
+  │ (DB-backed mono-node)│    │ bucket_updated   │   + shared impls → additive.
+  └────────────────────┘      └──────────────────┘
 ```
+
+> SRP split + DI is the mono-node foundation for a future multi-node move:
+> swap `InMemoryLastValueCache`/`DbBackedPresenceStore` for shared impls and
+> add a `MessageBus` — **adding** code, not modifying `DeviceRelay`/`AppRelay`.
 
 ### DEVICE → APP flow (a sensor sends a value) — `relay/DeviceRelay.kt`
+
+The read loop is **sequential** (one frame handled before the next is read —
+natural per-device backpressure) and **RAM/CPU only** — no DB on the read path:
 
 ```
 ESP sends an iWidgets v1 frame
    │
-   ▼  handleDeviceFrame()
+   ▼  handleDeviceFrame()   (inline, sequential; own try/catch → one bad
+   │                          frame never drops the connection)
    │ 0. if TYPE == 0xFE (heartbeat) → return immediately (no dispatch)
    │ 1. extract widgetId + payload          (FrameParser)
-   │ 2. auto-register widget if new          (knownWidgetIds + INSERT OR IGNORE)
-   │ 3. lastPayloads[widgetId] = base64      (RAM)
+   │ 2. auto-register widget if new          (gated, rare, OFF the read path)
+   │ 3. lastValues.put(widgetId, base64)     (RAM — DB column coalesced in 5s flush)
    │ 4. historyBuffer += event               (→ 5s flush)
-   │ 5. if numeric → HistoryAggregators.{minute,hour,day}.collect()
-   │    (+ numericHistoryBuffer if raw tier enabled)
-   │ 6. broadcastToApps(projectId, frame)    (intact frame, DEV_COUNT=0)
+   │ 5. if numeric & value.isFinite() → HistoryAggregators.{minute,hour,day}.collect()
+   │    (+ numericHistoryBuffer if raw tier enabled)   ← non-finite rejected
+   │ 6. dispatchToApps(projectId, frame)     (intact frame, DEV_COUNT=0)
    ▼
 WS App sessions of that project → mobile app updates the widget
 ```
@@ -99,15 +109,16 @@ DeviceOutbox consumer → device's TCP socket → ESP receives the command
 
 ### Handshakes
 
-**Device (TCP)** — `DeviceRelay.kt`
+**Device (TCP)** — `DeviceRelay.kt` (non-blocking, ktor-network suspending reads)
 ```
-ESP opens TCP :9001
-  → soTimeout = 10s (provisional, for the handshake)
+ESP opens TCP :9001  (aSocket(SelectorManager).tcp().bind → suspending accept())
+  → withTimeoutOrNull(10s) { readHandshake } (provisional handshake window)
   → sends  [LEN(1B)][PAYLOAD]   where PAYLOAD = "token"  OR  "token:heartbeatMs"
   → server: SHA-256(token) → look up devices.token_hash
-  → adaptive soTimeout = heartbeatMs × 2.5, clamped [2s, 120s]
+  → read timeout = heartbeatMs × 2.5, clamped [2s, 120s]
     (legacy "token" only → 90s).  heartbeat=5000ms ⇒ offline detected in ≤12.5s
-  → OK: session registered, device.isOnline=true, broadcast device_online
+    (enforced as withTimeoutOrNull(timeout){ readFrame } ?: break — not soTimeout)
+  → OK: session registered, presence online, broadcast device_online
   → then the frame loop
 ```
 
@@ -144,9 +155,11 @@ Application.module()  ───────────────────�
  ├─ ApplicationStopping → MdnsPublisher.stop()
  ├─ BOOTSTRAP ADMIN                  admin/admin (passwordChanged=false) — see §6
  ├─ configureAuth(userRepository)    JWT HS256
- ├─ startDeviceRelay(tcpPort)        dedicated relay pool + Semaphore(256) + backoff
+ ├─ startDeviceRelay(tcpPort)        ktor-network SelectorManager; SupervisorJob;
+ │                                   suspending accept(); no pool, no cap
  ├─ MdnsPublisher.start(displayName) announce _instantiot._tcp
- ├─ job 5s    : flush history buffers + closed aggregator buckets → DB  (try/catch)
+ ├─ job 5s    : flush history buffers + coalesced last_payload + closed
+ │              aggregator buckets → DB                                 (try/catch)
  ├─ job 1h    : cleanup history per-tier retention                      (try/catch)
  ├─ job N-h   : backup VACUUM INTO (configurable interval)              (try/catch)
  ├─ job weekly: DatabaseFactory.vacuum()  reclaim freed pages           (try/catch)
@@ -156,8 +169,10 @@ Application.module()  ───────────────────�
 
 > All four background loops are wrapped in per-iteration `try/catch` (a thrown
 > `SQLITE_BUSY` must not kill the flush loop — that would leak the RAM buffers
-> to OOM). The relay runs on a **dedicated thread pool** (`device-relay-N`)
-> isolated from `Dispatchers.IO` so blocking socket reads never starve DB work.
+> to OOM). The relay reads are **non-blocking** (suspending `ByteReadChannel`),
+> so each device is a cheap coroutine — no thread-per-device, no dedicated pool,
+> no connection cap. A `SupervisorJob` isolates a failing connection from the
+> accept loop and the other devices.
 
 ---
 
@@ -234,7 +249,8 @@ ESP : numeric sample (e.g. gauge = 23.5)
 | day | `widget_history_day` | long-term view (months / years) |
 
 > ⚠️ **No `last` value is persisted** in any tier — only min/max/avg/count. The
-> "last value" comes from `SessionRegistry.lastPayloads` (RAM).
+> "last value" comes from the `LastValueCache` (RAM; the DB column is a
+> ≤5s-lagged cold-start fallback).
 
 ---
 
@@ -334,8 +350,10 @@ auth/                   JWT, login/register, admin panel, user mgmt   (data/ + d
 device/                 ESP/Arduino registration, tokens, DeviceType   (data/ + domain/)
 project/                user projects (opaque dashboard layout)        (data/ + domain/)
 widget/                 widgets + 5-tier time-series history           (data/ + domain/)
-relay/                  ★ CORE — DeviceRelay (TCP), AppRelay (WS), FrameParser,
-                        SessionRegistry, DeviceOutbox, ControlEventBroadcaster
+relay/                  ★ CORE — DeviceRelay (non-blocking TCP), AppRelay (WS),
+                        FrameParser, DeviceOutbox, ControlEventBroadcaster, and the
+                        injected seams: ConnectionRegistry, HistoryBuffers,
+                        LastValueCache, PresenceStore
 backup/                 BackupManager — VACUUM INTO snapshot, restore
 discovery/              MdnsPublisher / DnsSdPublisher — _instantiot._tcp on the LAN
 ```
@@ -349,15 +367,19 @@ discovery/              MdnsPublisher / DnsSdPublisher — _instantiot._tcp on t
 
 | Pool / scope | Used for |
 |---|---|
-| `Dispatchers.IO` (64) | DB writes, short blocking ops |
-| **dedicated relay pool** `device-relay-N` | **blocking** device socket reads (isolated from IO) |
-| `Dispatchers.Default` | per-frame CPU parsing (`handleDeviceFrame`) |
-| `applicationScope` (= Application) | long-lived: outbox consumers, background loops |
+| `Dispatchers.IO` (64) | DB writes (`withContext(IO)`), the ktor `SelectorManager` |
+| **relay `SupervisorJob` + `Dispatchers.Default`** | one coroutine per device — **suspending** (non-blocking) socket reads; a failing connection is isolated |
+| `Dispatchers.Default` | per-frame CPU work (`handleDeviceFrame`, run inline/sequentially) |
 
-Rules: 1 reader coroutine per device (blocking read on the relay pool, parsing on
-Default); 1 bounded `DeviceOutbox` (Channel 8) per device with 1 consumer on the
-app scope; background loops guarded by try/catch; shutdown flush guaranteed on
-both `ApplicationStopping` and the JVM shutdown hook.
+Rules: 1 coroutine per device, child of the relay `SupervisorJob` (device↔device
+isolation); reads suspend via `ByteReadChannel` so idle connections cost ~nothing
+(no thread-per-device, no pool, no cap); frames are handled **sequentially**
+(natural backpressure) and **RAM/CPU only** (no DB on the read path — last_payload
+is coalesced into the 5s flush); every `catch` around suspending code rethrows
+`CancellationException`; the disconnect `finally` closes the socket first then
+cleans up under `NonCancellable`; 1 bounded `DeviceOutbox` (Channel 8) per device
+writes via a `ByteWriteChannel`; the `SelectorManager` is closed at shutdown;
+the flush is guaranteed on both `ApplicationStopping` and the JVM shutdown hook.
 
 ---
 
@@ -383,9 +405,9 @@ journald). No launchd/Windows-Service yet — macOS/Windows run as a tray app.
 
 **Read these 7 files in order:**
 
-1. `Application.kt` — big picture: boot + route wiring + background loops
-2. `relay/SessionRegistry.kt` — the live global state
-3. `relay/DeviceRelay.kt` — TCP protocol, ESP side
+1. `Application.kt` — big picture: boot + DI wiring + background loops
+2. `relay/ConnectionRegistry.kt` (+ `HistoryBuffers`/`LastValueCache`/`PresenceStore`) — the injected live state
+3. `relay/DeviceRelay.kt` — non-blocking TCP protocol, ESP side
 4. `relay/AppRelay.kt` — WebSocket protocol, app side
 5. `relay/FrameParser.kt` — decoding the iWidgets v1 binary frames
 6. `widget/data/HistoryAggregators.kt` (+ `TierAggregator`, `BucketAccumulator`) — RAM aggregation
@@ -399,7 +421,7 @@ journald). No launchd/Windows-Service yet — macOS/Windows run as a tray app.
 4. Add the table to `DatabaseFactory.init(...)` in `Application.kt`
 5. Create `<Feature>Routes.kt`, wrap in `authenticate("jwt")`, call it in `routing { }`
 6. Numeric history → reuse `HistoryAggregators` + the existing 5s flush
-7. Real-time broadcast → extend `ControlEventBroadcaster` + `SessionRegistry`
+7. Real-time broadcast → extend `ControlEventBroadcaster` + inject `ConnectionRegistry`
 
 **In one sentence:** the server is a Ktor TCP↔WebSocket relay between IoT boards
 and apps, with SQLite persistence and a 3-tier time-series history aggregated in
