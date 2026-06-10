@@ -48,9 +48,23 @@ interface WidgetRepository {
     // Update last_payload + last_seen_at — called by the relay only
     fun updateLastPayload(id: String, payload: String, timestamp: Long)
 
+    /**
+     * Batch variant — one transaction for N widgets. Called by the 5s flush
+     * job with the LastValueCache's dirty entries (coalesced persistence:
+     * N frames per cycle → at most 1 write per changed widget, never per frame).
+     */
+    fun updateLastPayloadBatch(updates: List<LastPayloadUpdate>)
+
     // Delete a widget + cascade history
     fun delete(id: String): Boolean
 
     // Delete all widgets of a project — called on DELETE /api/projects/{id}
     fun deleteAllByProject(projectId: String)
 }
+
+/** One coalesced last-payload persistence entry (see [WidgetRepository.updateLastPayloadBatch]). */
+data class LastPayloadUpdate(
+    val widgetId: String,
+    val payload: String,
+    val at: Long
+)

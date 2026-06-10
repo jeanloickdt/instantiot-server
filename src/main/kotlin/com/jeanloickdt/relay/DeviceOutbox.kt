@@ -68,8 +68,8 @@ private val logger = LoggerFactory.getLogger("DeviceOutbox")
  *
  * ## Lifecycle
  *
- * - Created in `SessionRegistry.registerDevice(...)` after successful ESP auth.
- * - Closed in `SessionRegistry.unregisterDevice(...)` → the consumer
+ * - Created in `ConnectionRegistry.registerDevice(...)` after successful ESP auth.
+ * - Closed in `ConnectionRegistry.unregisterDevice(...)` → the consumer
  *   coroutine exits `for (msg in channel)` cleanly.
  * - If the `socket.write()` throws (ESP disconnected without a clean FIN), the
  *   coroutine logs and closes the channel — the subsequent sends will return

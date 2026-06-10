@@ -40,7 +40,7 @@ import org.slf4j.LoggerFactory
  *       → sent to the emitting session only (not a broadcast)
  */
 class ControlEventBroadcaster(
-    private val registry: SessionRegistry
+    private val connections: ConnectionRegistry
 ) {
 
     private val logger = LoggerFactory.getLogger("ControlEventBroadcaster")
@@ -131,7 +131,7 @@ class ControlEventBroadcaster(
             granularity = granularity
         )
         val jsonText = json.encodeToString(event)
-        val targetSessions = registry.getAppSessionsForProject(projectId)
+        val targetSessions = connections.getAppSessionsForProject(projectId)
             .filter { it.historySubs[widgetId] == granularity }
         if (targetSessions.isEmpty()) return
 
@@ -140,7 +140,7 @@ class ControlEventBroadcaster(
                 appSession.session.send(Frame.Text(jsonText))
             } catch (e: Exception) {
                 logger.warn("Failed to send bucket_updated to userId=${appSession.userId} — removing session")
-                registry.unregisterApp(appSession.userId, appSession.session)
+                connections.unregisterApp(appSession.userId, appSession.session)
             }
         }
     }
@@ -151,14 +151,14 @@ class ControlEventBroadcaster(
 
     private suspend fun broadcastToProject(projectId: String, event: ControlEvent) {
         val jsonText = json.encodeToString(event)
-        val appSessions = registry.getAppSessionsForProject(projectId)
+        val appSessions = connections.getAppSessionsForProject(projectId)
 
         appSessions.forEach { appSession ->
             try {
                 appSession.session.send(Frame.Text(jsonText))
             } catch (e: Exception) {
                 logger.warn("Failed to send event to userId=${appSession.userId} — removing session")
-                registry.unregisterApp(appSession.userId, appSession.session)
+                connections.unregisterApp(appSession.userId, appSession.session)
             }
         }
     }

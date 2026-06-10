@@ -22,7 +22,8 @@ package com.jeanloickdt.widget
 
 import com.jeanloickdt.common.ApiError
 
-import com.jeanloickdt.relay.SessionRegistry
+import com.jeanloickdt.relay.HistoryBuffers
+import com.jeanloickdt.relay.LastValueCache
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsRequest
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
@@ -48,7 +49,8 @@ fun Route.widgetRoutes(
     widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
     widgetHistoryHourRepository: WidgetHistoryAggregateRepository,
     widgetHistoryDayRepository: WidgetHistoryAggregateRepository,
-    registry: SessionRegistry
+    buffers: HistoryBuffers,
+    lastValues: LastValueCache
 ) {
 
     authenticate("jwt") {
@@ -73,7 +75,7 @@ fun Route.widgetRoutes(
                 ownerId   = ownerId,
                 type      = body.type
             )
-            if (created) registry.knownWidgetIds.add(body.id)
+            if (created) buffers.knownWidgetIds.add(body.id)
 
             call.respond(
                 if (created) HttpStatusCode.Created else HttpStatusCode.OK,
@@ -111,7 +113,7 @@ fun Route.widgetRoutes(
                     type      = w.type
                 )
                 if (inserted) {
-                    registry.knownWidgetIds.add(w.id)
+                    buffers.knownWidgetIds.add(w.id)
                     created++
                 } else {
                     existing++
@@ -149,6 +151,13 @@ fun Route.widgetRoutes(
             widgetHistoryDayRepository.deleteAllByWidget(widgetId)
             widgetRepository.delete(widgetId)
 
+            // purge the RAM caches too: without this a deleted widget stays
+            // "known" forever (never re-auto-registers on its next frame) and
+            // its last value leaks in the cache — confirmed correctness +
+            // slow-RAM-leak bug from the resource audit.
+            buffers.knownWidgetIds.remove(widgetId)
+            lastValues.evict(widgetId)
+
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Widget deleted",
                 "id"      to widgetId
@@ -169,10 +178,13 @@ fun Route.widgetRoutes(
             val states = widgetRepository.findAllByProject(projectId)
                 .filter { it.ownerId == ownerId } // isolation
                 .map {
+                    // read-through: the RAM cache is fresher than the DB column
+                    // (which is coalesced every 5s); DB is the cold-start fallback
+                    val cached = lastValues.get(it.id)
                     WidgetStateResponse(
                         widgetId   = it.id,
-                        payload    = it.lastPayload,
-                        lastSeenAt = it.lastSeenAt
+                        payload    = cached?.payload ?: it.lastPayload,
+                        lastSeenAt = cached?.at ?: it.lastSeenAt
                     )
                 }
 

@@ -26,7 +26,7 @@ import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
 import com.jeanloickdt.project.domain.ProjectRepository
-import com.jeanloickdt.relay.SessionRegistry
+import com.jeanloickdt.relay.ConnectionRegistry
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.auth.*
@@ -212,7 +212,7 @@ fun Route.adminStatsRoute(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository,
-    registry: SessionRegistry
+    connections: ConnectionRegistry
 ) {
     get("/api/admin/stats") {
         call.requireAdmin(userRepository) ?: return@get
@@ -221,9 +221,9 @@ fun Route.adminStatsRoute(
             users                = userRepository.count(),
             projects             = projectRepository.count(),
             devicesTotal         = deviceRepository.count(),
-            devicesOnline        = registry.deviceSessions.size,
-            appSessionsActive    = registry.appSessions.size,
-            deviceSessionsActive = registry.deviceSessions.size
+            devicesOnline        = connections.deviceSessions.size,
+            appSessionsActive    = connections.appSessions.size,
+            deviceSessionsActive = connections.deviceSessions.size
         ))
     }
 }
@@ -622,7 +622,7 @@ fun Route.authRoutes(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository,
-    registry: SessionRegistry
+    connections: ConnectionRegistry
 ) {
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository)
@@ -631,7 +631,7 @@ fun Route.authRoutes(
 
     authenticate("jwt") {
         changePasswordRoute(userRepository)
-        adminStatsRoute(userRepository, projectRepository, deviceRepository, registry)
+        adminStatsRoute(userRepository, projectRepository, deviceRepository, connections)
         adminDevicesRoute(userRepository, deviceRepository)
         adminServerInfoRoute(userRepository)
         adminConfigRoute(userRepository)

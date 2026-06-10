@@ -112,23 +112,25 @@ class RoutesIntegrationTest {
                 }
             }
             configureAuth(userRepository)
-            // per-test relay state (DI) — isolated, no global singleton
-            val registry = com.jeanloickdt.relay.SessionRegistry()
-            val events   = com.jeanloickdt.relay.ControlEventBroadcaster(registry)
+            // per-test relay seams (DI) — isolated, no global singleton
+            val connections = com.jeanloickdt.relay.ConnectionRegistry()
+            val buffers     = com.jeanloickdt.relay.HistoryBuffers()
+            val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
+            val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
             routing {
                 systemRoutes()
-                authRoutes(userRepository, projectRepository, deviceRepository, registry)
+                authRoutes(userRepository, projectRepository, deviceRepository, connections)
                 projectRoutes(
                     projectRepository, deviceRepository, widgetRepository,
                     widgetHistoryRepository, widgetHistoryNumericRepository,
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-                    registry, events
+                    connections, events
                 )
-                deviceRoutes(deviceRepository, registry, events)
+                deviceRoutes(deviceRepository, connections, events)
                 widgetRoutes(
                     widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-                    registry
+                    buffers, lastValues
                 )
             }
         }

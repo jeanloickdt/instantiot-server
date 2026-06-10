@@ -79,7 +79,7 @@ private val appInboundJson = Json { ignoreUnknownKeys = true; isLenient = true }
  */
 fun Application.configureAppRelay(
     projectRepository: ProjectRepository,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
     events: ControlEventBroadcaster
 ) {
 
@@ -147,7 +147,7 @@ fun Application.configureAppRelay(
                 // it opens a new WS with the same instanceId → the old
                 // ghost is closed immediately (instead of waiting ~25s for
                 // the ping timeout).
-                val priorSessions = registry.appSessions[userId]
+                val priorSessions = connections.appSessions[userId]
                     ?.filter {
                         it.activeProjectId == projectId &&
                         it.connectionInstanceId == connectionInstanceId
@@ -159,15 +159,15 @@ fun Application.configureAppRelay(
                             CloseReason(CloseReason.Codes.NORMAL, "Superseded by new session")
                         )
                     } catch (_: Exception) { /* already closed — does not matter */ }
-                    registry.unregisterApp(userId, prior.session)
+                    connections.unregisterApp(userId, prior.session)
                 }
                 if (priorSessions.isNotEmpty()) {
                     logger.info("Closed ${priorSessions.size} prior session(s) — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
                 }
 
                 // register the app session with the active project
-                val appSession = registry.registerApp(userId, this, connectionInstanceId)
-                registry.setActiveProject(appSession, projectId)
+                val appSession = connections.registerApp(userId, this, connectionInstanceId)
+                connections.setActiveProject(appSession, projectId)
                 logger.info("App connected — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
 
                 try {
@@ -188,7 +188,7 @@ fun Application.configureAppRelay(
                                     logger.warn("Invalid frame received from app userId=$userId — ignored")
                                     continue
                                 }
-                                relayFrameToDevices(this@webSocket, userId, frameBytes, registry, events)
+                                relayFrameToDevices(this@webSocket, userId, frameBytes, connections, events)
                             }
                             is Frame.Text -> {
                                 handleAppTextMessage(appSession, incomingFrame.readText())
@@ -198,7 +198,7 @@ fun Application.configureAppRelay(
                     }
                 } finally {
                     // disconnection — remove this specific session
-                    registry.unregisterApp(userId, this@webSocket)
+                    connections.unregisterApp(userId, this@webSocket)
                     logger.info("App disconnected — userId=$userId")
                 }
             }
@@ -239,7 +239,7 @@ private fun handleAppTextMessage(appSession: AppSession, text: String) {
  * Flow :
  *   1. Extract the device UUIDs from the frame
  *   2. Classify the frame (streaming or discrete) for the outbox backpressure
- *   3. For each UUID → find the TCP session in SessionRegistry
+ *   3. For each UUID → find the TCP session in ConnectionRegistry
  *      - If absent/closed → send command_failed (reason=device_offline) to the app
  *   4. Verify that the user owns the device (in-memory, no DB)
  *      - If non-owner → send command_failed (reason=forbidden) to the app
@@ -255,7 +255,7 @@ private suspend fun relayFrameToDevices(
     session: io.ktor.server.websocket.DefaultWebSocketServerSession,
     userId: String,
     frameBytes: ByteArray,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
     events: ControlEventBroadcaster
 ) {
     val targetDeviceIds = FrameParser.extractDeviceIds(frameBytes)
@@ -266,7 +266,7 @@ private suspend fun relayFrameToDevices(
     val trimmedFrame = FrameParser.trimDeviceHeader(frameBytes) ?: return
 
     targetDeviceIds.forEach { targetDeviceId ->
-        val deviceSession = registry.deviceSessions[targetDeviceId]
+        val deviceSession = connections.deviceSessions[targetDeviceId]
 
         // device offline (session absent or socket closed)
         if (deviceSession == null || deviceSession.socket.isClosed) {
@@ -291,7 +291,7 @@ private suspend fun relayFrameToDevices(
         }
 
         // TCP relay via the outbox (serializes writes + drops streaming if full)
-        val outbox = registry.deviceOutboxes[targetDeviceId]
+        val outbox = connections.deviceOutboxes[targetDeviceId]
         if (outbox == null) {
             // inconsistent registry — session present but no outbox.
             // Should not happen after registerDevice. Tolerance :
@@ -311,7 +311,7 @@ private suspend fun relayFrameToDevices(
             // coroutine. We clean up the session along the way and notify
             // the app so it can surface the error.
             logger.warn("Outbox closed for device=$targetDeviceId — removing session")
-            registry.unregisterDevice(targetDeviceId)
+            connections.unregisterDevice(targetDeviceId)
             events.commandFailed(
                 session  = session,
                 deviceId = targetDeviceId,

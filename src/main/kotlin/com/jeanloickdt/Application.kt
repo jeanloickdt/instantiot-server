@@ -37,7 +37,6 @@ import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.projectRoutes
 import com.jeanloickdt.relay.HistoryEntry
 import com.jeanloickdt.relay.NumericHistoryEntry
-import com.jeanloickdt.relay.SessionRegistry
 import com.jeanloickdt.relay.configureAppRelay
 import com.jeanloickdt.relay.startDeviceRelay
 import com.jeanloickdt.widget.data.HistoryAggregators
@@ -208,14 +207,19 @@ fun Application.module() {
     deviceRepository.markAllOffline()
 
     // ============================================================
-    // Relay state (DI) — single instances for this node, injected by
-    // parameter into the relays, the broadcaster, the routes and the
-    // flush jobs. No global singleton: tests build their own isolated
-    // instances, and the future SRP split (ConnectionRegistry /
-    // LastValueCache / PresenceStore) happens behind this seam.
+    // Relay state (DI) — the node-local seams, injected by parameter
+    // everywhere. No global singleton: tests build their own instances.
+    //   connections : live sockets/WS sessions (local by nature)
+    //   buffers     : RAM staging of the ingest pipeline (5s flush)
+    //   lastValues  : real-time last value per widget (DB coalesced)
+    //   presence    : device online/offline (DB-backed mono-node impl;
+    //                 multi-node = swap the impl, never the call sites)
     // ============================================================
-    val sessionRegistry = SessionRegistry()
-    val controlEvents = com.jeanloickdt.relay.ControlEventBroadcaster(sessionRegistry)
+    val connections = com.jeanloickdt.relay.ConnectionRegistry()
+    val buffers = com.jeanloickdt.relay.HistoryBuffers()
+    val lastValues: com.jeanloickdt.relay.LastValueCache = com.jeanloickdt.relay.InMemoryLastValueCache()
+    val presence: com.jeanloickdt.relay.PresenceStore = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
+    val controlEvents = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
 
     // final flush at shutdown — no buffer data lost
     // iWidgets rework: we ALSO flush all RAM buckets (including
@@ -233,8 +237,9 @@ fun Application.module() {
     // a path where both fire is harmless — the second pass finds nothing.
     val finalFlush: () -> Unit = {
         kotlinx.coroutines.runBlocking {
-            flushHistoryBuffer(sessionRegistry, widgetHistoryRepository)
-            flushNumericHistoryBuffer(sessionRegistry, widgetHistoryNumericRepository)
+            flushHistoryBuffer(buffers, widgetHistoryRepository)
+            flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
+            flushLastValues(lastValues, widgetRepository)
             flushAllAggregatorBuckets(
                 minRepo  = widgetHistoryMinRepository,
                 hourRepo = widgetHistoryHourRepository,
@@ -317,9 +322,12 @@ fun Application.module() {
     // ============================================================
     startDeviceRelay(
         deviceRepository, widgetRepository,
-        registry = sessionRegistry,
-        events   = controlEvents,
-        tcpPort  = com.jeanloickdt.common.ServerConfig.runningTcpPort
+        connections = connections,
+        buffers     = buffers,
+        lastValues  = lastValues,
+        presence    = presence,
+        events      = controlEvents,
+        tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort
     )
 
     // ============================================================
@@ -362,8 +370,9 @@ fun Application.module() {
         while (true) {
             delay(5_000)
             try {
-                flushHistoryBuffer(sessionRegistry, widgetHistoryRepository)
-                flushNumericHistoryBuffer(sessionRegistry, widgetHistoryNumericRepository)
+                flushHistoryBuffer(buffers, widgetHistoryRepository)
+                flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
+                flushLastValues(lastValues, widgetRepository)
                 flushClosedAggregatorBuckets(
                     minRepo  = widgetHistoryMinRepository,
                     hourRepo = widgetHistoryHourRepository,
@@ -472,7 +481,7 @@ fun Application.module() {
     // ============================================================
     // App relay — WebSocket /ws/app
     // ============================================================
-    configureAppRelay(projectRepository, sessionRegistry, controlEvents)
+    configureAppRelay(projectRepository, connections, controlEvents)
 
     // ============================================================
     // REST routes
@@ -496,18 +505,18 @@ fun Application.module() {
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository, sessionRegistry)
+        authRoutes(userRepository, projectRepository, deviceRepository, connections)
         projectRoutes(
             projectRepository, deviceRepository, widgetRepository,
             widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-            sessionRegistry, controlEvents
+            connections, controlEvents
         )
-        deviceRoutes(deviceRepository, sessionRegistry, controlEvents)
+        deviceRoutes(deviceRepository, connections, controlEvents)
         widgetRoutes(
             widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-            sessionRegistry
+            buffers, lastValues
         )
 
         // TODO: add the routes of new modules here
@@ -518,10 +527,10 @@ fun Application.module() {
 // Flush history buffer → SQLite WAL batch insert
 // Called every 5s + at shutdown
 // ============================================================
-private suspend fun flushHistoryBuffer(registry: SessionRegistry, widgetHistoryRepository: WidgetHistoryRepository) {
+private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, widgetHistoryRepository: WidgetHistoryRepository) {
     val batch = mutableListOf<HistoryEntry>()
-    while (registry.historyBuffer.isNotEmpty()) {
-        batch.add(registry.historyBuffer.poll() ?: break)
+    while (buffers.historyBuffer.isNotEmpty()) {
+        batch.add(buffers.historyBuffer.poll() ?: break)
     }
 
     if (batch.isEmpty()) return
@@ -543,10 +552,10 @@ private suspend fun flushHistoryBuffer(registry: SessionRegistry, widgetHistoryR
 // ============================================================
 // Flush numeric history buffer → SQLite WAL batch insert
 // ============================================================
-private suspend fun flushNumericHistoryBuffer(registry: SessionRegistry, repo: WidgetHistoryNumericRepository) {
+private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, repo: WidgetHistoryNumericRepository) {
     val batch = mutableListOf<NumericHistoryEntry>()
-    while (registry.numericHistoryBuffer.isNotEmpty()) {
-        batch.add(registry.numericHistoryBuffer.poll() ?: break)
+    while (buffers.numericHistoryBuffer.isNotEmpty()) {
+        batch.add(buffers.numericHistoryBuffer.poll() ?: break)
     }
 
     if (batch.isEmpty()) return
@@ -564,6 +573,28 @@ private suspend fun flushNumericHistoryBuffer(registry: SessionRegistry, repo: W
     }
 
     repo.insertBatch(rows)
+}
+
+// ============================================================
+// Coalesced last_payload persistence (5s job + shutdown)
+//
+// The device read-loop only writes the LastValueCache in RAM. Here we drain
+// the entries changed since the last cycle and upsert them in ONE transaction
+// — at most one DB write per changed widget per 5s, never per frame. The DB
+// column is a cold-start fallback (live value is the cache); a ≤5s lag (≤10s
+// in the documented drain race) is acceptable by design.
+// ============================================================
+private suspend fun flushLastValues(
+    lastValues: com.jeanloickdt.relay.LastValueCache,
+    widgetRepository: WidgetRepository
+) {
+    val dirty = lastValues.drainDirty()
+    if (dirty.isEmpty()) return
+    widgetRepository.updateLastPayloadBatch(
+        dirty.map { (widgetId, v) ->
+            com.jeanloickdt.widget.domain.LastPayloadUpdate(widgetId, v.payload, v.at)
+        }
+    )
 }
 
 // ============================================================

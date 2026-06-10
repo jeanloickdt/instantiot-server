@@ -189,12 +189,19 @@ class DeviceRelayIntegrationTest {
      * no shared global state, so no cross-test cleanup is needed.
      */
     private fun io.ktor.server.testing.ApplicationTestBuilder.wireRelay(tcpPort: Int) {
-        val registry = com.jeanloickdt.relay.SessionRegistry()
-        val events   = com.jeanloickdt.relay.ControlEventBroadcaster(registry)
+        val connections = com.jeanloickdt.relay.ConnectionRegistry()
+        val buffers     = com.jeanloickdt.relay.HistoryBuffers()
+        val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
+        val presence    = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
+        val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
         application {
             configureAuth(userRepository)
-            configureAppRelay(projectRepository, registry, events)
-            startDeviceRelay(deviceRepository, widgetRepository, registry, events, tcpPort = tcpPort)
+            configureAppRelay(projectRepository, connections, events)
+            startDeviceRelay(
+                deviceRepository, widgetRepository,
+                connections, buffers, lastValues, presence, events,
+                tcpPort = tcpPort
+            )
         }
     }
 

@@ -101,7 +101,10 @@ internal const val TYPE_HEARTBEAT: UByte = 0xFEu
 fun Application.startDeviceRelay(
     deviceRepository: DeviceRepository,
     widgetRepository: WidgetRepository,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
+    buffers: HistoryBuffers,
+    lastValues: LastValueCache,
+    presence: PresenceStore,
     events: ControlEventBroadcaster,
     tcpPort: Int = 9001
 ) {
@@ -150,7 +153,10 @@ fun Application.startDeviceRelay(
                         clientSocket     = clientSocket,
                         deviceRepository = deviceRepository,
                         widgetRepository = widgetRepository,
-                        registry         = registry,
+                        connections      = connections,
+                        buffers          = buffers,
+                        lastValues       = lastValues,
+                        presence         = presence,
                         events           = events,
                         applicationScope = applicationScope
                     )
@@ -178,7 +184,10 @@ private suspend fun handleDeviceConnection(
     clientSocket: Socket,
     deviceRepository: DeviceRepository,
     widgetRepository: WidgetRepository,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
+    buffers: HistoryBuffers,
+    lastValues: LastValueCache,
+    presence: PresenceStore,
     events: ControlEventBroadcaster,
     applicationScope: CoroutineScope
 ) {
@@ -226,11 +235,8 @@ private suspend fun handleDeviceConnection(
         // We pass `applicationScope` to the outbox → its consumer
         // coroutine outlives the `handleDeviceConnection` coroutine
         // and stops cleanly via `unregisterDevice`.
-        registry.registerDevice(device.id, device, clientSocket, applicationScope)
-        withContext(Dispatchers.IO) {
-            deviceRepository.updateOnlineStatus(device.id, isOnline = true)
-            deviceRepository.updateLastSeen(device.id, System.currentTimeMillis())
-        }
+        connections.registerDevice(device.id, device, clientSocket, applicationScope)
+        presence.markOnline(device.id, System.currentTimeMillis())
         logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceAddress")
 
         // broadcast device_online to the apps of the project
@@ -256,17 +262,17 @@ private suspend fun handleDeviceConnection(
                         frameBytes       = frameBytes,
                         device           = device,
                         widgetRepository = widgetRepository,
-                        registry         = registry,
+                        connections      = connections,
+                        buffers          = buffers,
+                        lastValues       = lastValues,
                         applicationScope = applicationScope
                     )
                 }
             }
         } finally {
             // disconnection — mark offline + remove session
-            registry.unregisterDevice(device.id)
-            withContext(Dispatchers.IO) {
-                deviceRepository.updateOnlineStatus(device.id, isOnline = false)
-            }
+            connections.unregisterDevice(device.id)
+            presence.markOffline(device.id)
             logger.info("Device disconnected — deviceId=${device.id}")
             clientSocket.close()
 
@@ -303,7 +309,9 @@ private suspend fun handleDeviceFrame(
     frameBytes: ByteArray,
     device: DeviceRow,
     widgetRepository: WidgetRepository,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
+    buffers: HistoryBuffers,
+    lastValues: LastValueCache,
     applicationScope: CoroutineScope
 ) {
     // Heartbeat (TYPE = 0xFE) : receiving the byte automatically resets
@@ -322,7 +330,7 @@ private suspend fun handleDeviceFrame(
     //    into the `widgets` table (+ add to the RAM Set). Lets the REST
     //    history lookups work without the app needing to POST
     //    explicitly. RAM cache → 0 DB hit when the widget is known.
-    if (registry.knownWidgetIds.add(widgetId)) {
+    if (buffers.knownWidgetIds.add(widgetId)) {
         applicationScope.launch(Dispatchers.IO) {
             val created = widgetRepository.registerIfAbsent(
                 id        = widgetId,
@@ -336,11 +344,12 @@ private suspend fun handleDeviceFrame(
         }
     }
 
-    // update lastPayloads in RAM — sub-millisecond access
-    registry.lastPayloads[widgetId] = payloadBase64
+    // update the last-value cache in RAM — sub-millisecond access. The DB
+    // column is persisted by the 5s flush (coalesced), never per frame.
+    lastValues.put(widgetId, payloadBase64, now)
 
     // add to the history buffer — flushed every 5s to a SQLite WAL batch
-    registry.historyBuffer.add(
+    buffers.historyBuffer.add(
         HistoryEntry(
             widgetId   = widgetId,
             projectId  = device.projectId,
@@ -366,7 +375,7 @@ private suspend fun handleDeviceFrame(
     FrameParser.extractNumericValue(frameBytes)?.let { sample ->
         // Raw tier : opt-in only (off by default)
         if (ServerConfig.historyRawEnabled) {
-            registry.numericHistoryBuffer.add(
+            buffers.numericHistoryBuffer.add(
                 NumericHistoryEntry(
                     widgetId   = widgetId,
                     projectId  = device.projectId,
@@ -407,27 +416,34 @@ private suspend fun handleDeviceFrame(
         )
     }
 
-    // update last_payload in DB — asynchronous non-blocking
-    applicationScope.launch(Dispatchers.IO) {
-        widgetRepository.updateLastPayload(widgetId, payloadBase64, now)
-    }
+    // NOTE: no per-frame DB write here anymore. last_payload persistence is
+    // coalesced into the 5s flush via LastValueCache.drainDirty() — the read
+    // path stays pure RAM/CPU.
 
     // broadcast the intact frame to the apps watching this project
-    broadcastToApps(registry, device.projectId, frameBytes)
+    dispatchToApps(connections, device.projectId, frameBytes)
+}
+
+/**
+ * Single dispatch point for device→app frames (seam: if a slow-app staller is
+ * ever observed, a per-app outbox plugs in HERE without touching the loop).
+ */
+private suspend fun dispatchToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
+    broadcastToApps(connections, projectId, frameBytes)
 }
 
 /**
  * Broadcasts a binary frame to all connected apps watching a project.
  */
-private suspend fun broadcastToApps(registry: SessionRegistry, projectId: String, frameBytes: ByteArray) {
-    val appSessions = registry.getAppSessionsForProject(projectId)
+private suspend fun broadcastToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
+    val appSessions = connections.getAppSessionsForProject(projectId)
 
     appSessions.forEach { appSession ->
         try {
             appSession.session.send(Frame.Binary(true, frameBytes))
         } catch (e: Exception) {
             logger.warn("Failed to broadcast to userId=${appSession.userId} — removing session")
-            registry.unregisterApp(appSession.userId, appSession.session)
+            connections.unregisterApp(appSession.userId, appSession.session)
         }
     }
 }

@@ -109,6 +109,20 @@ class SqliteWidgetRepository : WidgetRepository {
         }
     }
 
+    // Coalesced persistence: one transaction per 5s cycle, at most one UPDATE
+    // per changed widget (instead of one DB write per frame on the read path).
+    override fun updateLastPayloadBatch(updates: List<com.jeanloickdt.widget.domain.LastPayloadUpdate>) {
+        if (updates.isEmpty()) return
+        transaction {
+            updates.forEach { u ->
+                WidgetTable.update({ WidgetTable.id eq u.widgetId }) {
+                    it[WidgetTable.lastPayload] = u.payload
+                    it[WidgetTable.lastSeenAt]  = u.at
+                }
+            }
+        }
+    }
+
     // ============================================================
     // Delete a widget
     // ============================================================

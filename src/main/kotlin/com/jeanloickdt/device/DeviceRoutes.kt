@@ -32,7 +32,7 @@ import com.jeanloickdt.device.domain.DeviceResponse
 import com.jeanloickdt.device.domain.UpdateDeviceNameRequest
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
-import com.jeanloickdt.relay.SessionRegistry
+import com.jeanloickdt.relay.ConnectionRegistry
 import io.ktor.http.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
@@ -44,7 +44,7 @@ import java.util.UUID
 
 fun Route.deviceRoutes(
     deviceRepository: DeviceRepository,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
     events: ControlEventBroadcaster
 ) {
 
@@ -225,7 +225,7 @@ fun Route.deviceRoutes(
             )
 
             // force disconnect of the existing TCP session if the device was connected
-            registry.getDeviceSession(deviceId)?.let { activeSession ->
+            connections.getDeviceSession(deviceId)?.let { activeSession ->
                 try {
                     activeSession.socket.close()
                 } catch (_: Exception) {
@@ -278,7 +278,7 @@ fun Route.deviceRoutes(
             // force disconnect of the old TCP session
             // the device will reconnect with its old token → server rejects it (red LED)
             // until reflashed with the new token
-            registry.getDeviceSession(deviceId)?.let { activeSession ->
+            connections.getDeviceSession(deviceId)?.let { activeSession ->
                 try {
                     activeSession.socket.close()
                 } catch (_: Exception) {

@@ -30,7 +30,7 @@ import com.jeanloickdt.project.domain.UpdateProjectLayoutRequest
 import com.jeanloickdt.project.domain.UpdateProjectNameRequest
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
-import com.jeanloickdt.relay.SessionRegistry
+import com.jeanloickdt.relay.ConnectionRegistry
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.close
 import com.jeanloickdt.widget.domain.WidgetHistoryRepository
@@ -51,7 +51,7 @@ fun Route.projectRoutes(
     widgetHistoryMinRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
     widgetHistoryHourRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
     widgetHistoryDayRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
-    registry: SessionRegistry,
+    connections: ConnectionRegistry,
     events: ControlEventBroadcaster
 ) {
 
@@ -214,14 +214,14 @@ fun Route.projectRoutes(
                     deviceId  = d.id,
                     reason    = DeviceOfflineReason.DELETED
                 )
-                registry.getDeviceSession(d.id)?.let { active ->
+                connections.getDeviceSession(d.id)?.let { active ->
                     try {
                         active.socket.close()
                     } catch (_: Exception) {
                         // socket already closed or I/O error — does not matter
                     }
                     // the finally block of handleDeviceConnection removes
-                    // the session from SessionRegistry automatically
+                    // the session from ConnectionRegistry automatically
                 }
             }
 
@@ -232,7 +232,7 @@ fun Route.projectRoutes(
             // with a CloseReason.NORMAL + message → on the client side
             // the B6 "disconnect dialog" triggers and the user can
             // return to the list.
-            val appSessionsToKick = registry.getAppSessionsForProject(projectId)
+            val appSessionsToKick = connections.getAppSessionsForProject(projectId)
             appSessionsToKick.forEach { appSession ->
                 try {
                     appSession.session.close(
@@ -245,7 +245,7 @@ fun Route.projectRoutes(
                     // WS already closed or I/O error — does not matter
                 }
                 // the finally block of the appWebSocket handler removes
-                // the session from SessionRegistry automatically
+                // the session from ConnectionRegistry automatically
             }
 
             // ─── Step 3 : cascade delete DB ───────────────────────────

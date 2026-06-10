@@ -17,7 +17,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// relay/SessionRegistry.kt
+// relay/ConnectionRegistry.kt
 package com.jeanloickdt.relay
 
 import com.jeanloickdt.device.domain.DeviceRow
@@ -25,7 +25,6 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CopyOnWriteArrayList
 
 // Type aliases to clarify the map keys
@@ -47,16 +46,10 @@ data class AppSession(
     val connectionInstanceId: String,
     var activeProjectId: String? = null,  // currently open project — changes dynamically
     // History subscriptions: map widgetId → granularity ("minute" | "hour" | "day").
-    // Set by the app via message {"type":"subscribe_history","widgets":[...]}. Filtered
-    // by the bucket_updated broadcaster to only broadcast the buckets the app
-    // has explicitly requested (= charts in preset mode with FromWidget source +
-    // open history bottom sheets). Avoids wasting network when some
-    // widgets have no active chart on the UI side.
-    //
-    // Thread-safe: mutable Map accessed from the read loop (write) and the bucket
-    // broadcaster (read). Safeguard: wrap in synchronized blocks or
-    // use ConcurrentHashMap. Choice: ConcurrentHashMap to keep it simple.
-    val historySubs: java.util.concurrent.ConcurrentHashMap<String, String> = java.util.concurrent.ConcurrentHashMap()
+    // Set by the app via {"type":"subscribe_history","widgets":[...]}, read by the
+    // bucket_updated broadcaster. ConcurrentHashMap: written by the WS read loop,
+    // read by the broadcaster.
+    val historySubs: ConcurrentHashMap<String, String> = ConcurrentHashMap()
 )
 
 // Device session — one TCP session per connected device
@@ -65,37 +58,15 @@ data class DeviceSession(
     val socket: Socket
 )
 
-// History entry — buffer before SQLite flush
-data class HistoryEntry(
-    val widgetId: WidgetId,
-    val projectId: String,
-    val ownerId: String,
-    val payload: String,
-    val recordedAt: Long
-)
-
-// **Numeric** history entry — buffer before SQLite flush
-// Populated in parallel with HistoryEntry when FrameParser.extractNumericValue
-// returns a decodable sample (gauge/metric/level/slider/chart).
-data class NumericHistoryEntry(
-    val widgetId: WidgetId,
-    val projectId: String,
-    val ownerId: String,
-    val seriesId: String?,
-    val value: Double,
-    val recordedAt: Long
-)
-
 /**
- * Live relay state for THIS node: app/device sessions, outboxes, RAM buffers.
+ * The live PHYSICAL connections of THIS node: app WebSocket sessions, device
+ * TCP sessions and their write outboxes.
  *
- * Injected by constructor (one instance built in `Application.module()` and
- * passed to the relays, the broadcaster, the routes and the flush jobs) —
- * no global singleton, so tests build an isolated instance per test and the
- * future SRP split (ConnectionRegistry / LastValueCache / PresenceStore) can
- * happen behind this seam without touching call sites again.
+ * Local by nature — a socket lives on exactly one node, which will stay true
+ * even in a future multi-node deployment (only presence/routing get shared,
+ * never the sockets themselves). Injected by constructor, never global.
  */
-class SessionRegistry {
+class ConnectionRegistry {
 
     // userId → list of WebSocket app sessions (multi-device: phone + tablet)
     val appSessions = ConcurrentHashMap<UserId, CopyOnWriteArrayList<AppSession>>()
@@ -105,30 +76,6 @@ class SessionRegistry {
 
     // deviceId → serialization outbox for TCP writes (see DeviceOutbox)
     val deviceOutboxes = ConcurrentHashMap<DeviceId, DeviceOutbox>()
-
-    // widgetId → last payload received — fast access without DB
-    val lastPayloads = ConcurrentHashMap<WidgetId, String>()
-
-    // history buffer — flushed every 5s to SQLite WAL batch
-    val historyBuffer = ConcurrentLinkedQueue<HistoryEntry>()
-
-    // numeric history buffer — populated ONLY if the admin enabled
-    // the raw tier (ServerConfig.historyRawEnabled). Flushed every 5s to
-    // widget_history_numeric.
-    //
-    // No more throttle: since the iWidgets history rework, we
-    // favor a tiered-aggregation architecture where the min/hour/day tiers
-    // (always active via the RAM aggregators) are enough to
-    // visualize the signal envelope. The raw tier, when enabled,
-    // keeps ALL samples without server-side filtering — protection
-    // against abuse on the sketch side is documented, not enforced.
-    val numericHistoryBuffer = ConcurrentLinkedQueue<NumericHistoryEntry>()
-
-    // RAM cache of widgetIds (= protocolId) already known in the DB.
-    // Used by auto-register in DeviceRelay: a widgetId already in
-    // the Set → no DB hit, otherwise INSERT OR IGNORE + add to the Set.
-    // Populated at startup via `seedKnownWidgets()` + incrementally.
-    val knownWidgetIds: MutableSet<WidgetId> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     // register an app session — supports multiple connections per user
     fun registerApp(
