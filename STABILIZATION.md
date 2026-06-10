@@ -182,8 +182,8 @@ changement de ports, récupération d'un admin perdu.
 - [x] Garde admin centralisée (`requireAdmin`) *(P1-3)*
 - [x] Rotation de logs vers `~/.instantiot/logs/` *(P1-4)*
 - [x] `/health` + `/api/version` non authentifiés *(P1-5)*
-- [ ] `OPERATIONS.md` : install / data / backup / restore / logs / recovery *(P1-6 — reste)*
-- [ ] Migrer `ApplicationTest` sur le slim harness *(reste)*
+- [x] `OPERATIONS.md` : install / data / backup / restore / logs / recovery *(P1-6)*
+- [ ] Migrer `ApplicationTest` sur le slim harness *(reste — mineur)*
 
 > **Branche `stabilization/p0-reliability`** : les 6 P0 sont implémentés, compilent, les tests
 > passent et le serveur boote proprement (`Application started`, relais sur pool dédié, pas de lock).
