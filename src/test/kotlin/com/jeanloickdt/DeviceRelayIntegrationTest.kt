@@ -19,7 +19,7 @@
 
 package com.jeanloickdt
 
-import com.jeanloickdt.auth.JwtConfig
+import com.jeanloickdt.auth.HmacTokenService
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.database.DatabaseFactory
@@ -72,6 +72,7 @@ import kotlin.test.assertTrue
 class DeviceRelayIntegrationTest {
 
     private val deviceToken = "esp-token-abcdef-123456"
+    private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
     private lateinit var jwt: String
     private lateinit var projectId: String
     private lateinit var deviceId: String
@@ -86,10 +87,8 @@ class DeviceRelayIntegrationTest {
             WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
             dbFile = tmpDb
         )
-        JwtConfig.init("instantiot-server", "instantiot-app")
-
         val userId = userRepository.create("alice", BCrypt.hashpw("pw", BCrypt.gensalt()))
-        jwt = JwtConfig.generateToken(userId)
+        jwt = tokenService.issue(userId, 0)
         projectId = projectRepository.create(ownerId = userId, name = "P")
         deviceId = deviceRepository.create(
             name = "esp1",
@@ -263,7 +262,7 @@ class DeviceRelayIntegrationTest {
         val presence    = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
         val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
         application {
-            configureAuth(userRepository)
+            configureAuth(userRepository, tokenService)
             configureAppRelay(projectRepository, connections, events)
             startDeviceRelay(
                 deviceRepository, widgetRepository,

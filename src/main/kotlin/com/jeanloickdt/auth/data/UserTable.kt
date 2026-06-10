@@ -27,6 +27,10 @@ object UserTable : Table("users") {
     val pwdHash   = text("pwd_hash")
     val role            = text("role").default("user")
     val passwordChanged = bool("password_changed").default(false)
+    // Revocation counter: every password change increments it; a token is
+    // rejected when its `ver` claim is below this. Default 0 → additive
+    // migration (createMissingTablesAndColumns ALTER ADD COLUMN ... DEFAULT 0).
+    val tokenVersion    = integer("token_version").default(0)
     val createdAt       = long("created_at")
     override val primaryKey = PrimaryKey(id)
 }

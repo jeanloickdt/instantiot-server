@@ -21,6 +21,7 @@ package com.jeanloickdt
 
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.auth.configureAuth
+import com.jeanloickdt.auth.defaultTokenService
 import com.jeanloickdt.auth.data.SqliteUserRepository
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.auth.domain.UserRepository
@@ -312,9 +313,12 @@ fun Application.module() {
     }
 
     // ============================================================
-    // JWT authentication — must be configured before the routes
+    // JWT authentication — must be configured before the routes.
+    // TokenService is injected (no global singleton): HS256 today + the
+    // token_version revocation claim; a future cloud impl plugs in here.
     // ============================================================
-    configureAuth(userRepository)
+    val tokenService = defaultTokenService()
+    configureAuth(userRepository, tokenService)
 
     // ============================================================
     // Device relay — TCP port 9001
@@ -505,7 +509,7 @@ fun Application.module() {
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository, connections)
+        authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
         projectRoutes(
             projectRepository, deviceRepository, widgetRepository,
             widgetHistoryRepository, widgetHistoryNumericRepository,

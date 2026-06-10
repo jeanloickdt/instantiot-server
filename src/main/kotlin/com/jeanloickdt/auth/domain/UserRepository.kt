@@ -41,6 +41,11 @@ interface UserRepository {
     fun findAll(): List<UserRow>
 
     /**
+     * Updates the password AND increments `token_version` — i.e. **revokes every
+     * previously-issued token** for this user (other sessions logged out). Used
+     * by self-change, admin reset and the bootstrap reset; the caller that wants
+     * the current session to survive must re-issue a token afterwards.
+     *
      * @param passwordChanged `true` (default) when the user sets their own
      *   password; `false` when the server assigns a default (e.g. the
      *   reset-admin recovery flow resetting back to `admin`).

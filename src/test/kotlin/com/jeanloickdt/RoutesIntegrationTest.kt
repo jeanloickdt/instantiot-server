@@ -19,7 +19,6 @@
 
 package com.jeanloickdt
 
-import com.jeanloickdt.auth.JwtConfig
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
@@ -92,9 +91,12 @@ class RoutesIntegrationTest {
             WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
             dbFile = tmpDb
         )
-        JwtConfig.init("instantiot-server", "instantiot-app")
         ServerConfig.registrationOpen = false
     }
+
+    private val tokenService = com.jeanloickdt.auth.HmacTokenService(
+        "test-secret", "instantiot-server", "instantiot-app"
+    )
 
     // ── slim test application (no relay / mDNS / loops) ──────────
     private fun ApplicationTestBuilder.installTestApp() {
@@ -111,7 +113,7 @@ class RoutesIntegrationTest {
                     requestKey { it.request.local.remoteAddress }
                 }
             }
-            configureAuth(userRepository)
+            configureAuth(userRepository, tokenService)
             // per-test relay seams (DI) — isolated, no global singleton
             val connections = com.jeanloickdt.relay.ConnectionRegistry()
             val buffers     = com.jeanloickdt.relay.HistoryBuffers()
@@ -119,7 +121,7 @@ class RoutesIntegrationTest {
             val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
             routing {
                 systemRoutes()
-                authRoutes(userRepository, projectRepository, deviceRepository, connections)
+                authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
                 projectRoutes(
                     projectRepository, deviceRepository, widgetRepository,
                     widgetHistoryRepository, widgetHistoryNumericRepository,
@@ -144,7 +146,7 @@ class RoutesIntegrationTest {
         passwordChanged: Boolean = true
     ): Pair<String, String> {
         val id = userRepository.create(username, BCrypt.hashpw(password, BCrypt.gensalt()), role, passwordChanged)
-        return id to JwtConfig.generateToken(id)
+        return id to tokenService.issue(id, 0)
     }
 
     private fun jsonOf(body: String) = Json.parseToJsonElement(body).jsonObject
@@ -196,6 +198,40 @@ class RoutesIntegrationTest {
         }
         assertEquals(HttpStatusCode.OK, relog.status)
         assertTrue(jsonOf(relog.bodyAsText())["passwordChanged"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test
+    fun `changing the password revokes the old token and re-issues a working one`() = testApplication {
+        installTestApp()
+        // login to get a real, version-0 token
+        createUser("carol", "oldsecret1")
+        val login = client.post("/api/login") {
+            contentType(ContentType.Application.Json)
+            setBody("""{"username":"carol","password":"oldsecret1"}""")
+        }
+        val oldToken = jsonOf(login.bodyAsText())["token"]!!.jsonPrimitive.content
+
+        // old token works before the change
+        assertEquals(HttpStatusCode.OK, client.get("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $oldToken")
+        }.status)
+
+        // change password → bumps token_version (revokes) AND returns a fresh token
+        val change = client.patch("/api/users/me/password") {
+            header(HttpHeaders.Authorization, "Bearer $oldToken")
+            contentType(ContentType.Application.Json)
+            setBody("""{"currentPassword":"oldsecret1","newPassword":"newsecret1"}""")
+        }
+        assertEquals(HttpStatusCode.OK, change.status)
+        val newToken = jsonOf(change.bodyAsText())["token"]!!.jsonPrimitive.content
+
+        // the OLD token is now revoked (401), the RE-ISSUED token works (200)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $oldToken")
+        }.status)
+        assertEquals(HttpStatusCode.OK, client.get("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $newToken")
+        }.status)
     }
 
     @Test

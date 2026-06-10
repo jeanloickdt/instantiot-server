@@ -31,5 +31,7 @@ data class UserRow(
      * `passwordChanged` field returned at login.
      */
     val passwordChanged: Boolean,
+    /** Revocation counter — a token whose `ver` claim is below this is rejected. */
+    val tokenVersion: Int,
     val createdAt: Long
 )

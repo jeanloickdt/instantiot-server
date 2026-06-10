@@ -27,22 +27,25 @@ import io.ktor.server.auth.jwt.*
 // ============================================================
 // JWT config — fixed values, no need for YAML
 // ============================================================
-private const val JWT_ISSUER   = "instantiot-server"
-private const val JWT_AUDIENCE = "instantiot-app"
-private const val JWT_REALM    = "instantiot"
+internal const val JWT_ISSUER   = "instantiot-server"
+internal const val JWT_AUDIENCE = "instantiot-app"
+private const val JWT_REALM     = "instantiot"
 
-fun Application.configureAuth(userRepository: UserRepository) {
+/** Convenience factory used in production wiring (and re-usable in tests). */
+fun defaultTokenService(): TokenService =
+    HmacTokenService(loadOrCreateJwtSecret(), JWT_ISSUER, JWT_AUDIENCE)
 
-    JwtConfig.init(JWT_ISSUER, JWT_AUDIENCE)
-
+fun Application.configureAuth(userRepository: UserRepository, tokenService: TokenService) {
     authentication {
         jwt("jwt") {
             realm = JWT_REALM
-            verifier(JwtConfig.verifier)
+            verifier(tokenService.verifier)
             validate { credential ->
                 val userId = credential.payload.subject ?: return@validate null
-                // verifies that the user still exists in the DB
-                userRepository.findById(userId)?.let { JWTPrincipal(credential.payload) }
+                // The user must still exist AND the token must not have been
+                // revoked (its `ver` claim >= the user's current token_version).
+                val user = userRepository.findById(userId) ?: return@validate null
+                if (tokenService.isValid(credential.payload, user)) JWTPrincipal(credential.payload) else null
             }
         }
     }

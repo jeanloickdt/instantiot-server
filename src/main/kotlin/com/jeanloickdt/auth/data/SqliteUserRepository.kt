@@ -82,6 +82,10 @@ class SqliteUserRepository : UserRepository {
             UserTable.update({ UserTable.id eq id }) {
                 it[pwdHash] = newHash
                 it[UserTable.passwordChanged] = passwordChanged
+                // Revoke every previously-issued token: bump token_version.
+                // Every password change (self change, admin reset, bootstrap
+                // reset) revokes — impossible to forget at a call site.
+                with(SqlExpressionBuilder) { it[tokenVersion] = tokenVersion + 1 }
             }
         }
     }
@@ -95,6 +99,8 @@ class SqliteUserRepository : UserRepository {
                 if (newPwdHash != null) {
                     it[pwdHash] = newPwdHash
                     it[UserTable.passwordChanged] = true
+                    // a password change here also revokes prior tokens
+                    with(SqlExpressionBuilder) { it[tokenVersion] = tokenVersion + 1 }
                 }
             }
         }
@@ -112,6 +118,7 @@ class SqliteUserRepository : UserRepository {
         pwdHash         = this[UserTable.pwdHash],
         role            = this[UserTable.role],
         passwordChanged = this[UserTable.passwordChanged],
+        tokenVersion    = this[UserTable.tokenVersion],
         createdAt       = this[UserTable.createdAt]
     )
 }

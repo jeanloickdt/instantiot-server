@@ -66,21 +66,34 @@ private val USERNAME_REGEX = Regex("^[a-zA-Z0-9_]{3,32}$")
 private const val PASSWORD_MIN_LENGTH = 8
 private const val PASSWORD_MAX_LENGTH = 128
 
+// Constant-time login: when the username is unknown we still run one bcrypt
+// verification against this fixed hash, so a request for a non-existent user
+// takes the same time as one for an existing user. Closes username enumeration
+// via response-timing. Computed once at class load.
+private val DUMMY_BCRYPT_HASH: String = BCrypt.hashpw("dummy-password", BCrypt.gensalt())
+
 // ============================================================
 // 🔓 LOGIN — always accessible, even without a license
 // Returns the token + role for the dashboard
 // ============================================================
-fun Route.loginRoute(userRepository: UserRepository) {
+fun Route.loginRoute(userRepository: UserRepository, tokenService: TokenService) {
     post("/api/login") {
         val body = call.receive<LoginRequest>()
 
         val user = userRepository.findByUsername(body.username)
-        if (user == null || !BCrypt.checkpw(body.password, user.pwdHash)) {
+        // Always run exactly one bcrypt check (against a dummy hash when the
+        // user is unknown) so the response time does not reveal whether the
+        // username exists.
+        val passwordOk =
+            if (user == null) { BCrypt.checkpw(body.password, DUMMY_BCRYPT_HASH); false }
+            else BCrypt.checkpw(body.password, user.pwdHash)
+
+        if (user == null || !passwordOk) {
             call.respond(HttpStatusCode.Unauthorized, ApiError("Invalid credentials"))
             return@post
         }
 
-        val token = JwtConfig.generateToken(user.id)
+        val token = tokenService.issue(user.id, user.tokenVersion)
         call.respond(AuthResponse(
             token = token,
             role  = user.role,
@@ -94,7 +107,7 @@ fun Route.loginRoute(userRepository: UserRepository) {
 // ============================================================
 // 📝 REGISTER — controlled by the registrationOpen flag
 // ============================================================
-fun Route.registerRoute(userRepository: UserRepository) {
+fun Route.registerRoute(userRepository: UserRepository, tokenService: TokenService) {
     post("/api/register") {
         // 🔒 Registration controlled by the admin. Multi-user supported, but
         // NO open registration by default: otherwise anyone on the
@@ -140,7 +153,7 @@ fun Route.registerRoute(userRepository: UserRepository) {
             pwdHash = hash
         )
         val user   = userRepository.findById(userId)!!
-        val token  = JwtConfig.generateToken(userId)
+        val token  = tokenService.issue(userId, user.tokenVersion)
 
         call.respond(HttpStatusCode.Created, AuthResponse(
             token = token,
@@ -152,7 +165,7 @@ fun Route.registerRoute(userRepository: UserRepository) {
 // ============================================================
 // 🔑 CHANGE PASSWORD — any authenticated user
 // ============================================================
-fun Route.changePasswordRoute(userRepository: UserRepository) {
+fun Route.changePasswordRoute(userRepository: UserRepository, tokenService: TokenService) {
     patch("/api/users/me/password") {
         val userId = call.principal<JWTPrincipal>()?.subject
             ?: return@patch call.respond(HttpStatusCode.Unauthorized)
@@ -177,9 +190,20 @@ fun Route.changePasswordRoute(userRepository: UserRepository) {
         }
 
         val newHash = BCrypt.hashpw(body.newPassword, BCrypt.gensalt())
+        // updatePassword bumps token_version → revokes ALL prior tokens
+        // (other devices logged out). We then re-issue a fresh token for THIS
+        // session so the caller stays logged in (decision: re-issue, not
+        // force-relogin). The client (admin panel app.js / mobile app) MUST
+        // swap to the returned token, otherwise its next request is 401.
         userRepository.updatePassword(userId, newHash)
+        val updated = userRepository.findById(userId)!!
+        val newToken = tokenService.issue(userId, updated.tokenVersion)
 
-        call.respond(HttpStatusCode.OK, mapOf("message" to "Password updated"))
+        call.respond(HttpStatusCode.OK, AuthResponse(
+            token = newToken,
+            role  = updated.role,
+            passwordChanged = updated.passwordChanged
+        ))
     }
 }
 
@@ -622,15 +646,16 @@ fun Route.authRoutes(
     userRepository: UserRepository,
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository,
-    connections: ConnectionRegistry
+    connections: ConnectionRegistry,
+    tokenService: TokenService
 ) {
     rateLimit(RateLimitName("auth")) {
-        loginRoute(userRepository)
-        registerRoute(userRepository)
+        loginRoute(userRepository, tokenService)
+        registerRoute(userRepository, tokenService)
     }
 
     authenticate("jwt") {
-        changePasswordRoute(userRepository)
+        changePasswordRoute(userRepository, tokenService)
         adminStatsRoute(userRepository, projectRepository, deviceRepository, connections)
         adminDevicesRoute(userRepository, deviceRepository)
         adminServerInfoRoute(userRepository)

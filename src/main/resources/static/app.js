@@ -222,6 +222,14 @@ document.addEventListener('alpine:init', () => {
       });
 
       if (res && res.ok) {
+        // The server revokes all prior tokens on a password change and returns
+        // a freshly-issued token for this session — adopt it, otherwise the
+        // next request would be 401 and we'd be logged out.
+        const data = await res.json().catch(() => null);
+        if (data?.token) {
+          this.token = data.token;
+          localStorage.setItem('token', data.token);
+        }
         this.passwordChanged = true;
         localStorage.setItem('passwordChanged', 'true');
         this.enterDashboard();
