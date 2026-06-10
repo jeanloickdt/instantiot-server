@@ -167,6 +167,12 @@ Recovery is gated by filesystem access to the machine (= proof you own it):
 
 To reset a *regular user*'s password: admin panel → Users → Reset password.
 
+> **Changing or resetting a password signs the user out of every other device.**
+> The server bumps an internal `token_version`, which invalidates all of that
+> user's existing tokens at once (e.g. revoking access for a lost/compromised
+> device). The session that performs a self-change stays logged in (it receives
+> a fresh token); all others must log in again with the new password.
+
 ---
 
 ## 9. Health & version checks

@@ -154,7 +154,7 @@ Application.module()  ───────────────────�
  │                                   (the JVM hook covers the tray's System.exit)
  ├─ ApplicationStopping → MdnsPublisher.stop()
  ├─ BOOTSTRAP ADMIN                  admin/admin (passwordChanged=false) — see §6
- ├─ configureAuth(userRepository)    JWT HS256
+ ├─ configureAuth(userRepo, tokenService)  injected TokenService (HS256 + revocation)
  ├─ startDeviceRelay(tcpPort)        ktor-network SelectorManager; SupervisorJob;
  │                                   suspending accept(); no pool, no cap
  ├─ MdnsPublisher.start(displayName) announce _instantiot._tcp
@@ -257,12 +257,23 @@ ESP : numeric sample (e.g. gauge = 23.5)
 ## 6. Auth & security
 
 ```
-JWT HS256
+TokenService (injected; HmacTokenService = HS256 today)
  ├─ secret : ~/.instantiot/secret.key  (2×UUID, generated 1st boot, 600 perms)
- ├─ expiry : 1 year (LAN server, no short rotation — no refresh/revocation yet)
- ├─ claims : subject=userId, issuer instantiot-server, audience instantiot-app
- └─ every authenticate("jwt") route → verify token + look up user in DB
+ ├─ expiry : 1 year (LAN server, no short rotation — refresh tokens deferred to cloud)
+ ├─ claims : subject=userId, issuer/audience, ver=token_version
+ └─ every authenticate("jwt") route → verify signature + look up user in DB +
+    REVOCATION check: reject if token's `ver` < users.token_version
     (role is NOT in the token — re-read from DB on each admin check)
+
+Revocation (token_version, int on users, default 0)
+ ├─ every password change (self / admin reset / bootstrap reset) bumps it via
+ │   updatePassword → ALL prior tokens for that user are rejected at once
+ ├─ changePassword then RE-ISSUES a fresh token for the current session
+ │   (client swaps it) → the caller stays logged in, other devices are out
+ └─ backward-compatible: a token minted before this feature (no `ver`) = v0
+
+Login: constant-time — a dummy bcrypt check runs for an unknown username so
+response timing does not reveal whether the account exists.
 
 Roles
  ├─ user  : CRUD on THEIR OWN projects / devices / widgets (ownerId == subject, else 404)
@@ -323,7 +334,7 @@ The wire format shared by the Arduino lib, the server, and the app.
 | GET | `/api/status` | — | server state, `setup_required`, `tcpPort` |
 | POST | `/api/login` | — (10/min) | → `{token, role, passwordChanged}` (panel forces change if false) |
 | POST | `/api/register` | — (10/min) | if `registration.open` ; user regex, pwd 8-128 |
-| PATCH | `/api/users/me/password` | JWT | change own password (clears must-change flag) |
+| PATCH | `/api/users/me/password` | JWT | change own password → revokes other sessions, returns a fresh token, clears must-change flag |
 | GET/POST | `/api/projects` | JWT | list / create (scoped by owner) |
 | GET/PATCH/DELETE | `/api/projects/{id}` `/name` `/layout` | JWT | owner check → 404; DELETE cascades |
 | GET/POST | `/api/devices` `/projects/{id}/devices` | JWT | list / register (token shown once) |
