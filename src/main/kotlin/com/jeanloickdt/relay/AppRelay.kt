@@ -268,8 +268,9 @@ private suspend fun relayFrameToDevices(
     targetDeviceIds.forEach { targetDeviceId ->
         val deviceSession = connections.deviceSessions[targetDeviceId]
 
-        // device offline (session absent or socket closed)
-        if (deviceSession == null || deviceSession.socket.isClosed) {
+        // device offline (session absent or socket no longer active).
+        // ktor Socket has no `isClosed`; liveness is its socketContext job.
+        if (deviceSession == null || !deviceSession.socket.socketContext.isActive) {
             logger.info("Command to offline device — userId=$userId deviceId=$targetDeviceId")
             events.commandFailed(
                 session  = session,

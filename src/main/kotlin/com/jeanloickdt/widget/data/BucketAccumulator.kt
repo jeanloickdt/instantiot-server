@@ -62,6 +62,12 @@ class BucketAccumulator(
      * atomically.
      */
     fun addSample(value: Double) {
+        // Defense-in-depth belt: a non-finite value (NaN / ±Infinity) would
+        // poison this bucket forever (NaN comparisons are always false → min/max
+        // never update; sum += NaN → avg = NaN permanently). The ingestion path
+        // already rejects non-finite samples; this guarantees the invariant even
+        // if a future caller forgets to.
+        if (!value.isFinite()) return
         synchronized(this) {
             if (value < _minValue) _minValue = value
             if (value > _maxValue) _maxValue = value

@@ -20,6 +20,9 @@
 // relay/DeviceOutbox.kt
 package com.jeanloickdt.relay
 
+import io.ktor.utils.io.ByteWriteChannel
+import io.ktor.utils.io.writeFully
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -27,8 +30,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import org.slf4j.LoggerFactory
-import java.io.IOException
-import java.net.Socket
 
 private val logger = LoggerFactory.getLogger("DeviceOutbox")
 
@@ -77,7 +78,7 @@ private val logger = LoggerFactory.getLogger("DeviceOutbox")
  */
 class DeviceOutbox(
     private val deviceId: String,
-    private val socket: Socket,
+    private val writeChannel: ByteWriteChannel,
     scope: CoroutineScope
 ) {
     private val channel = Channel<FrameMsg>(capacity = CHANNEL_CAPACITY)
@@ -137,16 +138,19 @@ class DeviceOutbox(
      */
     private suspend fun runConsumer() {
         try {
-            val outputStream = socket.getOutputStream()
             for (msg in channel) {
                 try {
-                    outputStream.write(msg.bytes)
-                    outputStream.flush()
-                } catch (e: IOException) {
+                    writeChannel.writeFully(msg.bytes)
+                    writeChannel.flush()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
                     logger.warn("TCP write failed for device=$deviceId — closing outbox (${e.message})")
                     break
                 }
             }
+        } catch (e: CancellationException) {
+            throw e   // shutdown / disconnect cancel — propagate cleanly
         } catch (e: Exception) {
             logger.warn("Outbox consumer error for device=$deviceId — ${e.message}")
         } finally {

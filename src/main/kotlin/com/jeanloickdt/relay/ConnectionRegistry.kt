@@ -21,9 +21,10 @@
 package com.jeanloickdt.relay
 
 import com.jeanloickdt.device.domain.DeviceRow
+import io.ktor.network.sockets.Socket
+import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
-import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -52,7 +53,9 @@ data class AppSession(
     val historySubs: ConcurrentHashMap<String, String> = ConcurrentHashMap()
 )
 
-// Device session — one TCP session per connected device
+// Device session — one TCP session per connected device.
+// `socket` is the ktor-network non-blocking socket; liveness is read via
+// `socket.socketContext.isActive` (ktor Socket has no `isClosed`).
 data class DeviceSession(
     val device: DeviceRow,
     val socket: Socket
@@ -111,16 +114,22 @@ class ConnectionRegistry {
 
     // register a device session + create its outbox.
     // The provided `scope` governs the outbox's consumer coroutine —
-    // typically the Ktor `applicationScope` (long-lived).
-    fun registerDevice(deviceId: DeviceId, device: DeviceRow, socket: Socket, scope: CoroutineScope) {
+    // the long-lived relay scope, so it outlives the per-connection coroutine.
+    fun registerDevice(
+        deviceId: DeviceId,
+        device: DeviceRow,
+        socket: Socket,
+        writeChannel: ByteWriteChannel,
+        scope: CoroutineScope
+    ) {
         deviceSessions[deviceId] = DeviceSession(device, socket)
         // Close any previous outbox (fast reconnect of the same deviceId)
         // to avoid leaking a consumer coroutine.
         deviceOutboxes.remove(deviceId)?.close()
         deviceOutboxes[deviceId] = DeviceOutbox(
-            deviceId = deviceId,
-            socket   = socket,
-            scope    = scope
+            deviceId     = deviceId,
+            writeChannel = writeChannel,
+            scope        = scope
         )
     }
 

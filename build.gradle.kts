@@ -61,6 +61,9 @@ dependencies {
     implementation(libs.ktor.server.content.negotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.ktor.server.netty)
+    // Non-blocking TCP sockets for the device relay (suspending aSocket/
+    // ByteReadChannel — thousands of idle connections on a handful of threads).
+    implementation("io.ktor:ktor-network:3.4.2")
     implementation(libs.logback.classic)
     implementation(libs.ktor.server.config.yaml)
     testImplementation(libs.ktor.server.test.host)
