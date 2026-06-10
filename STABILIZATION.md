@@ -154,8 +154,8 @@ changement de ports, récupération d'un admin perdu.
   (aujourd'hui : seulement `/login`, `/register`, `/forgot-password`).
 - **TLS optionnel self-hosted** : ACME / Let's Encrypt automatisé (acme4j, challenge HTTP-01, renouvellement
   ≤21 j) en Ktor — utile dès qu'un device/app sort du LAN. *(Détail dans le futur doc cloud.)*
-- **Nettoyage** : supprimer `bin/` (miroir mort), `packaging/build-installer.sh` (doublon de jpackage),
-  `generateAdminPassword()` (code mort) ; dédupliquer `sha256()` (défini 2×) ; bumper logback 1.4.x → 1.5.x.
+- **Nettoyage** : ~~supprimer `bin/` (miroir source mort)~~ ✅ **fait** ; reste `packaging/build-installer.sh`
+  (doublon de jpackage), `generateAdminPassword()` (code mort) ; dédupliquer `sha256()` (défini 2×) ; bumper logback 1.4.x → 1.5.x.
 - **Métriques** (Micrometer + `/metrics`) — nice-to-have, basse priorité pour une appliance LAN.
 
 ---

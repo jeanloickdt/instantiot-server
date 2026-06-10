@@ -358,8 +358,8 @@ backup/                 BackupManager — VACUUM INTO snapshot, restore
 discovery/              MdnsPublisher / DnsSdPublisher — _instantiot._tcp on the LAN
 ```
 
-> The on-disk `bin/` directory is a **stale compiled mirror** — ignore it,
-> `src/main/kotlin` is authoritative (STABILIZATION P2: delete it).
+> (Removed) the on-disk `bin/` directory was a **stale source mirror** (old `.kt`
+> copies, not bytecode) — deleted; `src/main/kotlin` is authoritative.
 
 ---
 
