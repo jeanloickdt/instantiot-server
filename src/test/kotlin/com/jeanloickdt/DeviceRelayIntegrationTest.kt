@@ -111,11 +111,7 @@ class DeviceRelayIntegrationTest {
     @Test
     fun `nominal — handshake then a valid frame is broadcast to the app`() = testApplication {
         val tcpPort = reserveFreePort()
-        application {
-            configureAuth(userRepository)
-            configureAppRelay(projectRepository)
-            startDeviceRelay(deviceRepository, widgetRepository, tcpPort = tcpPort)
-        }
+        wireRelay(tcpPort)
         val ws = createClient { install(WebSockets) }
 
         ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
@@ -140,11 +136,7 @@ class DeviceRelayIntegrationTest {
     @Test
     fun `fragmented — a frame split across two TCP writes is reassembled and broadcast`() = testApplication {
         val tcpPort = reserveFreePort()
-        application {
-            configureAuth(userRepository)
-            configureAppRelay(projectRepository)
-            startDeviceRelay(deviceRepository, widgetRepository, tcpPort = tcpPort)
-        }
+        wireRelay(tcpPort)
         val ws = createClient { install(WebSockets) }
 
         ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
@@ -170,11 +162,7 @@ class DeviceRelayIntegrationTest {
     @Test
     fun `timeout — a silent device after handshake is detected offline`() = testApplication {
         val tcpPort = reserveFreePort()
-        application {
-            configureAuth(userRepository)
-            configureAppRelay(projectRepository)
-            startDeviceRelay(deviceRepository, widgetRepository, tcpPort = tcpPort)
-        }
+        wireRelay(tcpPort)
         val ws = createClient { install(WebSockets) }
 
         ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
@@ -201,6 +189,21 @@ class DeviceRelayIntegrationTest {
     }
 
     // ── helpers ─────────────────────────────────────────────────
+
+    /**
+     * The ONLY place relay wiring lives. The DI migration (global SessionRegistry
+     * → injected instance + the ConnectionRegistry/LastValueCache/PresenceStore
+     * seams) must touch ONLY this function. The 3 test assertions are the
+     * behavioural contract and never change. When DI lands, this builds a
+     * per-test registry instance and the global @AfterTest cleanup disappears.
+     */
+    private fun io.ktor.server.testing.ApplicationTestBuilder.wireRelay(tcpPort: Int) {
+        application {
+            configureAuth(userRepository)
+            configureAppRelay(projectRepository)
+            startDeviceRelay(deviceRepository, widgetRepository, tcpPort = tcpPort)
+        }
+    }
 
     /** Collects WS frames until both a device_online text and a binary frame are seen (or timeout). */
     private suspend fun io.ktor.client.plugins.websocket.DefaultClientWebSocketSession.collectUntilOnlineAndBinary(
