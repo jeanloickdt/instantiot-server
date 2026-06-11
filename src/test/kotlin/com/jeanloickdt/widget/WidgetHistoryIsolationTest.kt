@@ -99,23 +99,19 @@ class WidgetHistoryIsolationTest {
     }
 
     @Test
-    fun `aggregate reads are scoped to their owner`() {
-        // NOTE: buckets are at DISTINCT bucketAt on purpose. The aggregate tier
-        // has a deeper, write-side facet of the same root cause that Fix 1 does
-        // NOT close: the RAM aggregator keys buckets by (widgetId, seriesId,
-        // bucketAt) — owner-blind — and the DB unique index is owner-blind too,
-        // so two users colliding on the SAME (widgetId, bucket) merge into one
-        // bucket / drop on INSERT OR IGNORE. That belongs to Fix 2 (namespace).
-        // This test only pins that the *read* path is owner-scoped.
+    fun `two owners' aggregate buckets coexist at the SAME bucket and read back scoped`() {
+        // SAME widgetId, SAME bucketAt, different owners. The unique index now
+        // includes owner_id, so INSERT OR IGNORE keeps BOTH rows (an owner-blind
+        // index would have dropped the second). Reads stay owner-scoped.
         minAgg.insertBatch(listOf(
             WidgetHistoryAggregateRepository.AggregateInsertRow(widget, "projA", ownerA, null, 10.0, 5.0, 15.0, 3, 60_000),
-            WidgetHistoryAggregateRepository.AggregateInsertRow(widget, "projB", ownerB, null, 88.0, 80.0, 90.0, 4, 120_000),
+            WidgetHistoryAggregateRepository.AggregateInsertRow(widget, "projB", ownerB, null, 88.0, 80.0, 90.0, 4, 60_000),
         ))
 
         val a = minAgg.findByWidgetAndRange(widget, ownerA, 0, 1_000_000)
         val b = minAgg.findByWidgetAndRange(widget, ownerB, 0, 1_000_000)
 
-        assertEquals(listOf(10.0), a.map { it.avgValue }, "A reads only A's bucket")
-        assertEquals(listOf(88.0), b.map { it.avgValue }, "B reads only B's bucket")
+        assertEquals(listOf(10.0), a.map { it.avgValue }, "A reads only A's bucket (not dropped, not B's)")
+        assertEquals(listOf(88.0), b.map { it.avgValue }, "B reads only B's bucket (kept despite same bucket)")
     }
 }

@@ -37,8 +37,8 @@ class TierAggregatorTest {
     private val SIZE = 1000L
     private fun aggregator() = TierAggregator(bucketSizeMs = SIZE)
 
-    private fun collect(agg: TierAggregator, ts: Long, value: Double, widgetId: String = "w", seriesId: String? = null) =
-        agg.collect(widgetId, seriesId, ts, value, projectId = "p", ownerId = "o")
+    private fun collect(agg: TierAggregator, ts: Long, value: Double, widgetId: String = "w", seriesId: String? = null, ownerId: String = "o") =
+        agg.collect(widgetId, seriesId, ts, value, projectId = "p", ownerId = ownerId)
 
     @Test
     fun `bucketAt is floor-aligned to the window start`() {
@@ -87,6 +87,22 @@ class TierAggregatorTest {
         collect(agg, ts = 100, value = 1.0, widgetId = "wA")
         collect(agg, ts = 100, value = 2.0, widgetId = "wB")
         assertEquals(2, agg.size())
+    }
+
+    @Test
+    fun `two owners colliding on the same widget and window do NOT merge`() {
+        // widgetId is global but protocolIds collide across users: A and B both
+        // use "gauge1" and both send a sample in the same window. Owner-blind
+        // keying would have merged them into ONE bucket (mixed avg/min/max,
+        // attributed to A). The owner-aware BucketKey keeps them distinct.
+        val agg = aggregator()
+        collect(agg, ts = 100, value = 10.0, widgetId = "gauge1", ownerId = "A")
+        collect(agg, ts = 100, value = 99.0, widgetId = "gauge1", ownerId = "B")
+        assertEquals(2, agg.size(), "the two owners' samples must not share a bucket")
+
+        val byOwner = agg.extractAllBuckets().associateBy { it.ownerId }
+        assertEquals(10.0, byOwner.getValue("A").avgValue, 1e-9, "A's bucket holds only A's sample")
+        assertEquals(99.0, byOwner.getValue("B").avgValue, 1e-9, "B's bucket holds only B's sample")
     }
 
     @Test

@@ -47,10 +47,17 @@ class TierAggregator(
     val bucketSizeMs: Long
 ) {
     /**
-     * Composite key identifying a bucket in the map. Reduced to a
-     * hashable immutable triple to serve as a `ConcurrentHashMap` key.
+     * Composite key identifying a bucket in the map.
+     *
+     * [ownerId] is part of the key: widgetId is a global identifier but
+     * protocolIds (gauge1, temp…) are chosen locally per user and collide across
+     * tenants. Without ownerId in the key, two users' samples for the same
+     * widgetId in the same window would `computeIfAbsent` onto ONE accumulator —
+     * mixing their avg/min/max and attributing them to whoever created it first.
+     * Keying by owner keeps each tenant's bucket distinct from the start.
      */
     private data class BucketKey(
+        val ownerId: String,
         val widgetId: String,
         val seriesId: String?,
         val bucketAt: Long
@@ -78,7 +85,7 @@ class TierAggregator(
         ownerId: String
     ) {
         val bucketAt = (ts / bucketSizeMs) * bucketSizeMs
-        val key = BucketKey(widgetId, seriesId, bucketAt)
+        val key = BucketKey(ownerId, widgetId, seriesId, bucketAt)
         val bucket = buckets.computeIfAbsent(key) {
             BucketAccumulator(
                 widgetId  = widgetId,

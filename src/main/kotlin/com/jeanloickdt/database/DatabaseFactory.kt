@@ -128,9 +128,20 @@ object DatabaseFactory {
             // INSERT OR IGNORE in SqliteWidgetHistoryAggregateRepository.
             // COALESCE series → '' to match nulls (series absent on the
             // gauge/metric/etc side).
-            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_min  ON widget_history_min  (widget_id, COALESCE(series_id, ''), bucket_at)")
-            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_hour ON widget_history_hour (widget_id, COALESCE(series_id, ''), bucket_at)")
-            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_day  ON widget_history_day  (widget_id, COALESCE(series_id, ''), bucket_at)")
+            //
+            // owner_id is part of the key: widgetId is global but protocolIds
+            // collide across users, so two owners legitimately own a bucket at
+            // the same (widget_id, series, bucket_at). An owner-blind unique
+            // index would make INSERT OR IGNORE silently DROP the second owner's
+            // bucket. The legacy owner-blind indexes are dropped (no-op after the
+            // first boot); the new owner-aware ones use a distinct name so the
+            // CREATE stays idempotent without rebuilding every boot.
+            exec("DROP INDEX IF EXISTS uniq_history_min")
+            exec("DROP INDEX IF EXISTS uniq_history_hour")
+            exec("DROP INDEX IF EXISTS uniq_history_day")
+            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_min_owner  ON widget_history_min  (widget_id, owner_id, COALESCE(series_id, ''), bucket_at)")
+            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_hour_owner ON widget_history_hour (widget_id, owner_id, COALESCE(series_id, ''), bucket_at)")
+            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_day_owner  ON widget_history_day  (widget_id, owner_id, COALESCE(series_id, ''), bucket_at)")
 
             // Time-range read index — same strategy as raw
             exec("CREATE INDEX IF NOT EXISTS idx_history_min_widget_series  ON widget_history_min  (widget_id, series_id, bucket_at)")
