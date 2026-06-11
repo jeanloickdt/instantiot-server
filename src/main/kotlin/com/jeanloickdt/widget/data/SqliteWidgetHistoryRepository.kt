@@ -96,10 +96,10 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     // ============================================================
     // Delete a widget's entire history
     // ============================================================
-    override fun deleteAllByWidget(widgetId: String) {
+    override fun deleteAllByWidget(ownerId: String, widgetId: String) {
         transaction {
             WidgetHistoryTable.deleteWhere {
-                WidgetHistoryTable.widgetId eq widgetId
+                (WidgetHistoryTable.ownerId eq ownerId) and (WidgetHistoryTable.widgetId eq widgetId)
             }
         }
     }

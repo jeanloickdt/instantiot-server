@@ -50,7 +50,9 @@ interface WidgetHistoryNumericRepository {
     fun deleteOlderThan(timestamp: Long)
 
     /** Deletes all numeric history of a widget — DELETE /api/widgets/{id}. */
-    fun deleteAllByWidget(widgetId: String)
+    // Scoped to (ownerId, widgetId): another owner may hold history under the
+    // same widgetId — deleting one widget must not wipe theirs.
+    fun deleteAllByWidget(ownerId: String, widgetId: String)
 
     /** Deletes all numeric history of a project — DELETE /api/projects/{id}. */
     fun deleteAllByProject(projectId: String)

@@ -608,8 +608,8 @@ private suspend fun flushLastValues(
     val dirty = lastValues.drainDirty()
     if (dirty.isEmpty()) return
     widgetRepository.updateLastPayloadBatch(
-        dirty.map { (widgetId, v) ->
-            com.jeanloickdt.widget.domain.LastPayloadUpdate(widgetId, v.payload, v.at)
+        dirty.map { (key, v) ->
+            com.jeanloickdt.widget.domain.LastPayloadUpdate(key.ownerId, key.widgetId, v.payload, v.at)
         }
     )
 }

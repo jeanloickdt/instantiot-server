@@ -25,6 +25,7 @@ import com.jeanloickdt.common.ApiError
 import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.relay.HistoryBuffers
 import com.jeanloickdt.relay.LastValueCache
+import com.jeanloickdt.relay.WidgetKey
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsRequest
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
@@ -87,7 +88,7 @@ fun Route.widgetRoutes(
                 ownerId   = ownerId,
                 type      = body.type
             )
-            if (created) buffers.knownWidgetIds.add(body.id)
+            if (created) buffers.knownWidgetIds.add(WidgetKey(ownerId, body.id))
 
             call.respond(
                 if (created) HttpStatusCode.Created else HttpStatusCode.OK,
@@ -131,7 +132,7 @@ fun Route.widgetRoutes(
                     type      = w.type
                 )
                 if (inserted) {
-                    buffers.knownWidgetIds.add(w.id)
+                    buffers.knownWidgetIds.add(WidgetKey(ownerId, w.id))
                     created++
                 } else {
                     existing++
@@ -154,27 +155,31 @@ fun Route.widgetRoutes(
             val widgetId = call.parameters["id"]
                 ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val widget = widgetRepository.findById(widgetId)
+            // findById is owner-scoped (composite PK) → a null means either no
+            // such widget or it belongs to another owner: 404 either way (never
+            // reveal another owner's widget).
+            val widget = widgetRepository.findById(ownerId, widgetId)
 
-            if (widget == null || widget.ownerId != ownerId) {
+            if (widget == null) {
                 call.respond(HttpStatusCode.NotFound, ApiError("Widget not found"))
                 return@delete
             }
 
-            // delete history first — cascade across all tiers
-            widgetHistoryRepository.deleteAllByWidget(widgetId)
-            widgetHistoryNumericRepository.deleteAllByWidget(widgetId)
-            widgetHistoryMinRepository.deleteAllByWidget(widgetId)
-            widgetHistoryHourRepository.deleteAllByWidget(widgetId)
-            widgetHistoryDayRepository.deleteAllByWidget(widgetId)
-            widgetRepository.delete(widgetId)
+            // delete history first — cascade across all tiers, scoped to this
+            // owner so a colliding widgetId owned by another user is untouched.
+            widgetHistoryRepository.deleteAllByWidget(ownerId, widgetId)
+            widgetHistoryNumericRepository.deleteAllByWidget(ownerId, widgetId)
+            widgetHistoryMinRepository.deleteAllByWidget(ownerId, widgetId)
+            widgetHistoryHourRepository.deleteAllByWidget(ownerId, widgetId)
+            widgetHistoryDayRepository.deleteAllByWidget(ownerId, widgetId)
+            widgetRepository.delete(ownerId, widgetId)
 
             // purge the RAM caches too: without this a deleted widget stays
             // "known" forever (never re-auto-registers on its next frame) and
             // its last value leaks in the cache — confirmed correctness +
             // slow-RAM-leak bug from the resource audit.
-            buffers.knownWidgetIds.remove(widgetId)
-            lastValues.evict(widgetId)
+            buffers.knownWidgetIds.remove(WidgetKey(ownerId, widgetId))
+            lastValues.evict(ownerId, widgetId)
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Widget deleted",
@@ -198,7 +203,7 @@ fun Route.widgetRoutes(
                 .map {
                     // read-through: the RAM cache is fresher than the DB column
                     // (which is coalesced every 5s); DB is the cold-start fallback
-                    val cached = lastValues.get(it.id)
+                    val cached = lastValues.get(it.ownerId, it.id)
                     WidgetStateResponse(
                         widgetId   = it.id,
                         payload    = cached?.payload ?: it.lastPayload,
@@ -237,9 +242,10 @@ fun Route.widgetRoutes(
             val seriesId = call.parameters["seriesId"]?.takeIf { it.isNotBlank() }
             val granularity = (call.parameters["granularity"] ?: "raw").lowercase()
 
-            val widget = widgetRepository.findById(widgetId)
+            // owner-scoped resolve: null = unknown or another owner's → 404
+            val widget = widgetRepository.findById(ownerId, widgetId)
 
-            if (widget == null || widget.ownerId != ownerId) {
+            if (widget == null) {
                 call.respond(HttpStatusCode.NotFound, ApiError("Widget not found"))
                 return@get
             }
@@ -307,9 +313,10 @@ fun Route.widgetRoutes(
             val to = call.parameters["to"]?.toLongOrNull()
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing to"))
 
-            val widget = widgetRepository.findById(widgetId)
+            // owner-scoped resolve: null = unknown or another owner's → 404
+            val widget = widgetRepository.findById(ownerId, widgetId)
 
-            if (widget == null || widget.ownerId != ownerId) {
+            if (widget == null) {
                 call.respond(HttpStatusCode.NotFound, ApiError("Widget not found"))
                 return@get
             }

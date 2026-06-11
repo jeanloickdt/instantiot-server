@@ -58,10 +58,10 @@ class HistoryBuffers {
     // widget_history_numeric.
     val numericHistoryBuffer = ConcurrentLinkedQueue<NumericHistoryEntry>()
 
-    // RAM cache of widgetIds (= protocolId) already known in the DB.
-    // Used by auto-register in DeviceRelay: a widgetId already in
-    // the Set → no DB hit, otherwise INSERT OR IGNORE + add to the Set.
-    // Evicted on widget delete (WidgetRoutes) so a deleted widget
-    // re-registers on its next frame.
-    val knownWidgetIds: MutableSet<WidgetId> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+    // RAM cache of widgets (= (ownerId, protocolId)) already known in the DB.
+    // Keyed by WidgetKey, not widgetId alone: protocolIds collide across users,
+    // so A's gauge1 and B's gauge1 are distinct entries. Used by auto-register
+    // in DeviceRelay (a key already present → no DB hit). Evicted on widget
+    // delete (WidgetRoutes) so a deleted widget re-registers on its next frame.
+    val knownWidgetIds: MutableSet<WidgetKey> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 }

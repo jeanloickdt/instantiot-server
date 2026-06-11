@@ -76,7 +76,9 @@ interface WidgetHistoryAggregateRepository {
     fun deleteOlderThan(timestamp: Long)
 
     /** Cascade DELETE widget. */
-    fun deleteAllByWidget(widgetId: String)
+    // Scoped to (ownerId, widgetId): another owner may hold buckets under the
+    // same widgetId — deleting one widget must not wipe theirs.
+    fun deleteAllByWidget(ownerId: String, widgetId: String)
 
     /** Cascade DELETE project. */
     fun deleteAllByProject(projectId: String)

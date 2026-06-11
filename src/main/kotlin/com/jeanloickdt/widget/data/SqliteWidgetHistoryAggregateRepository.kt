@@ -110,9 +110,9 @@ class SqliteWidgetHistoryAggregateRepository(
         }
     }
 
-    override fun deleteAllByWidget(widgetId: String) {
+    override fun deleteAllByWidget(ownerId: String, widgetId: String) {
         transaction {
-            table.deleteWhere { table.widgetId eq widgetId }
+            table.deleteWhere { (table.ownerId eq ownerId) and (table.widgetId eq widgetId) }
         }
     }
 

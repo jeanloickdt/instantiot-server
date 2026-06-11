@@ -269,7 +269,8 @@ private suspend fun handleDeviceFrame(
         // Auto-register (RARE — gated by the RAM Set, once per widget lifetime,
         // not per frame). Fired off the read path; on DB failure the id is
         // un-marked so it retries next frame (anti cache-poisoning).
-        if (buffers.knownWidgetIds.add(widgetId)) {
+        val widgetKey = WidgetKey(device.ownerId, widgetId)
+        if (buffers.knownWidgetIds.add(widgetKey)) {
             scope.launch(Dispatchers.IO) {
                 try {
                     val created = widgetRepository.registerIfAbsent(
@@ -279,14 +280,14 @@ private suspend fun handleDeviceFrame(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    buffers.knownWidgetIds.remove(widgetId)
+                    buffers.knownWidgetIds.remove(widgetKey)
                     logger.warn("Auto-register failed for widget=$widgetId — ${e.message}")
                 }
             }
         }
 
-        // RAM-only writes
-        lastValues.put(widgetId, payloadBase64, now)
+        // RAM-only writes — keyed by (ownerId, widgetId), never widgetId alone
+        lastValues.put(device.ownerId, widgetId, payloadBase64, now)
         buffers.historyBuffer.add(
             HistoryEntry(widgetId, device.projectId, device.ownerId, payloadBase64, now)
         )

@@ -22,6 +22,15 @@ package com.jeanloickdt.relay
 
 import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * Identity of a widget across the node-local RAM structures (last-value cache,
+ * declared-set). widgetId (= protocolId) is a GLOBAL identifier, but protocolIds
+ * (gauge1, temp…) are chosen locally per user and collide across tenants — so a
+ * widget is identified by (ownerId, widgetId), never widgetId alone, otherwise
+ * two owners' live values stomp the same cache entry (last-writer-wins).
+ */
+data class WidgetKey(val ownerId: String, val widgetId: String)
+
 /** A widget's last received payload (base64) and when it arrived. */
 data class LastValue(val payload: String, val at: Long)
 
@@ -39,41 +48,44 @@ data class LastValue(val payload: String, val at: Long)
  * for a shared implementation (e.g. Redis) without touching any call site.
  */
 interface LastValueCache {
-    fun put(widgetId: String, payload: String, at: Long)
-    fun get(widgetId: String): LastValue?
+    fun put(ownerId: String, widgetId: String, payload: String, at: Long)
+    fun get(ownerId: String, widgetId: String): LastValue?
 
     /**
      * Returns the entries modified since the last drain and clears their dirty
-     * mark — the flush job persists exactly these. Accepted design point: a
+     * mark — the flush job persists exactly these. Keyed by [WidgetKey] so the
+     * flush can upsert `widgets` by (owner_id, id). Accepted design point: a
      * frame landing between the mark-clear and the value read may defer that
      * widget's persistence by one cycle (≤10s worst case); harmless because
      * the live value is RAM and the DB column is cold-start only.
      */
-    fun drainDirty(): Map<String, LastValue>
+    fun drainDirty(): Map<WidgetKey, LastValue>
 
     /** Drops a widget's entry (widget deleted) — RAM-leak/correctness hook. */
-    fun evict(widgetId: String)
+    fun evict(ownerId: String, widgetId: String)
 }
 
 class InMemoryLastValueCache : LastValueCache {
-    private val values = ConcurrentHashMap<String, LastValue>()
-    private val dirty = ConcurrentHashMap.newKeySet<String>()
+    private val values = ConcurrentHashMap<WidgetKey, LastValue>()
+    private val dirty = ConcurrentHashMap.newKeySet<WidgetKey>()
 
-    override fun put(widgetId: String, payload: String, at: Long) {
-        values[widgetId] = LastValue(payload, at)
-        dirty.add(widgetId)
+    override fun put(ownerId: String, widgetId: String, payload: String, at: Long) {
+        val key = WidgetKey(ownerId, widgetId)
+        values[key] = LastValue(payload, at)
+        dirty.add(key)
     }
 
-    override fun get(widgetId: String): LastValue? = values[widgetId]
+    override fun get(ownerId: String, widgetId: String): LastValue? = values[WidgetKey(ownerId, widgetId)]
 
-    override fun drainDirty(): Map<String, LastValue> {
-        val ids = HashSet(dirty)
-        dirty.removeAll(ids)
-        return ids.mapNotNull { id -> values[id]?.let { id to it } }.toMap()
+    override fun drainDirty(): Map<WidgetKey, LastValue> {
+        val keys = HashSet(dirty)
+        dirty.removeAll(keys)
+        return keys.mapNotNull { key -> values[key]?.let { key to it } }.toMap()
     }
 
-    override fun evict(widgetId: String) {
-        values.remove(widgetId)
-        dirty.remove(widgetId)
+    override fun evict(ownerId: String, widgetId: String) {
+        val key = WidgetKey(ownerId, widgetId)
+        values.remove(key)
+        dirty.remove(key)
     }
 }

@@ -39,24 +39,24 @@ interface WidgetRepository {
      */
     fun registerIfAbsent(id: String, projectId: String, ownerId: String, type: String): Boolean
 
-    // Find a widget by its id
-    fun findById(id: String): WidgetRow?
+    // Find a widget by its (ownerId, id) — widgetId alone is ambiguous under the
+    // composite PK (one row per owner for a colliding protocolId).
+    fun findById(ownerId: String, id: String): WidgetRow?
 
     // List all widgets of a project — for GET /api/projects/{id}/states
     fun findAllByProject(projectId: String): List<WidgetRow>
-
-    // Update last_payload + last_seen_at — called by the relay only
-    fun updateLastPayload(id: String, payload: String, timestamp: Long)
 
     /**
      * Batch variant — one transaction for N widgets. Called by the 5s flush
      * job with the LastValueCache's dirty entries (coalesced persistence:
      * N frames per cycle → at most 1 write per changed widget, never per frame).
+     * Each update targets (owner_id, id): an owner-blind WHERE id=? would write
+     * one owner's payload onto every other owner's row sharing that protocolId.
      */
     fun updateLastPayloadBatch(updates: List<LastPayloadUpdate>)
 
-    // Delete a widget + cascade history
-    fun delete(id: String): Boolean
+    // Delete a widget + cascade history — scoped to (ownerId, id)
+    fun delete(ownerId: String, id: String): Boolean
 
     // Delete all widgets of a project — called on DELETE /api/projects/{id}
     fun deleteAllByProject(projectId: String)
@@ -64,6 +64,7 @@ interface WidgetRepository {
 
 /** One coalesced last-payload persistence entry (see [WidgetRepository.updateLastPayloadBatch]). */
 data class LastPayloadUpdate(
+    val ownerId: String,
     val widgetId: String,
     val payload: String,
     val at: Long

@@ -106,6 +106,51 @@ object DatabaseFactory {
             @Suppress("DEPRECATION")
             SchemaUtils.createMissingTablesAndColumns(*tables)
 
+            // ─── widgets PK migration: id → (owner_id, id) ─────
+            // Non-additive (a PK change), so createMissingTablesAndColumns can
+            // NOT do it — it only adds tables/columns. widgetId is a global
+            // identifier but protocolIds (gauge1, temp…) collide across users; a
+            // single-column PK silently no-ops the 2nd owner's registerIfAbsent
+            // (INSERT OR IGNORE), locking them out of their own widget. Detect
+            // the legacy single-column PK and rebuild the table with the
+            // composite PK, copying EVERY row. Idempotent: skipped once the PK is
+            // already composite (every boot after the first; and fresh DBs are
+            // born composite from WidgetTable, so this never runs for them).
+            val widgetPkCols = mutableListOf<String>()
+            runCatching {
+                exec("PRAGMA table_info(widgets)") { rs ->
+                    while (rs.next()) {
+                        if (rs.getInt("pk") > 0) widgetPkCols.add(rs.getString("name"))
+                    }
+                }
+            }
+            if (widgetPkCols == listOf("id")) {
+                log.info("Migrating widgets table to composite PK (owner_id, id)…")
+                // Column types mirror Exposed's own DDL (BIGINT for last_seen_at,
+                // quoted "type") so the next boot's createMissingTablesAndColumns
+                // sees a matching table and leaves it alone.
+                exec(
+                    """
+                    CREATE TABLE widgets_new (
+                        id TEXT NOT NULL,
+                        project_id TEXT NOT NULL,
+                        owner_id TEXT NOT NULL,
+                        "type" TEXT NOT NULL,
+                        last_payload TEXT NULL,
+                        last_seen_at BIGINT NULL,
+                        PRIMARY KEY (owner_id, id)
+                    )
+                    """.trimIndent()
+                )
+                exec(
+                    "INSERT INTO widgets_new (id, project_id, owner_id, \"type\", last_payload, last_seen_at) " +
+                        "SELECT id, project_id, owner_id, \"type\", last_payload, last_seen_at FROM widgets"
+                )
+                exec("DROP TABLE widgets")
+                exec("ALTER TABLE widgets_new RENAME TO widgets")
+                log.info("widgets table migrated to composite PK (owner_id, id)")
+            }
+
             // ─── Legacy migrations (devices) ──────────────────
             // Kept for DBs that were migrated manually back when
             // `SchemaUtils.create()` was used. No-op on new installs

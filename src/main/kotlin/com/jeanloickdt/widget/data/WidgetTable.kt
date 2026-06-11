@@ -29,5 +29,12 @@ object WidgetTable : Table("widgets") {
     val type        = text("type")                     // "display" | "command" — for widget_history
     val lastPayload = text("last_payload").nullable()  // raw base64 PAYLOAD — written by relay only
     val lastSeenAt  = long("last_seen_at").nullable()  // timestamp of last ESP frame — written by relay
-    override val primaryKey = PrimaryKey(id)
+
+    // Composite PK (owner_id, id): widgetId is global but protocolIds collide
+    // across users. With a single-column PK, the 2nd owner registering "gauge1"
+    // is a silent INSERT-OR-IGNORE no-op → they never get a row, get locked out
+    // (404 on their own widget) while the 1st owner's reads spill the 2nd's data.
+    // Keying on (owner_id, id) gives each tenant their own row. Migrating an
+    // existing single-column-PK DB to this is non-additive — see DatabaseFactory.
+    override val primaryKey = PrimaryKey(ownerId, id)
 }

@@ -75,10 +75,10 @@ class SqliteWidgetHistoryNumericRepository : WidgetHistoryNumericRepository {
         }
     }
 
-    override fun deleteAllByWidget(widgetId: String) {
+    override fun deleteAllByWidget(ownerId: String, widgetId: String) {
         transaction {
             WidgetHistoryNumericTable.deleteWhere {
-                WidgetHistoryNumericTable.widgetId eq widgetId
+                (WidgetHistoryNumericTable.ownerId eq ownerId) and (WidgetHistoryNumericTable.widgetId eq widgetId)
             }
         }
     }

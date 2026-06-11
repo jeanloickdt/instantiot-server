@@ -379,7 +379,7 @@ class RoutesIntegrationTest {
     @Test
     fun `widget history read does not leak another owner's samples under a colliding widgetId`() = testApplication {
         installTestApp()
-        val (_, tokenA) = createUser("alice", "password1")
+        val (aliceOwnerId, tokenA) = createUser("alice", "password1")
 
         // A owns a project and registers the (collision-prone) widget gauge1
         val projA = jsonOf(client.post("/api/projects") {
@@ -394,9 +394,7 @@ class RoutesIntegrationTest {
         }
 
         // Two users' samples land in the numeric table under the SAME widgetId,
-        // exactly as the relay would write them (ownerId carried per row). A's
-        // real owner id comes from the widget row it just registered.
-        val aliceOwnerId = widgetRepository.findById("gauge1")!!.ownerId
+        // exactly as the relay would write them (ownerId carried per row).
         widgetHistoryNumericRepository.insertBatch(listOf(
             com.jeanloickdt.widget.domain.WidgetHistoryNumericRow(0, "gauge1", projA, aliceOwnerId, null, 1.0, 100),
             com.jeanloickdt.widget.domain.WidgetHistoryNumericRow(0, "gauge1", "projB", "u-bob", null, 99.0, 150),

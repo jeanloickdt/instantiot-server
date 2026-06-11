@@ -73,13 +73,13 @@ class SqliteWidgetRepository : WidgetRepository {
     }
 
     // ============================================================
-    // Find a widget by its id
+    // Find a widget by its (ownerId, id) — composite PK
     // ============================================================
-    override fun findById(id: String): WidgetRow? {
+    override fun findById(ownerId: String, id: String): WidgetRow? {
         return transaction {
             WidgetTable
                 .selectAll()
-                .where { WidgetTable.id eq id }
+                .where { (WidgetTable.ownerId eq ownerId) and (WidgetTable.id eq id) }
                 .singleOrNull()
                 ?.toWidgetRow()
         }
@@ -97,25 +97,15 @@ class SqliteWidgetRepository : WidgetRepository {
         }
     }
 
-    // ============================================================
-    // Update last_payload + last_seen_at — relay only
-    // ============================================================
-    override fun updateLastPayload(id: String, payload: String, timestamp: Long) {
-        transaction {
-            WidgetTable.update({ WidgetTable.id eq id }) {
-                it[WidgetTable.lastPayload] = payload
-                it[WidgetTable.lastSeenAt]  = timestamp
-            }
-        }
-    }
-
     // Coalesced persistence: one transaction per 5s cycle, at most one UPDATE
     // per changed widget (instead of one DB write per frame on the read path).
+    // Scoped to (owner_id, id): an owner-blind WHERE id=? would stamp one
+    // owner's payload onto every other owner's row sharing that protocolId.
     override fun updateLastPayloadBatch(updates: List<com.jeanloickdt.widget.domain.LastPayloadUpdate>) {
         if (updates.isEmpty()) return
         transaction {
             updates.forEach { u ->
-                WidgetTable.update({ WidgetTable.id eq u.widgetId }) {
+                WidgetTable.update({ (WidgetTable.ownerId eq u.ownerId) and (WidgetTable.id eq u.widgetId) }) {
                     it[WidgetTable.lastPayload] = u.payload
                     it[WidgetTable.lastSeenAt]  = u.at
                 }
@@ -124,11 +114,11 @@ class SqliteWidgetRepository : WidgetRepository {
     }
 
     // ============================================================
-    // Delete a widget
+    // Delete a widget — scoped to (ownerId, id)
     // ============================================================
-    override fun delete(id: String): Boolean {
+    override fun delete(ownerId: String, id: String): Boolean {
         return transaction {
-            WidgetTable.deleteWhere { WidgetTable.id eq id } > 0
+            WidgetTable.deleteWhere { (WidgetTable.ownerId eq ownerId) and (WidgetTable.id eq id) } > 0
         }
     }
 
