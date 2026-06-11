@@ -24,7 +24,6 @@ import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceRow
 import com.jeanloickdt.widget.data.HistoryAggregators
-import com.jeanloickdt.widget.domain.WidgetRepository
 import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
@@ -96,7 +95,6 @@ internal const val TYPE_HEARTBEAT: UByte = 0xFEu
  */
 fun Application.startDeviceRelay(
     deviceRepository: DeviceRepository,
-    widgetRepository: WidgetRepository,
     connections: ConnectionRegistry,
     buffers: HistoryBuffers,
     lastValues: LastValueCache,
@@ -130,7 +128,6 @@ fun Application.startDeviceRelay(
                     handleDeviceConnection(
                         socket           = socket,
                         deviceRepository = deviceRepository,
-                        widgetRepository = widgetRepository,
                         connections      = connections,
                         buffers          = buffers,
                         lastValues       = lastValues,
@@ -160,7 +157,6 @@ fun Application.startDeviceRelay(
 private suspend fun handleDeviceConnection(
     socket: Socket,
     deviceRepository: DeviceRepository,
-    widgetRepository: WidgetRepository,
     connections: ConnectionRegistry,
     buffers: HistoryBuffers,
     lastValues: LastValueCache,
@@ -209,7 +205,7 @@ private suspend fun handleDeviceConnection(
                 continue
             }
             // inline + sequential: one bad frame is isolated inside handleDeviceFrame
-            handleDeviceFrame(frame, device, widgetRepository, connections, buffers, lastValues, scope)
+            handleDeviceFrame(frame, device, connections, buffers, lastValues)
         }
     } catch (e: CancellationException) {
         throw e
@@ -250,11 +246,9 @@ private suspend fun handleDeviceConnection(
 private suspend fun handleDeviceFrame(
     frameBytes: ByteArray,
     device: DeviceRow,
-    widgetRepository: WidgetRepository,
     connections: ConnectionRegistry,
     buffers: HistoryBuffers,
-    lastValues: LastValueCache,
-    scope: CoroutineScope
+    lastValues: LastValueCache
 ) {
     try {
         // Heartbeat (0xFE): byte reception already reset the read timeout — drop.
@@ -266,25 +260,15 @@ private suspend fun handleDeviceFrame(
         val payloadBase64 = FrameParser.encodePayloadToBase64(payloadBytes)
         val now           = System.currentTimeMillis()
 
-        // Auto-register (RARE — gated by the RAM Set, once per widget lifetime,
-        // not per frame). Fired off the read path; on DB failure the id is
-        // un-marked so it retries next frame (anti cache-poisoning).
-        val widgetKey = WidgetKey(device.ownerId, widgetId)
-        if (buffers.knownWidgetIds.add(widgetKey)) {
-            scope.launch(Dispatchers.IO) {
-                try {
-                    val created = widgetRepository.registerIfAbsent(
-                        id = widgetId, projectId = device.projectId, ownerId = device.ownerId, type = "auto"
-                    )
-                    if (created) logger.info("Auto-registered widget=$widgetId project=${device.projectId}")
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    buffers.knownWidgetIds.remove(widgetKey)
-                    logger.warn("Auto-register failed for widget=$widgetId — ${e.message}")
-                }
-            }
-        }
+        // Strict model: the server only serves DECLARED widgets. The app is the
+        // single source of truth — it declares widgets (POST /widgets, which the
+        // cache-aware repo adds to knownWidgetIds), and knownWidgetIds is seeded
+        // from the table at boot. A frame for an UNDECLARED (owner, widget) has
+        // no recipient: no widget on a dashboard awaits it, no row should store
+        // it (a firmware typo, or a widget removed from the dash but left in the
+        // device code). It is noise — drop it before any persistence,
+        // aggregation or live relay. (Replaces the old auto-register.)
+        if (WidgetKey(device.ownerId, widgetId) !in buffers.knownWidgetIds) return
 
         // RAM-only writes — keyed by (ownerId, widgetId), never widgetId alone
         lastValues.put(device.ownerId, widgetId, payloadBase64, now)

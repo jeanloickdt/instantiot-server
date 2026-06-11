@@ -74,6 +74,7 @@ class DeviceRelayIntegrationTest {
     private val deviceToken = "esp-token-abcdef-123456"
     private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
     private lateinit var jwt: String
+    private lateinit var ownerId: String
     private lateinit var projectId: String
     private lateinit var deviceId: String
     private val widgetId = "w1"
@@ -98,6 +99,11 @@ class DeviceRelayIntegrationTest {
             deviceType = DeviceType.ESP32,
             connectivity = DeviceConnectivity.WIFI
         )
+        // Declare the widget the device frames target. Under the strict model the
+        // relay only serves declared widgets (the app declares them); an
+        // undeclared frame is dropped. wireRelay seeds the cache from this row.
+        widgetRepository.register(widgetId, projectId, userId, "gauge")
+        ownerId = userId
     }
 
     @Test
@@ -121,6 +127,44 @@ class DeviceRelayIntegrationTest {
                 assertTrue(texts.any { it.contains("device_online") }, "app must receive device_online")
                 assertTrue(binary != null, "app must receive the relayed binary frame")
                 assertContentEquals(frame, binary!!)
+            }
+        }
+    }
+
+    @Test
+    fun `strict model — a frame for an UNDECLARED widget is dropped, not broadcast`() = testApplication {
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort)
+        val ws = createClient { install(WebSockets) }
+
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+
+            // a frame addressed to a widget the app never declared (not in the DB,
+            // not in knownWidgetIds) — noise the strict model must drop.
+            val ghostFrame = deviceFrame("ghost-undeclared", TYPE_GAUGE, EV_SETVALUE, floatLE(7.0f))
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.getOutputStream().apply {
+                    write(handshake(deviceToken))
+                    write(ghostFrame)
+                    flush()
+                }
+                // Bounded collection: device_online still arrives (the device
+                // connected fine), but the undeclared frame must NOT be relayed.
+                val texts = mutableListOf<String>()
+                var binary: ByteArray? = null
+                withTimeoutOrNull(2000) {
+                    while (true) {
+                        when (val f = incoming.receive()) {
+                            is Frame.Text -> texts += f.readText()
+                            is Frame.Binary -> binary = f.readBytes()
+                            else -> {}
+                        }
+                    }
+                }
+                assertTrue(texts.any { it.contains("device_online") }, "the device still connects")
+                assertTrue(binary == null, "a frame for an undeclared widget must be dropped, never broadcast")
             }
         }
     }
@@ -261,11 +305,16 @@ class DeviceRelayIntegrationTest {
         val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
         val presence    = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
         val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
+        // Strict model: the relay serves only declared widgets — seed the
+        // declared-set from the DB at start, exactly like module() at boot.
+        widgetRepository.findAll().forEach {
+            buffers.knownWidgetIds.add(com.jeanloickdt.relay.WidgetKey(it.ownerId, it.id))
+        }
         application {
             configureAuth(userRepository, tokenService)
             configureAppRelay(projectRepository, connections, events)
             startDeviceRelay(
-                deviceRepository, widgetRepository,
+                deviceRepository,
                 connections, buffers, lastValues, presence, events,
                 tcpPort = tcpPort
             )

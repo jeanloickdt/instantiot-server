@@ -356,7 +356,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // Each ESP connection in its own IO coroutine
     // ============================================================
     startDeviceRelay(
-        deviceRepository, cacheAwareWidgets,
+        deviceRepository,
         connections = connections,
         buffers     = buffers,
         lastValues  = lastValues,
