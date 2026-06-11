@@ -150,7 +150,11 @@ val widgetHistoryDayRepository: WidgetHistoryAggregateRepository  = SqliteWidget
 
 private val logger = LoggerFactory.getLogger("Application")
 
-fun Application.module() {
+// dbFile is injectable so tests boot the REAL module against a throwaway
+// database instead of the production ~/.instantiot/instantiot.db. Production
+// (main → Application::module) uses the default. Without this a test booting
+// module() would migrate / mark-offline / write the user's real DB.
+fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile) {
 
     // ============================================================
     // Global plugins
@@ -192,7 +196,7 @@ fun Application.module() {
     // DB as a WAL-complete safety net, then atomically swaps in the backup.
     // No-op when nothing is pending.
     // ============================================================
-    com.jeanloickdt.backup.BackupManager.applyPendingRestore()
+    com.jeanloickdt.backup.BackupManager.applyPendingRestore(dbFile)
 
     // ============================================================
     // Database — init SQLite + WAL + table creation
@@ -207,7 +211,8 @@ fun Application.module() {
         WidgetHistoryNumericTable,
         WidgetHistoryMinTable,
         WidgetHistoryHourTable,
-        WidgetHistoryDayTable
+        WidgetHistoryDayTable,
+        dbFile = dbFile
     )
 
     // Reset stale online state: if the server was killed abruptly
@@ -486,7 +491,7 @@ fun Application.module() {
         delay(6L * 3600_000L)
         while (true) {
             try {
-                DatabaseFactory.incrementalVacuum()
+                DatabaseFactory.incrementalVacuum(dbFile)
                 bgLog.info("Weekly incremental vacuum completed — freelist pages returned to the OS")
             } catch (e: Exception) {
                 bgLog.error("Weekly incremental vacuum failed — retrying next week", e)

@@ -22,6 +22,7 @@ package com.jeanloickdt
 import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.server.testing.*
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -29,8 +30,13 @@ class ApplicationTest {
 
     @Test
     fun testRoot() = testApplication {
+        // Boot the REAL module(), but against a throwaway DB — NEVER the user's
+        // production ~/.instantiot/instantiot.db. module() runs migrations, marks
+        // devices offline, etc.; without an injected dbFile this test would
+        // mutate (and could one day delete) real data.
+        val tmpDb = File.createTempFile("instantiot-apptest-", ".db").apply { deleteOnExit() }
         application {
-            module()
+            module(dbFile = tmpDb)
         }
         client.get("/").apply {
             assertEquals(HttpStatusCode.OK, status)
