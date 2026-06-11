@@ -40,6 +40,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.get
 import io.ktor.client.request.patch
+import io.ktor.client.request.delete
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -259,6 +260,42 @@ class RoutesIntegrationTest {
             header(HttpHeaders.Authorization, "Bearer $tokenB")
         }
         assertEquals(HttpStatusCode.NotFound, intruderGet.status)
+    }
+
+    @Test
+    fun `deleting a project cascades its devices away`() = testApplication {
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+
+        val project = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Alice project"}""")
+        }
+        val projectId = jsonOf(project.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        client.post("/api/devices") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"esp-to-purge","projectId":"$projectId","deviceType":"ESP32","connectivity":"WIFI"}""")
+        }
+        // device exists before the delete
+        assertTrue(client.get("/api/devices") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }.bodyAsText().contains("esp-to-purge"))
+
+        val del = client.delete("/api/projects/$projectId") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        assertEquals(HttpStatusCode.OK, del.status)
+
+        // project gone (404) and the device cascaded away (atomic Step-3 delete)
+        assertEquals(HttpStatusCode.NotFound, client.get("/api/projects/$projectId") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }.status)
+        assertFalse(client.get("/api/devices") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }.bodyAsText().contains("esp-to-purge"), "the project's device must be cascade-deleted")
     }
 
     @Test

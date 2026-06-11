@@ -41,6 +41,7 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import org.jetbrains.exposed.sql.transactions.transaction
 
 fun Route.projectRoutes(
     projectRepository: ProjectRepository,
@@ -248,16 +249,26 @@ fun Route.projectRoutes(
                 // the session from ConnectionRegistry automatically
             }
 
-            // ─── Step 3 : cascade delete DB ───────────────────────────
+            // ─── Step 3 : cascade delete DB (atomic) ──────────────────
             // order : history (all tiers) → widgets → devices → project
-            widgetHistoryRepository.deleteAllByProject(projectId)
-            widgetHistoryNumericRepository.deleteAllByProject(projectId)
-            widgetHistoryMinRepository.deleteAllByProject(projectId)
-            widgetHistoryHourRepository.deleteAllByProject(projectId)
-            widgetHistoryDayRepository.deleteAllByProject(projectId)
-            widgetRepository.deleteAllByProject(projectId)
-            deviceRepository.deleteAllByProject(projectId)
-            projectRepository.delete(projectId)
+            //
+            // One transaction wraps all 8 deletes: Exposed joins each repo's
+            // own transaction{} into this outer one, so the cascade is
+            // all-or-nothing. Without it, a crash mid-cascade (e.g. after the
+            // history but before the widgets) would leave a project that still
+            // exists — it is deleted last — but has lost part of its data. The
+            // kicks above stay outside on purpose: they are I/O effects
+            // (socket/WS close), not DB, and must not be rolled back.
+            transaction {
+                widgetHistoryRepository.deleteAllByProject(projectId)
+                widgetHistoryNumericRepository.deleteAllByProject(projectId)
+                widgetHistoryMinRepository.deleteAllByProject(projectId)
+                widgetHistoryHourRepository.deleteAllByProject(projectId)
+                widgetHistoryDayRepository.deleteAllByProject(projectId)
+                widgetRepository.deleteAllByProject(projectId)
+                deviceRepository.deleteAllByProject(projectId)
+                projectRepository.delete(projectId)
+            }
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Project deleted",
