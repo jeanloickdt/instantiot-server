@@ -27,11 +27,14 @@ package com.jeanloickdt.widget.domain
 interface WidgetHistoryAggregateRepository {
 
     /**
-     * Reads the buckets for a widget and a time window.
+     * Reads the buckets for a widget and a time window, scoped to [ownerId].
+     * owner_id is in the query (not just the route gate) because widgetId is a
+     * global PK while protocolIds collide across users — see the numeric repo.
      * `seriesId` null → all series (otherwise filters on the series).
      */
     fun findByWidgetAndRange(
         widgetId: String,
+        ownerId: String,
         from: Long,
         to: Long,
         seriesId: String? = null

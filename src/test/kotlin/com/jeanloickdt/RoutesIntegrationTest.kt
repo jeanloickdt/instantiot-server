@@ -343,6 +343,40 @@ class RoutesIntegrationTest {
     }
 
     @Test
+    fun `widget history read does not leak another owner's samples under a colliding widgetId`() = testApplication {
+        installTestApp()
+        val (_, tokenA) = createUser("alice", "password1")
+
+        // A owns a project and registers the (collision-prone) widget gauge1
+        val projA = jsonOf(client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Alice project"}""")
+        }.bodyAsText())["id"]!!.jsonPrimitive.content
+        client.post("/api/projects/$projA/widgets") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"id":"gauge1","type":"gauge"}""")
+        }
+
+        // Two users' samples land in the numeric table under the SAME widgetId,
+        // exactly as the relay would write them (ownerId carried per row). A's
+        // real owner id comes from the widget row it just registered.
+        val aliceOwnerId = widgetRepository.findById("gauge1")!!.ownerId
+        widgetHistoryNumericRepository.insertBatch(listOf(
+            com.jeanloickdt.widget.domain.WidgetHistoryNumericRow(0, "gauge1", projA, aliceOwnerId, null, 1.0, 100),
+            com.jeanloickdt.widget.domain.WidgetHistoryNumericRow(0, "gauge1", "projB", "u-bob", null, 99.0, 150),
+        ))
+
+        // A reads gauge1 history → must see ONLY its own sample (1.0), never B's 99.0
+        val body = client.get("/api/widgets/gauge1/history?granularity=raw&from=0&to=1000") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+        }.bodyAsText()
+        assertTrue(body.contains("1.0"), "A sees its own sample")
+        assertFalse(body.contains("99.0"), "A must NOT see B's sample under the colliding widgetId")
+    }
+
+    @Test
     fun `a user cannot create a device in another user's project`() = testApplication {
         installTestApp()
         val (_, tokenA) = createUser("alice", "password1")

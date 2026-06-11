@@ -26,13 +26,21 @@ interface WidgetHistoryNumericRepository {
     fun insertBatch(entries: List<WidgetHistoryNumericRow>)
 
     /**
-     * Numeric history by time range.
+     * Numeric history by time range, scoped to [ownerId].
+     *
+     * [ownerId] is part of the query, not just a route gate: widgetId is a
+     * GLOBAL primary key but protocolIds (gauge1, temp…) are chosen locally per
+     * user and collide across tenants, so two users can hold rows under the same
+     * widgetId. Filtering on owner_id (the column the history tables carry for
+     * exactly this) guarantees each user reads only their own samples.
+     *
      * If [seriesId] is `null`, returns **all** samples of the widget
      * (all series combined for a chart, or the single series for simple
      * widgets). If non-null, filters on that specific series.
      */
     fun findByWidgetAndRange(
         widgetId: String,
+        ownerId: String,
         from: Long,
         to: Long,
         seriesId: String? = null

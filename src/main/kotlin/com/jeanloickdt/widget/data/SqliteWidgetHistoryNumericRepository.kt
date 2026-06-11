@@ -46,6 +46,7 @@ class SqliteWidgetHistoryNumericRepository : WidgetHistoryNumericRepository {
 
     override fun findByWidgetAndRange(
         widgetId: String,
+        ownerId: String,
         from: Long,
         to: Long,
         seriesId: String?
@@ -55,6 +56,7 @@ class SqliteWidgetHistoryNumericRepository : WidgetHistoryNumericRepository {
                 .selectAll()
                 .where {
                     val base = (WidgetHistoryNumericTable.widgetId eq widgetId) and
+                            (WidgetHistoryNumericTable.ownerId eq ownerId) and
                             (WidgetHistoryNumericTable.recordedAt greaterEq from) and
                             (WidgetHistoryNumericTable.recordedAt lessEq to)
                     if (seriesId != null) base and (WidgetHistoryNumericTable.seriesId eq seriesId)

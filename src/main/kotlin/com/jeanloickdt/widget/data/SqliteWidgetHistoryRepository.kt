@@ -66,12 +66,13 @@ class SqliteWidgetHistoryRepository : WidgetHistoryRepository {
     // History by time range
     // Index (widget_id, recorded_at) — fast query
     // ============================================================
-    override fun findByWidgetAndRange(widgetId: String, from: Long, to: Long): List<WidgetHistoryRow> {
+    override fun findByWidgetAndRange(widgetId: String, ownerId: String, from: Long, to: Long): List<WidgetHistoryRow> {
         return transaction {
             WidgetHistoryTable
                 .selectAll()
                 .where {
                     (WidgetHistoryTable.widgetId eq widgetId) and
+                            (WidgetHistoryTable.ownerId eq ownerId) and
                             (WidgetHistoryTable.recordedAt greaterEq from) and
                             (WidgetHistoryTable.recordedAt lessEq to)
                 }

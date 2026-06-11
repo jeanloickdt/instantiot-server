@@ -30,8 +30,11 @@ interface WidgetHistoryRepository {
     // More performant than N individual inserts
     fun insertBatch(entries: List<WidgetHistoryRow>)
 
-    // History by time range — for GET /api/widgets/{id}/history
-    fun findByWidgetAndRange(widgetId: String, from: Long, to: Long): List<WidgetHistoryRow>
+    // History by time range — for GET /api/widgets/{id}/history-raw.
+    // Scoped to ownerId: widgetId is a global PK but protocolIds collide across
+    // users, so owner_id (carried by the table for isolation) must be in the
+    // query, not only the route gate.
+    fun findByWidgetAndRange(widgetId: String, ownerId: String, from: Long, to: Long): List<WidgetHistoryRow>
 
     // Cleanup — delete rows older than 24h
     // Called automatically at startup and every hour

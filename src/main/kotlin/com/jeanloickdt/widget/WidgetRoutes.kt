@@ -228,7 +228,7 @@ fun Route.widgetRoutes(
 
             val points: List<WidgetHistoryPointResponse> = when (granularity) {
                 "raw" -> widgetHistoryNumericRepository
-                    .findByWidgetAndRange(widgetId, from, to, seriesId)
+                    .findByWidgetAndRange(widgetId, ownerId, from, to, seriesId)
                     .map {
                         WidgetHistoryPointResponse(
                             t        = it.recordedAt,
@@ -242,7 +242,7 @@ fun Route.widgetRoutes(
                         "hour" -> widgetHistoryHourRepository
                         else   -> widgetHistoryDayRepository
                     }
-                    repo.findByWidgetAndRange(widgetId, from, to, seriesId).map {
+                    repo.findByWidgetAndRange(widgetId, ownerId, from, to, seriesId).map {
                         WidgetHistoryPointResponse(
                             t        = it.bucketAt,
                             y        = it.avgValue,
@@ -296,7 +296,7 @@ fun Route.widgetRoutes(
                 return@get
             }
 
-            val history = widgetHistoryRepository.findByWidgetAndRange(widgetId, from, to)
+            val history = widgetHistoryRepository.findByWidgetAndRange(widgetId, ownerId, from, to)
                 .map {
                     WidgetHistoryResponse(
                         payload    = it.payload,

@@ -83,6 +83,7 @@ class SqliteWidgetHistoryAggregateRepository(
 
     override fun findByWidgetAndRange(
         widgetId: String,
+        ownerId: String,
         from: Long,
         to: Long,
         seriesId: String?
@@ -92,6 +93,7 @@ class SqliteWidgetHistoryAggregateRepository(
                 .selectAll()
                 .where {
                     val base = (table.widgetId eq widgetId) and
+                            (table.ownerId eq ownerId) and
                             (table.bucketAt greaterEq from) and
                             (table.bucketAt lessEq to)
                     if (seriesId != null) base and (table.seriesId eq seriesId)
