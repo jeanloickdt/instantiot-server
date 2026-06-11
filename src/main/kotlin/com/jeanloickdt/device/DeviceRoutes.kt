@@ -30,6 +30,7 @@ import com.jeanloickdt.device.domain.isValidDeviceCombination
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
 import com.jeanloickdt.device.domain.UpdateDeviceNameRequest
+import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
 import com.jeanloickdt.relay.ConnectionRegistry
@@ -44,6 +45,7 @@ import java.util.UUID
 
 fun Route.deviceRoutes(
     deviceRepository: DeviceRepository,
+    projectRepository: ProjectRepository,
     connections: ConnectionRegistry,
     events: ControlEventBroadcaster
 ) {
@@ -109,6 +111,28 @@ fun Route.deviceRoutes(
 
             val body = call.receive<CreateDeviceRequest>()
 
+            // ── Name validation ───────────────────────────────────
+            // Same bounds as PATCH /name — the creation path must not be a
+            // back door for empty or pathologically long names.
+            val name = body.name.trim()
+            if (name.length < 2 || name.length > 64) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiError("Name must be 2-64 characters")
+                )
+            }
+
+            // ── Project ownership ─────────────────────────────────
+            // The device is created with projectId = body.projectId, and the
+            // relay routes frames by projectId — so a device dropped into another
+            // user's project would leak/cross its data. Every other handler gates
+            // on ownership (findById → ownerId != → 404); the creation path must
+            // too. 404 (not 403) so we never reveal someone else's project exists.
+            val project = projectRepository.findById(body.projectId)
+            if (project == null || project.ownerId != ownerId) {
+                return@post call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
+            }
+
             // ── Enum validation ───────────────────────────────────
             val deviceType = DeviceType.fromString(body.deviceType)
                 ?: return@post call.respond(HttpStatusCode.BadRequest, mapOf(
@@ -137,7 +161,7 @@ fun Route.deviceRoutes(
             val tokenHash = sha256(token)
 
             val id = deviceRepository.create(
-                name         = body.name,
+                name         = name,
                 projectId    = body.projectId,
                 ownerId      = ownerId,
                 tokenHash    = tokenHash,
@@ -148,7 +172,7 @@ fun Route.deviceRoutes(
             // returns the plaintext token — only once
             call.respond(HttpStatusCode.Created, CreateDeviceResponse(
                 id           = id,
-                name         = body.name,
+                name         = name,
                 projectId    = body.projectId,
                 token        = token,
                 deviceType   = deviceType.name,

@@ -128,7 +128,7 @@ class RoutesIntegrationTest {
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
                     connections, events
                 )
-                deviceRoutes(deviceRepository, connections, events)
+                deviceRoutes(deviceRepository, projectRepository, connections, events)
                 widgetRoutes(
                     widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
@@ -259,6 +259,86 @@ class RoutesIntegrationTest {
             header(HttpHeaders.Authorization, "Bearer $tokenB")
         }
         assertEquals(HttpStatusCode.NotFound, intruderGet.status)
+    }
+
+    @Test
+    fun `a user cannot create a device in another user's project`() = testApplication {
+        installTestApp()
+        val (_, tokenA) = createUser("alice", "password1")
+        val (_, tokenB) = createUser("bob", "password2")
+
+        // Bob owns a project
+        val bobProject = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $tokenB")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Bob project"}""")
+        }
+        assertEquals(HttpStatusCode.Created, bobProject.status)
+        val bobProjectId = jsonOf(bobProject.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        // Alice tries to drop a device into Bob's project → 404, nothing created
+        val intrude = client.post("/api/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"evil","projectId":"$bobProjectId","deviceType":"ESP32","connectivity":"WIFI"}""")
+        }
+        assertEquals(HttpStatusCode.NotFound, intrude.status)
+
+        // The device must not exist in Bob's project (no phantom injected)
+        val bobDevices = client.get("/api/projects/$bobProjectId/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenB")
+        }
+        assertEquals(HttpStatusCode.OK, bobDevices.status)
+        assertFalse(bobDevices.bodyAsText().contains("evil"), "no device may be injected into another user's project")
+    }
+
+    @Test
+    fun `a user can create a device in their own project`() = testApplication {
+        installTestApp()
+        val (_, tokenA) = createUser("alice", "password1")
+
+        val project = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Alice project"}""")
+        }
+        val projectId = jsonOf(project.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val created = client.post("/api/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"my-esp","projectId":"$projectId","deviceType":"ESP32","connectivity":"WIFI"}""")
+        }
+        assertEquals(HttpStatusCode.Created, created.status)
+        val json = jsonOf(created.bodyAsText())
+        assertEquals(projectId, json["projectId"]!!.jsonPrimitive.content)
+        assertEquals("my-esp", json["name"]!!.jsonPrimitive.content)
+        assertTrue(json["token"]!!.jsonPrimitive.content.isNotBlank(), "plaintext token returned once")
+
+        // and it shows up in the owner's project device list
+        val list = client.get("/api/projects/$projectId/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+        }
+        assertTrue(list.bodyAsText().contains("my-esp"))
+    }
+
+    @Test
+    fun `creating a device with a blank name is rejected`() = testApplication {
+        installTestApp()
+        val (_, tokenA) = createUser("alice", "password1")
+        val project = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Alice project"}""")
+        }
+        val projectId = jsonOf(project.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val res = client.post("/api/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"  ","projectId":"$projectId","deviceType":"ESP32","connectivity":"WIFI"}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, res.status)
     }
 
     @Test

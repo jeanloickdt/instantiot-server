@@ -529,7 +529,7 @@ fun Application.module() {
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
             connections, controlEvents
         )
-        deviceRoutes(deviceRepository, connections, controlEvents)
+        deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
         widgetRoutes(
             widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
