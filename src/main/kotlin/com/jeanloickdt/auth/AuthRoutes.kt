@@ -594,7 +594,7 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
         call.respond(HttpStatusCode.OK, BackupListResponse(backups))
     }
 
-    // ── Restore (restart required) ─────────────────────────
+    // ── Restore (staged, applied at next boot) ─────────────
     post("/api/admin/backup/restore") {
         call.requireAdmin(userRepository) ?: return@post
         val body = call.receive<RestoreBackupRequest>()
@@ -604,17 +604,18 @@ fun Route.adminBackupRoute(userRepository: UserRepository) {
                 ApiError("filename required")
             )
         }
-        val result = com.jeanloickdt.backup.BackupManager.restore(body.filename)
-        if (result == null) {
+        // Staged, not swapped live: the actual replacement + WAL-complete safety
+        // net happen at the next boot, before the connection pool opens.
+        val staged = com.jeanloickdt.backup.BackupManager.stageRestore(body.filename)
+        if (staged == null) {
             return@post call.respond(
                 HttpStatusCode.NotFound,
-                ApiError("Backup not found or restore failed — see server logs")
+                ApiError("Backup not found or failed the integrity check — see server logs")
             )
         }
-        val (_, safetyNet) = result
         call.respond(HttpStatusCode.OK, RestoreBackupResponse(
-            message = "Backup restored. Restart the server now to load the restored DB.",
-            safetyNetFilename = safetyNet.name
+            message = "Restore staged — restart the server to apply it. " +
+                "The current database is saved as a safety net during the restart."
         ))
     }
 }

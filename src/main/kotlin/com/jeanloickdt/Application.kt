@@ -184,6 +184,17 @@ fun Application.module() {
     }
 
     // ============================================================
+    // Pending restore — applied HERE, before the pool opens.
+    //
+    // A restore staged from the admin panel (BackupManager.stageRestore) is
+    // applied at boot rather than swapped under the live pool: with no
+    // connection open yet there is no split-brain. This snapshots the current
+    // DB as a WAL-complete safety net, then atomically swaps in the backup.
+    // No-op when nothing is pending.
+    // ============================================================
+    com.jeanloickdt.backup.BackupManager.applyPendingRestore()
+
+    // ============================================================
     // Database — init SQLite + WAL + table creation
     // Add the tables of new modules here as they are introduced
     // ============================================================

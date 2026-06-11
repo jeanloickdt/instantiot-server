@@ -120,13 +120,22 @@ keeping the newest `backup.retention.count`. Safe while running.
 **Manual snapshot:** admin panel → Backup → *Backup now* (or `POST /api/admin/backup/now`).
 
 **Restore:**
-1. Admin panel → Backup → pick a snapshot → *Restore*.
-   (The current DB is first copied aside as `instantiot.db.before-restore-<ts>` as a safety net.)
-2. **Restart the server** — the restored DB only loads on restart.
+1. Admin panel → Backup → pick a snapshot → *Restore*. This **stages** the
+   restore (validated and queued as `instantiot.db.pending-restore`); the live
+   database is **not** touched yet — swapping it under the running server would
+   leave it in an inconsistent half-state.
+2. **Restart the server** — the swap happens *during boot*, before the database
+   opens. At that point the current DB is first snapshotted aside as
+   `instantiot.db.before-restore-<ts>` (a WAL-complete safety net), then the
+   chosen backup is moved into place.
    ```bash
    systemctl restart instantiot-server     # Linux
    ```
    On desktop, use the tray **Restart**.
+
+> A staged backup that fails its integrity check is refused outright; one that
+> rots between staging and the restart is discarded at boot and the current DB
+> is kept. A restore can never plant a corrupt database.
 
 **Manual restore (offline):** stop the server, copy a `backups/*.db` over
 `~/.instantiot/instantiot.db`, delete the stale `instantiot.db-wal` /

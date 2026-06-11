@@ -171,8 +171,7 @@ data class RestoreBackupRequest(
 
 @Serializable
 data class RestoreBackupResponse(
-    val message: String,             // e.g. "Restart required to load restored DB"
-    val safetyNetFilename: String    // old DB renamed
+    val message: String              // staged; applied (with a safety net) at next boot
 )
 
 // ============================================================

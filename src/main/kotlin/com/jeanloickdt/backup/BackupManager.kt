@@ -42,10 +42,12 @@ import java.util.Locale
  * not block in-progress writes. Output in `~/.instantiot/backups/`
  * under the name `instantiot-YYYY-MM-DD-HHmm.db`.
  *
- * **Restore**: copies the chosen backup in place of `instantiot.db`,
- * keeping the old DB under `.before-restore-XXX` as a safety
- * net. Server restart required (Exposed maintains a connection pool
- * that does not like the file being swapped under it).
+ * **Restore**: two-phase to avoid swapping the DB under the running
+ * Exposed pool. [stageRestore] validates the chosen backup and copies it
+ * aside as `instantiot.db.pending-restore`; [applyPendingRestore] does the
+ * real swap at the next boot — before any connection is open — taking a
+ * WAL-complete safety net (`.before-restore-XXX`) first. Server restart
+ * required to apply.
  *
  * **Lifecycle**: [start] launches a periodic coroutine that snapshots
  * + cleans up according to `ServerConfig.backupIntervalHours`. [stop] cancels.
@@ -128,21 +130,31 @@ object BackupManager {
             ?: emptyList()
     }
 
+    /** Suffix of the staged-restore file, applied at the next boot. */
+    const val PENDING_RESTORE_SUFFIX = ".pending-restore"
+
     /**
-     * Restores a backup in place. Keeps the old DB as a safety net
-     * (`instantiot.db.before-restore-XXX`).
+     * **Stages** a restore for the next boot — does NOT touch the live DB.
      *
-     * **The admin MUST restart the server afterwards so that the
-     * Exposed connection pool reloads the new file.**
+     * Swapping the DB file under the *running* Exposed connection pool leaves the
+     * server split-brained (the open pool still reads the old inode, new
+     * connections the new file) until a restart that was only ever "advisory".
+     * Instead we validate the chosen backup and copy it aside as
+     * `<db>.pending-restore`; [applyPendingRestore] performs the real swap at the
+     * next boot, before any connection is open — no live swap, no split-brain.
      *
-     * @return Pair (newDbFile, safetyNetFile) if OK, null on failure
+     * The admin panel forces a restart right after this returns; the swap +
+     * safety-net happen during that restart.
+     *
+     * @return the staged pending-restore File if accepted, null if the backup is
+     *   missing, escapes [backupDir], or fails the SQLite integrity check.
      */
     @Synchronized
-    fun restore(
+    fun stageRestore(
         filename: String,
         targetDb: File = ServerConfig.dbFile,
         backupDir: File = ServerConfig.backupDir
-    ): Pair<File, File>? {
+    ): File? {
         val src = File(backupDir, filename)
         if (!src.exists() || !src.isFile) {
             log.warn("Restore failed — backup not found: $filename")
@@ -155,60 +167,98 @@ object BackupManager {
             return null
         }
 
-        // FIX 3 — validate the backup is a sound SQLite DB BEFORE touching prod.
-        // A half-written backup (disk full / power cut / SD bit-rot — the very
+        // Validate the backup is a sound SQLite DB BEFORE staging it. A
+        // half-written backup (disk full / power cut / SD bit-rot — the very
         // failures backups protect against) lists fine and copyTo() never throws
-        // on corrupt bytes, so without this guard a "successful" restore would
-        // plant a corrupt DB, only failing at the next boot. Refuse it here and
-        // leave prod untouched.
+        // on corrupt bytes; refusing it here means a corrupt file can never be
+        // queued for a boot-time swap. (Re-checked in applyPendingRestore too.)
         if (!isSoundSqliteDb(src)) {
             log.warn("Restore refused — backup failed the SQLite integrity check: $filename")
             return null
         }
 
-        val tmp = File(targetDb.parentFile, "${targetDb.name}.restoring-tmp")
+        val pending = File(targetDb.parentFile, "${targetDb.name}$PENDING_RESTORE_SUFFIX")
+        val tmp = File(targetDb.parentFile, "${targetDb.name}.pending-tmp")
         return try {
-            // FIX 1 — safety net via VACUUM INTO (NOT a raw copyTo). The server
-            // is running, so committed transactions may still live in the live
-            // `-wal`; a raw copy of `.db` alone would silently miss them. VACUUM
-            // INTO reads a consistent WAL-complete snapshot → the safety net is
-            // valid by construction and loses nothing.
+            // Copy to a temp sibling then atomic-move into place, so a crash
+            // mid-copy never leaves a half-written pending file that boot would
+            // try to apply.
+            src.copyTo(tmp, overwrite = true)
+            atomicMove(tmp, pending)
+            log.info("Restore staged: {} → {}. Applies on next restart.", src.name, pending.name)
+            pending
+        } catch (e: Exception) {
+            log.error("Failed to stage restore: ${e.message}", e)
+            runCatching { tmp.delete() }   // don't leak a partial temp file
+            null
+        }
+    }
+
+    /**
+     * Applies a staged restore, if any, **at boot — before the connection pool
+     * opens**. With no connection open there is no split-brain: we snapshot the
+     * current live DB as a WAL-complete safety net (`VACUUM INTO`, capturing the
+     * freshest state including the live `-wal`), atomically move the staged
+     * backup onto the live DB, and drop the now-stale `-wal`/`-shm`.
+     *
+     * Must be called once, before `DatabaseFactory.init`. A no-op when nothing
+     * is pending.
+     *
+     * @return the safety-net File if a restore was applied, null if none pending
+     *   (or the pending file had rotted and was discarded).
+     */
+    @Synchronized
+    fun applyPendingRestore(targetDb: File = ServerConfig.dbFile): File? {
+        val pending = File(targetDb.parentFile, "${targetDb.name}$PENDING_RESTORE_SUFFIX")
+        if (!pending.exists()) return null
+
+        // Defense in depth: the pending file could have rotted since it was
+        // staged (power cut, SD bit-rot). Never plant a corrupt DB — discard it
+        // and boot the current DB untouched.
+        if (!isSoundSqliteDb(pending)) {
+            log.error("Pending restore is corrupt — discarding it, keeping current DB: ${pending.name}")
+            pending.delete()
+            return null
+        }
+
+        return try {
+            // WAL-complete safety net of the freshest live state, taken now while
+            // nothing else holds the DB open.
             val safetyNet = if (targetDb.exists()) {
                 val ts = timestampFormat.format(Date())
                 val safety = File(targetDb.parentFile, "${targetDb.name}.before-restore-$ts")
                 vacuumInto(targetDb, safety)
-                log.info("Safety snapshot saved (WAL-complete): ${safety.name}")
+                log.info("Safety snapshot saved before restore (WAL-complete): ${safety.name}")
                 safety
             } else File("/dev/null")
 
-            // FIX 2 — atomic replace. Copy to a temp sibling, then move it onto
-            // targetDb atomically: a crash mid-copy can never leave a half-written
-            // prod DB (the OS swaps the whole file or nothing).
-            src.copyTo(tmp, overwrite = true)
-            try {
-                Files.move(
-                    tmp.toPath(), targetDb.toPath(),
-                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
-                )
-            } catch (_: AtomicMoveNotSupportedException) {
-                // Fallback when the filesystem can't do an atomic move
-                Files.move(tmp.toPath(), targetDb.toPath(), StandardCopyOption.REPLACE_EXISTING)
-            }
+            // Atomic replace — the OS swaps the whole file or nothing.
+            atomicMove(pending, targetDb)
 
             // Wipe the OLD regime's WAL/SHM — they belong to the replaced DB and
             // SQLite would otherwise try to apply them onto the restored one.
             File(targetDb.parentFile, "${targetDb.name}-wal").delete()
             File(targetDb.parentFile, "${targetDb.name}-shm").delete()
 
-            log.warn(
-                "Backup restored: {} → {}. RESTART REQUIRED to reload the connection pool.",
-                src.name, targetDb.name
-            )
-            targetDb to safetyNet
+            log.warn("Pending restore applied at boot — {} replaced. Safety net: {}", targetDb.name, safetyNet.name)
+            safetyNet
         } catch (e: Exception) {
-            log.error("Restore failed: ${e.message}", e)
-            runCatching { tmp.delete() }   // don't leak a partial temp file
+            // Keep the pending file so the next boot can retry; current DB stays
+            // whatever it was (atomicMove is all-or-nothing).
+            log.error("Failed to apply pending restore — keeping current DB: ${e.message}", e)
             null
+        }
+    }
+
+    /** Atomic file replace, with a graceful fallback when the FS can't do it. */
+    private fun atomicMove(from: File, to: File) {
+        try {
+            Files.move(
+                from.toPath(), to.toPath(),
+                StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(from.toPath(), to.toPath(), StandardCopyOption.REPLACE_EXISTING)
         }
     }
 
