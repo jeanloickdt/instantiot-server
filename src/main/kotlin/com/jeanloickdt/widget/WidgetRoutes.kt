@@ -22,11 +22,13 @@ package com.jeanloickdt.widget
 
 import com.jeanloickdt.common.ApiError
 
+import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.relay.HistoryBuffers
 import com.jeanloickdt.relay.LastValueCache
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsRequest
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
+import com.jeanloickdt.widget.domain.RegisterWidgetResponse
 import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
 import com.jeanloickdt.widget.domain.WidgetHistoryEnvelope
@@ -44,6 +46,7 @@ import io.ktor.server.routing.*
 
 fun Route.widgetRoutes(
     widgetRepository: WidgetRepository,
+    projectRepository: ProjectRepository,
     widgetHistoryRepository: WidgetHistoryRepository,
     widgetHistoryNumericRepository: WidgetHistoryNumericRepository,
     widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
@@ -67,6 +70,15 @@ fun Route.widgetRoutes(
             val projectId = call.parameters["projectId"]
                 ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing projectId"))
 
+            // Same ownership pattern as everywhere else: the {projectId} in the
+            // URL must be ours, else 404. Without this a user could register a
+            // widget claiming another user's project. (Not the leak fix — the
+            // relay auto-registers too — but the one-pattern consistency gate.)
+            val project = projectRepository.findById(projectId)
+            if (project == null || project.ownerId != ownerId) {
+                return@post call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
+            }
+
             val body = call.receive<RegisterWidgetRequest>()
 
             val created = widgetRepository.registerIfAbsent(
@@ -79,11 +91,11 @@ fun Route.widgetRoutes(
 
             call.respond(
                 if (created) HttpStatusCode.Created else HttpStatusCode.OK,
-                mapOf(
-                    "message"  to if (created) "Widget registered" else "Widget already registered",
-                    "id"       to body.id,
-                    "type"     to body.type,
-                    "created"  to created
+                RegisterWidgetResponse(
+                    message = if (created) "Widget registered" else "Widget already registered",
+                    id      = body.id,
+                    type    = body.type,
+                    created = created
                 )
             )
         }
@@ -99,6 +111,12 @@ fun Route.widgetRoutes(
 
             val projectId = call.parameters["projectId"]
                 ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing projectId"))
+
+            // Project ownership gate — same as the single-register route above.
+            val project = projectRepository.findById(projectId)
+            if (project == null || project.ownerId != ownerId) {
+                return@post call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
+            }
 
             val body = call.receive<BulkRegisterWidgetsRequest>()
 

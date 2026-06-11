@@ -49,6 +49,18 @@ data class BulkRegisterWidgetsResponse(
     val existing: Int   // number of widgets already in DB (no-op)
 )
 
+// Single-register response. A typed DTO rather than a mixed-type map:
+// mapOf("created" to <Boolean>, ...) is a Map<String, Any> that kotlinx
+// cannot serialize, which made the success path return 500 even though the
+// widget was inserted.
+@Serializable
+data class RegisterWidgetResponse(
+    val message: String,
+    val id: String,
+    val type: String,
+    val created: Boolean
+)
+
 // ============================================================
 // 📤 RESPONSES
 // ============================================================

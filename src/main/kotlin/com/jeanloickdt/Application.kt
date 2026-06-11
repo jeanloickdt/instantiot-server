@@ -531,7 +531,7 @@ fun Application.module() {
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
         widgetRoutes(
-            widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
+            widgetRepository, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
             buffers, lastValues
         )

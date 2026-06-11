@@ -131,7 +131,7 @@ class RoutesIntegrationTest {
                 )
                 deviceRoutes(deviceRepository, projectRepository, connections, events)
                 widgetRoutes(
-                    widgetRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
+                    widgetRepository, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
                     buffers, lastValues
                 )
@@ -340,6 +340,40 @@ class RoutesIntegrationTest {
         assertFalse(client.get("/api/devices") {
             header(HttpHeaders.Authorization, "Bearer $token")
         }.bodyAsText().contains("esp-to-purge"), "the project's device must be cascade-deleted")
+    }
+
+    @Test
+    fun `a user cannot register a widget in another user's project`() = testApplication {
+        installTestApp()
+        val (_, tokenA) = createUser("alice", "password1")
+        val (_, tokenB) = createUser("bob", "password2")
+
+        val bobProjectId = jsonOf(client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $tokenB")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Bob project"}""")
+        }.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        // single register
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/projects/$bobProjectId/widgets") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"id":"evil","type":"gauge"}""")
+        }.status)
+
+        // bulk register
+        assertEquals(HttpStatusCode.NotFound, client.post("/api/projects/$bobProjectId/widgets/bulk") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+            contentType(ContentType.Application.Json)
+            setBody("""{"widgets":[{"id":"evil2","type":"gauge"}]}""")
+        }.status)
+
+        // and the owner can register in their own project (201)
+        assertEquals(HttpStatusCode.Created, client.post("/api/projects/$bobProjectId/widgets") {
+            header(HttpHeaders.Authorization, "Bearer $tokenB")
+            contentType(ContentType.Application.Json)
+            setBody("""{"id":"ok","type":"gauge"}""")
+        }.status)
     }
 
     @Test
