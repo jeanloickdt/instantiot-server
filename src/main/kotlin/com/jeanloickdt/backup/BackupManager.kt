@@ -22,6 +22,9 @@ package com.jeanloickdt.backup
 import com.jeanloickdt.common.ServerConfig
 import org.slf4j.LoggerFactory
 import java.io.File
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.sql.DriverManager
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -135,8 +138,11 @@ object BackupManager {
      * @return Pair (newDbFile, safetyNetFile) if OK, null on failure
      */
     @Synchronized
-    fun restore(filename: String): Pair<File, File>? {
-        val backupDir = ServerConfig.backupDir
+    fun restore(
+        filename: String,
+        targetDb: File = ServerConfig.dbFile,
+        backupDir: File = ServerConfig.backupDir
+    ): Pair<File, File>? {
         val src = File(backupDir, filename)
         if (!src.exists() || !src.isFile) {
             log.warn("Restore failed — backup not found: $filename")
@@ -149,22 +155,48 @@ object BackupManager {
             return null
         }
 
-        val targetDb = ServerConfig.dbFile
+        // FIX 3 — validate the backup is a sound SQLite DB BEFORE touching prod.
+        // A half-written backup (disk full / power cut / SD bit-rot — the very
+        // failures backups protect against) lists fine and copyTo() never throws
+        // on corrupt bytes, so without this guard a "successful" restore would
+        // plant a corrupt DB, only failing at the next boot. Refuse it here and
+        // leave prod untouched.
+        if (!isSoundSqliteDb(src)) {
+            log.warn("Restore refused — backup failed the SQLite integrity check: $filename")
+            return null
+        }
+
+        val tmp = File(targetDb.parentFile, "${targetDb.name}.restoring-tmp")
         return try {
-            // 1. Snapshot the current DB as a safety net (if it exists)
+            // FIX 1 — safety net via VACUUM INTO (NOT a raw copyTo). The server
+            // is running, so committed transactions may still live in the live
+            // `-wal`; a raw copy of `.db` alone would silently miss them. VACUUM
+            // INTO reads a consistent WAL-complete snapshot → the safety net is
+            // valid by construction and loses nothing.
             val safetyNet = if (targetDb.exists()) {
                 val ts = timestampFormat.format(Date())
                 val safety = File(targetDb.parentFile, "${targetDb.name}.before-restore-$ts")
-                targetDb.copyTo(safety, overwrite = true)
-                log.info("Safety snapshot saved: ${safety.name}")
+                vacuumInto(targetDb, safety)
+                log.info("Safety snapshot saved (WAL-complete): ${safety.name}")
                 safety
             } else File("/dev/null")
 
-            // 2. Copy the backup in place
-            src.copyTo(targetDb, overwrite = true)
+            // FIX 2 — atomic replace. Copy to a temp sibling, then move it onto
+            // targetDb atomically: a crash mid-copy can never leave a half-written
+            // prod DB (the OS swaps the whole file or nothing).
+            src.copyTo(tmp, overwrite = true)
+            try {
+                Files.move(
+                    tmp.toPath(), targetDb.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                // Fallback when the filesystem can't do an atomic move
+                Files.move(tmp.toPath(), targetDb.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
 
-            // 3. Wipe the WAL/SHM files if present (the restore is a
-            //    complete DB, old-regime WAL files would confuse SQLite)
+            // Wipe the OLD regime's WAL/SHM — they belong to the replaced DB and
+            // SQLite would otherwise try to apply them onto the restored one.
             File(targetDb.parentFile, "${targetDb.name}-wal").delete()
             File(targetDb.parentFile, "${targetDb.name}-shm").delete()
 
@@ -175,7 +207,47 @@ object BackupManager {
             targetDb to safetyNet
         } catch (e: Exception) {
             log.error("Restore failed: ${e.message}", e)
+            runCatching { tmp.delete() }   // don't leak a partial temp file
             null
+        }
+    }
+
+    /**
+     * True iff [file] is a structurally sound SQLite database. Cheap magic-header
+     * check first, then `PRAGMA quick_check` opened read-only. Used before a
+     * restore so a corrupt backup can never overwrite prod.
+     */
+    private fun isSoundSqliteDb(file: File): Boolean {
+        return try {
+            // 1. SQLite magic: bytes 0..14 = "SQLite format 3", byte 15 = NUL (0x00)
+            val header = ByteArray(16)
+            val read = file.inputStream().use { it.read(header) }
+            val magicOk = read == 16 &&
+                String(header, 0, 15, Charsets.US_ASCII) == "SQLite format 3" &&
+                header[15] == 0.toByte()
+            if (!magicOk) return false
+
+            // 2. structural check (read-only open)
+            DriverManager.getConnection("jdbc:sqlite:${file.absolutePath}").use { conn ->
+                conn.createStatement().use { stmt ->
+                    stmt.executeQuery("PRAGMA quick_check").use { rs ->
+                        rs.next() && rs.getString(1).equals("ok", ignoreCase = true)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            log.warn("Integrity check threw for ${file.name} — treating as corrupt: ${e.message}")
+            false
+        }
+    }
+
+    /** Consistent (WAL-complete) snapshot of [src] into [dest] via VACUUM INTO. */
+    private fun vacuumInto(src: File, dest: File) {
+        dest.delete() // VACUUM INTO refuses an existing target
+        DriverManager.getConnection("jdbc:sqlite:${src.absolutePath}").use { conn ->
+            conn.createStatement().use { stmt ->
+                stmt.execute("VACUUM INTO '${dest.absolutePath.replace("'", "''")}'")
+            }
         }
     }
 
