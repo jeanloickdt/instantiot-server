@@ -175,7 +175,7 @@ changement de ports, récupération d'un admin perdu.
 - [x] Toutes les boucles de fond (`while(true)`) sont gardées par try/catch *(P0-2)*
 - [x] Cap de connexions (256) + backoff sur l'accept loop ; pool de reads isolé du pool DB *(P0-3)*
 - [x] Flush garanti à l'arrêt (tray + signal) via JVM shutdown hook *(P0-4)*
-- [x] `VACUUM` hebdomadaire en place → le fichier DB ne creuse plus le disque *(P0-5)*
+- [x] `auto_vacuum=INCREMENTAL` (migration unique au boot) + reclaim hebdo via `PRAGMA incremental_vacuum` → pages rendues au disque sans lock long *(P0-5)*
 - [x] `admin/admin` renvoie `passwordChanged=false` au login → le panel admin force l'écran de changement *(P0-6)*
 - [x] Tests : FrameParser + auth + agrégation + ownership + intégration (77 tests, harness isolé) *(P1-1)*
 - [x] Un seul format d'erreur JSON sur toutes les routes (type `ApiError`, y compris 500) *(P1-2)*

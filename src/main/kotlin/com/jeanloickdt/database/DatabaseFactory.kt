@@ -23,12 +23,16 @@ import org.jetbrains.exposed.sql.Database
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.slf4j.LoggerFactory
 import org.sqlite.SQLiteConfig
 import org.sqlite.SQLiteDataSource
 import java.io.File
 import java.sql.DriverManager
 
 object DatabaseFactory {
+
+    private val log = LoggerFactory.getLogger("DatabaseFactory")
+
     /**
      * @param dbFile the SQLite file to open. Defaults to the production
      *   `~/.instantiot/instantiot.db`; tests pass a throwaway temp file to get
@@ -138,26 +142,65 @@ object DatabaseFactory {
             exec("CREATE INDEX IF NOT EXISTS idx_history_hour_project ON widget_history_hour (project_id)")
             exec("CREATE INDEX IF NOT EXISTS idx_history_day_project  ON widget_history_day  (project_id)")
         }
+
+        // Switch the file to incremental auto-vacuum so the recurring reclaim is
+        // a cheap PRAGMA incremental_vacuum, not a full-file VACUUM. Runs AFTER
+        // the transaction above (VACUUM cannot execute inside a transaction) and
+        // before the relay/routes accept traffic, so nothing else holds the DB.
+        ensureIncrementalAutoVacuum(dbFile)
     }
 
     /**
-     * Reclaim disk space by rebuilding the database file.
+     * Ensures the database uses `auto_vacuum=INCREMENTAL`.
      *
-     * The hourly retention job DELETEs old rows but SQLite never returns the
-     * freed pages to the OS — the file only grows toward its high-water mark.
-     * On a Raspberry Pi / SD card this slowly eats the disk. `VACUUM` rewrites
-     * the file compactly, returning the freed space.
+     * SQLite only lets auto_vacuum be set before any table exists, OR switched
+     * afterwards by a one-time `VACUUM` (see sqlite.org/pragma.html). So:
+     *   - already incremental (mode 2) → no-op, every boot after the first.
+     *   - otherwise → set the mode + one `VACUUM` to rewrite the file in it.
      *
-     * Runs on a dedicated raw connection because VACUUM **cannot** execute
-     * inside an open transaction (which Exposed's `transaction {}` would
-     * create). It takes a brief exclusive lock and rewrites the whole file, so
-     * it's meant to run rarely (weekly) and off-peak — the 5s busy timeout set
-     * in [init] makes concurrent writers wait rather than fail during it.
+     * That one-time `VACUUM` is the only full rewrite we pay: it runs here at
+     * init, before any traffic, so there is no concurrent writer to lock out —
+     * trivial on a fresh install, a single up-front cost on an existing DB.
+     * Thereafter the weekly reclaim is the lock-light [incrementalVacuum].
+     *
+     * Must run OUTSIDE an Exposed transaction — VACUUM cannot run inside one.
      */
-    fun vacuum() {
-        val url = "jdbc:sqlite:${com.jeanloickdt.common.ServerConfig.dbFile.absolutePath}"
+    private fun ensureIncrementalAutoVacuum(dbFile: File) {
+        val url = "jdbc:sqlite:${dbFile.absolutePath}"
         DriverManager.getConnection(url).use { conn ->
-            conn.createStatement().use { stmt -> stmt.execute("VACUUM") }
+            conn.createStatement().use { stmt ->
+                val mode = stmt.executeQuery("PRAGMA auto_vacuum").use { rs ->
+                    if (rs.next()) rs.getInt(1) else 0
+                }
+                if (mode == 2) return        // 2 = incremental → nothing to do
+                log.info("Migrating database to incremental auto_vacuum (one-time; may take a moment on a large DB)…")
+                stmt.execute("PRAGMA auto_vacuum=INCREMENTAL")
+                stmt.execute("VACUUM")       // rewrites the file in the new mode
+                log.info("Database now uses incremental auto_vacuum")
+            }
+        }
+    }
+
+    /**
+     * Reclaim disk space freed by the retention DELETEs.
+     *
+     * The hourly retention job DELETEs old rows but SQLite keeps the freed pages
+     * on the freelist — on a Raspberry Pi / SD card the file slowly eats the
+     * disk. With [init] having put the file in `auto_vacuum=INCREMENTAL`, those
+     * pages are tracked, and `PRAGMA incremental_vacuum` truncates them back to
+     * the OS. Unlike a full `VACUUM` this does **not** rewrite the whole file
+     * under a multi-second exclusive lock — it just trims the freelist — so it
+     * is cheap enough to run weekly without disrupting live writers.
+     *
+     * Runs on a dedicated raw connection (no surrounding Exposed transaction).
+     *
+     * @param dbFile the SQLite file to reclaim. Defaults to production; tests
+     *   pass a throwaway file.
+     */
+    fun incrementalVacuum(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile) {
+        val url = "jdbc:sqlite:${dbFile.absolutePath}"
+        DriverManager.getConnection(url).use { conn ->
+            conn.createStatement().use { stmt -> stmt.execute("PRAGMA incremental_vacuum") }
         }
     }
 }

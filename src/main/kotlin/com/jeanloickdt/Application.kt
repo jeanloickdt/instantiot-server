@@ -473,21 +473,23 @@ fun Application.module() {
     }
 
     // ============================================================
-    // Weekly VACUUM — reclaim disk space freed by retention DELETEs
+    // Weekly incremental vacuum — reclaim disk freed by retention DELETEs
     //
-    // Without this the DB file only ever grows (SQLite keeps freed pages).
-    // Runs once a week after a 6h initial delay so it never coincides with
-    // boot or the first backup. VACUUM rewrites the whole file under a brief
-    // lock — the busy timeout (DatabaseFactory) lets writers wait it out.
+    // Without this the DB file only ever grows (SQLite keeps freed pages on the
+    // freelist). The file is in auto_vacuum=INCREMENTAL (DatabaseFactory.init),
+    // so this just trims the freelist back to the OS via PRAGMA
+    // incremental_vacuum — no full-file rewrite, no multi-second exclusive lock
+    // that a full VACUUM would take under load. Runs once a week after a 6h
+    // initial delay so it never coincides with boot or the first backup.
     // ============================================================
     launch(Dispatchers.IO) {
         delay(6L * 3600_000L)
         while (true) {
             try {
-                DatabaseFactory.vacuum()
-                bgLog.info("Weekly VACUUM completed — database file compacted")
+                DatabaseFactory.incrementalVacuum()
+                bgLog.info("Weekly incremental vacuum completed — freelist pages returned to the OS")
             } catch (e: Exception) {
-                bgLog.error("Weekly VACUUM failed — retrying next week", e)
+                bgLog.error("Weekly incremental vacuum failed — retrying next week", e)
             }
             delay(7L * 24 * 3600_000L)
         }

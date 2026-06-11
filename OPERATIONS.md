@@ -107,7 +107,8 @@ Most settings are changed from the **admin panel** (Settings), or by editing
 
 > **Retention deletes old data automatically, but ONLY by these rules.** Set a
 > tier to a large value (or `-1` for daily) to keep data longer / forever. A
-> weekly `VACUUM` then reclaims the freed disk space — it never deletes data.
+> weekly incremental vacuum then returns the freed pages to the disk — it never
+> deletes data.
 
 ---
 
@@ -216,7 +217,7 @@ Use `/health` for an uptime monitor or a load-balancer probe.
 | App can't find the server on the LAN | mDNS blocked (some routers/VLANs). Add the server manually by IP:port in the app. Confirm the server logged `mDNS published`. |
 | Device (ESP) won't connect | It must reach the **TCP port** (default 9001), not 8080. Check the device token, the IP, and that 9001 isn't firewalled. |
 | `database is locked` in logs | Should be rare (a 5s busy-timeout is set). If persistent, you may be running two instances against the same `~/.instantiot/` — stop the duplicate. |
-| Disk filling up | Lower the retention values (§5) and/or wait for the weekly `VACUUM`; backups accumulate in `backups/` per `backup.retention.count`. |
+| Disk filling up | Lower the retention values (§5) and/or wait for the weekly incremental vacuum; backups accumulate in `backups/` per `backup.retention.count`. |
 | Forgot admin password | See §8. |
 | Service won't start (Linux) | `journalctl -u instantiot-server -e` for the stack trace; check the `instantiot` user can write `~/.instantiot/`. |
 

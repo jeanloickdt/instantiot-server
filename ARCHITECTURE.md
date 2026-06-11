@@ -146,9 +146,12 @@ main()                                          Application.kt:81
                                                             │
 Application.module()  ──────────────────────────────────────┘   Application.kt:152
  ├─ install ContentNegotiation / StatusPages / CORS(anyHost) / RateLimit("auth" 10/min)
+ ├─ BackupManager.applyPendingRestore()  swap a staged restore BEFORE the pool
+ │                                   opens (no split-brain) + WAL-complete safety net
  ├─ DatabaseFactory.init(9 tables)   SQLiteDataSource: WAL, busy_timeout=5000,
  │                                   synchronous NORMAL, cache 32MB, temp MEMORY
  │                                   + createMissingTablesAndColumns + indexes
+ │                                   + one-time auto_vacuum=INCREMENTAL migration
  ├─ deviceRepository.markAllOffline()  reset stale is_online after a hard kill
  ├─ SHUTDOWN FLUSH HOOKS             ApplicationStopping  AND  Runtime shutdown hook
  │                                   (the JVM hook covers the tray's System.exit)
@@ -162,7 +165,7 @@ Application.module()  ───────────────────�
  │              aggregator buckets → DB                                 (try/catch)
  ├─ job 1h    : cleanup history per-tier retention                      (try/catch)
  ├─ job N-h   : backup VACUUM INTO (configurable interval)              (try/catch)
- ├─ job weekly: DatabaseFactory.vacuum()  reclaim freed pages           (try/catch)
+ ├─ job weekly: DatabaseFactory.incrementalVacuum() reclaim freelist     (try/catch)
  ├─ configureAppRelay()              bind WebSocket /ws/app
  └─ routing { … }                    /api/status + REST routes + static SPA
 ```
