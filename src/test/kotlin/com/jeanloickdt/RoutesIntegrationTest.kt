@@ -263,6 +263,50 @@ class RoutesIntegrationTest {
     }
 
     @Test
+    fun `creating a project with a blank name is rejected`() = testApplication {
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+        val res = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"  "}""")
+        }
+        assertEquals(HttpStatusCode.BadRequest, res.status)
+    }
+
+    @Test
+    fun `renaming a project to a blank name is rejected`() = testApplication {
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+        val project = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Alice project"}""")
+        }
+        val projectId = jsonOf(project.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val res = client.patch("/api/projects/$projectId/name") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"x"}""")  // 1 char < 2 → rejected
+        }
+        assertEquals(HttpStatusCode.BadRequest, res.status)
+    }
+
+    @Test
+    fun `creating a project trims the name`() = testApplication {
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+        val res = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"  Living room  "}""")
+        }
+        assertEquals(HttpStatusCode.Created, res.status)
+        assertEquals("Living room", jsonOf(res.bodyAsText())["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun `deleting a project cascades its devices away`() = testApplication {
         installTestApp()
         val (_, token) = createUser("alice", "password1")

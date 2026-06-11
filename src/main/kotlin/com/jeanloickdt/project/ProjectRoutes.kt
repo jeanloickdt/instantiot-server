@@ -86,7 +86,14 @@ fun Route.projectRoutes(
                 ?: return@post call.respond(HttpStatusCode.Unauthorized)
 
             val body    = call.receive<CreateProjectRequest>()
-            val id      = projectRepository.create(body.name, ownerId)
+            val name    = body.name.trim()
+            if (name.length < 2 || name.length > 64) {
+                return@post call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiError("Name must be 2-64 characters")
+                )
+            }
+            val id      = projectRepository.create(name, ownerId)
             val project = projectRepository.findById(id)!!
 
             call.respond(HttpStatusCode.Created, ProjectResponse(
@@ -142,7 +149,14 @@ fun Route.projectRoutes(
             }
 
             val body = call.receive<UpdateProjectNameRequest>()
-            projectRepository.updateName(projectId, body.name)
+            val name = body.name.trim()
+            if (name.length < 2 || name.length > 64) {
+                return@patch call.respond(
+                    HttpStatusCode.BadRequest,
+                    ApiError("Name must be 2-64 characters")
+                )
+            }
+            projectRepository.updateName(projectId, name)
             val updated = projectRepository.findById(projectId)!!
 
             call.respond(HttpStatusCode.OK, ProjectResponse(
