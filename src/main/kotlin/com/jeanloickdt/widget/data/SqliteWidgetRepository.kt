@@ -97,6 +97,12 @@ class SqliteWidgetRepository : WidgetRepository {
         }
     }
 
+    override fun findAll(): List<WidgetRow> {
+        return transaction {
+            WidgetTable.selectAll().map { it.toWidgetRow() }
+        }
+    }
+
     // Coalesced persistence: one transaction per 5s cycle, at most one UPDATE
     // per changed widget (instead of one DB write per frame on the read path).
     // Scoped to (owner_id, id): an owner-blind WHERE id=? would stamp one

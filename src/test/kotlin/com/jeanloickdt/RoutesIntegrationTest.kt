@@ -120,20 +120,25 @@ class RoutesIntegrationTest {
             val buffers     = com.jeanloickdt.relay.HistoryBuffers()
             val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
             val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
+            // same composition as production: routes get the cache-aware repo so
+            // the cascade purge path is exercised by the tests.
+            val cacheAwareWidgets = com.jeanloickdt.relay.CacheAwareWidgetRepository(
+                widgetRepository, buffers.knownWidgetIds, lastValues
+            )
             routing {
                 systemRoutes()
                 authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
                 projectRoutes(
-                    projectRepository, deviceRepository, widgetRepository,
+                    projectRepository, deviceRepository, cacheAwareWidgets,
                     widgetHistoryRepository, widgetHistoryNumericRepository,
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
                     connections, events
                 )
                 deviceRoutes(deviceRepository, projectRepository, connections, events)
                 widgetRoutes(
-                    widgetRepository, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
+                    cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
                     widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-                    buffers, lastValues
+                    lastValues
                 )
             }
         }

@@ -23,9 +23,7 @@ package com.jeanloickdt.widget
 import com.jeanloickdt.common.ApiError
 
 import com.jeanloickdt.project.domain.ProjectRepository
-import com.jeanloickdt.relay.HistoryBuffers
 import com.jeanloickdt.relay.LastValueCache
-import com.jeanloickdt.relay.WidgetKey
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsRequest
 import com.jeanloickdt.widget.domain.BulkRegisterWidgetsResponse
 import com.jeanloickdt.widget.domain.RegisterWidgetRequest
@@ -53,7 +51,6 @@ fun Route.widgetRoutes(
     widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
     widgetHistoryHourRepository: WidgetHistoryAggregateRepository,
     widgetHistoryDayRepository: WidgetHistoryAggregateRepository,
-    buffers: HistoryBuffers,
     lastValues: LastValueCache
 ) {
 
@@ -82,13 +79,13 @@ fun Route.widgetRoutes(
 
             val body = call.receive<RegisterWidgetRequest>()
 
+            // The cache-aware repo keeps knownWidgetIds in sync (composition root).
             val created = widgetRepository.registerIfAbsent(
                 id        = body.id,
                 projectId = projectId,
                 ownerId   = ownerId,
                 type      = body.type
             )
-            if (created) buffers.knownWidgetIds.add(WidgetKey(ownerId, body.id))
 
             call.respond(
                 if (created) HttpStatusCode.Created else HttpStatusCode.OK,
@@ -132,8 +129,7 @@ fun Route.widgetRoutes(
                     type      = w.type
                 )
                 if (inserted) {
-                    buffers.knownWidgetIds.add(WidgetKey(ownerId, w.id))
-                    created++
+                    created++   // knownWidgetIds maintained by the cache-aware repo
                 } else {
                     existing++
                 }
@@ -172,14 +168,10 @@ fun Route.widgetRoutes(
             widgetHistoryMinRepository.deleteAllByWidget(ownerId, widgetId)
             widgetHistoryHourRepository.deleteAllByWidget(ownerId, widgetId)
             widgetHistoryDayRepository.deleteAllByWidget(ownerId, widgetId)
+            // delete() goes through the cache-aware repo, which purges
+            // knownWidgetIds + lastValues for this key — same path the project
+            // cascade now uses, so no delete path can leave phantom cache keys.
             widgetRepository.delete(ownerId, widgetId)
-
-            // purge the RAM caches too: without this a deleted widget stays
-            // "known" forever (never re-auto-registers on its next frame) and
-            // its last value leaks in the cache — confirmed correctness +
-            // slow-RAM-leak bug from the resource audit.
-            buffers.knownWidgetIds.remove(WidgetKey(ownerId, widgetId))
-            lastValues.evict(ownerId, widgetId)
 
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Widget deleted",

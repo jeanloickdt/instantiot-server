@@ -238,6 +238,21 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     val presence: com.jeanloickdt.relay.PresenceStore = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
     val controlEvents = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
 
+    // Cache-aware widget repository (composition root): wraps the pure SQLite
+    // repo so every widgets-table write keeps knownWidgetIds + lastValues in
+    // sync — including the project cascade, which used to bypass cache sync. All
+    // widget-mutating callers (routes, relay, cascade) go through this.
+    val cacheAwareWidgets: WidgetRepository =
+        com.jeanloickdt.relay.CacheAwareWidgetRepository(widgetRepository, buffers.knownWidgetIds, lastValues)
+
+    // Seed the declared-widgets cache from the table at boot, so it reflects
+    // what is persisted (today auto-register would re-fill it lazily; this is
+    // the prerequisite for the strict model, where an unseeded cache would drop
+    // the first frame of every already-declared widget).
+    val seededWidgets = widgetRepository.findAll()
+    seededWidgets.forEach { buffers.knownWidgetIds.add(com.jeanloickdt.relay.WidgetKey(it.ownerId, it.id)) }
+    logger.info("Seeded ${seededWidgets.size} declared widget(s) into the cache")
+
     // final flush at shutdown — no buffer data lost
     // iWidgets rework: we ALSO flush all RAM buckets (including
     // in-progress buckets not yet closed) → zero loss on a controlled
@@ -256,7 +271,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         kotlinx.coroutines.runBlocking {
             flushHistoryBuffer(buffers, widgetHistoryRepository)
             flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
-            flushLastValues(lastValues, widgetRepository)
+            flushLastValues(lastValues, cacheAwareWidgets)
             flushAllAggregatorBuckets(
                 minRepo  = widgetHistoryMinRepository,
                 hourRepo = widgetHistoryHourRepository,
@@ -341,7 +356,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // Each ESP connection in its own IO coroutine
     // ============================================================
     startDeviceRelay(
-        deviceRepository, widgetRepository,
+        deviceRepository, cacheAwareWidgets,
         connections = connections,
         buffers     = buffers,
         lastValues  = lastValues,
@@ -392,7 +407,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             try {
                 flushHistoryBuffer(buffers, widgetHistoryRepository)
                 flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
-                flushLastValues(lastValues, widgetRepository)
+                flushLastValues(lastValues, cacheAwareWidgets)
                 flushClosedAggregatorBuckets(
                     minRepo  = widgetHistoryMinRepository,
                     hourRepo = widgetHistoryHourRepository,
@@ -529,16 +544,16 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
 
         authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
         projectRoutes(
-            projectRepository, deviceRepository, widgetRepository,
+            projectRepository, deviceRepository, cacheAwareWidgets,
             widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
             connections, controlEvents
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
         widgetRoutes(
-            widgetRepository, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
+            cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-            buffers, lastValues
+            lastValues
         )
 
         // TODO: add the routes of new modules here

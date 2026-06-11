@@ -46,6 +46,10 @@ interface WidgetRepository {
     // List all widgets of a project — for GET /api/projects/{id}/states
     fun findAllByProject(projectId: String): List<WidgetRow>
 
+    // Every widget across all owners/projects — used once at boot to seed the
+    // declared-widgets cache (knownWidgetIds) so it reflects the table.
+    fun findAll(): List<WidgetRow>
+
     /**
      * Batch variant — one transaction for N widgets. Called by the 5s flush
      * job with the LastValueCache's dirty entries (coalesced persistence:
