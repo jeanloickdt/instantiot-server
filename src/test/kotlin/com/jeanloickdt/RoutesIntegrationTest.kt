@@ -323,6 +323,33 @@ class RoutesIntegrationTest {
     }
 
     @Test
+    fun `listing devices of another user's project is refused with 404`() = testApplication {
+        installTestApp()
+        val (_, tokenA) = createUser("alice", "password1")
+        val (_, tokenB) = createUser("bob", "password2")
+
+        val bobProject = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $tokenB")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Bob project"}""")
+        }
+        val bobProjectId = jsonOf(bobProject.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        // Alice does not own the project → 404 (single ownership pattern), not an
+        // empty 200 that would conflate "empty" with "not yours".
+        val res = client.get("/api/projects/$bobProjectId/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenA")
+        }
+        assertEquals(HttpStatusCode.NotFound, res.status)
+
+        // owner still lists fine (200)
+        val ownerRes = client.get("/api/projects/$bobProjectId/devices") {
+            header(HttpHeaders.Authorization, "Bearer $tokenB")
+        }
+        assertEquals(HttpStatusCode.OK, ownerRes.status)
+    }
+
+    @Test
     fun `creating a device with a blank name is rejected`() = testApplication {
         installTestApp()
         val (_, tokenA) = createUser("alice", "password1")

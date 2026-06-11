@@ -84,7 +84,22 @@ fun Route.deviceRoutes(
             val projectId = call.parameters["projectId"]
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing projectId"))
 
+            // One ownership pattern everywhere: authorize the resource (the
+            // project) up front — load it, require it to be ours, else 404 (never
+            // reveal another user's project exists). The old code skipped this and
+            // relied on the per-device filter below, which is safe but an
+            // exception to the pattern; making every handler gate the same way is
+            // exactly what keeps a gap like the creation one from reappearing.
+            val project = projectRepository.findById(projectId)
+            if (project == null || project.ownerId != ownerId) {
+                return@get call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
+            }
+
             val devices = deviceRepository.findAllByProject(projectId)
+                // Defence in depth behind the project gate: device.ownerId equals
+                // project.ownerId by construction (a device can only be created in
+                // a project you own), so this is a no-op today — kept so a future
+                // bug that broke that invariant could not leak rows.
                 .filter { it.ownerId == ownerId }
                 .map {
                     DeviceResponse(
