@@ -1,10 +1,16 @@
 # InstantIoT Server
 
+![version](https://img.shields.io/badge/version-1.2.0-blue)
+![license](https://img.shields.io/badge/license-AGPLv3-green)
+![JDK](https://img.shields.io/badge/JDK-21-orange)
+![stack](https://img.shields.io/badge/Kotlin-Ktor%20%C2%B7%20Netty%20%C2%B7%20SQLite-7F52FF)
+
 **Self-hosted, open-source IoT relay server.** It relays real-time
 communication between IoT boards (ESP32 / Arduino) and the InstantIoT mobile
 app — multi-device connections, time-series history, web admin panel.
 
-Install it on your own computer or a Raspberry Pi, it runs at home.
+Install it on your own computer or a Raspberry Pi, it runs at home — your data
+never leaves your machine.
 
 > Stack: **Kotlin · Ktor · Netty · SQLite (Exposed)** · JDK 21.
 > License: **GNU AGPLv3** (see [§ License](#license)).
@@ -15,7 +21,7 @@ Install it on your own computer or a Raspberry Pi, it runs at home.
 
 - **Real-time relay** between TCP (boards) and WebSocket (apps) via the
   `iWidgets v1` binary protocol
-- **Multi-user**: admin/user accounts, JWT auth
+- **Multi-user**: admin/user accounts, JWT auth, per-user data isolation
 - **Time-series history** with 3 aggregated tiers (minute / hour / day) plus an
   optional raw tier
 - **mDNS discovery**: the app finds the server automatically on the LAN
@@ -24,6 +30,27 @@ Install it on your own computer or a Raspberry Pi, it runs at home.
 - **Native installers** `.deb` / `.dmg` / `.msi` (jpackage)
 
 Detailed architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+
+---
+
+## Security & reliability
+
+- **Auth** — JWT (HS256) with a `token_version` revocation claim: changing or
+  resetting a password signs the account out of every other device at once.
+  Login is constant-time (no user-enumeration via timing).
+- **Device tokens** — generated as a UUID v4; only the **SHA-256** is stored, the
+  plaintext is shown **once**. The DB never holds a usable device credential.
+- **Per-user isolation** — every project / device / widget / history read and
+  write is scoped to its owner; a request for someone else's resource gets a
+  `404` (existence is never leaked).
+- **Backups you can trust** — snapshots are WAL-complete (`VACUUM INTO`).
+  A restore is **staged and applied at the next boot** (never swapped under the
+  live database), keeps a safety-net copy of the current DB, and is refused
+  outright if the backup fails an integrity check — a corrupt backup can never
+  overwrite your data.
+- **Storage** — SQLite in WAL mode with a busy-timeout (concurrent writers wait
+  instead of failing); incremental auto-vacuum reclaims disk space without a
+  long exclusive lock.
 
 ---
 
