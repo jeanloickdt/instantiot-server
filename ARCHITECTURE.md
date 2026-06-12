@@ -81,8 +81,10 @@ ESP sends an iWidgets v1 frame
    │                          frame never drops the connection)
    │ 0. if TYPE == 0xFE (heartbeat) → return immediately (no dispatch)
    │ 1. extract widgetId + payload          (FrameParser)
-   │ 2. auto-register widget if new          (gated, rare, OFF the read path)
-   │ 3. lastValues.put(widgetId, base64)     (RAM — DB column coalesced in 5s flush)
+   │ 2. STRICT MODEL: drop if (ownerId, widgetId) ∉ knownWidgetIds
+   │    (declared-set seeded at boot + kept in sync by the cache-aware repo;
+   │     an undeclared frame is noise → no persist / aggregate / relay)
+   │ 3. lastValues.put(ownerId, widgetId, base64)  (RAM — DB column coalesced in 5s flush)
    │ 4. historyBuffer += event               (→ 5s flush)
    │ 5. if numeric & value.isFinite() → HistoryAggregators.{minute,hour,day}.collect()
    │    (+ numericHistoryBuffer if raw tier enabled)   ← non-finite rejected
@@ -152,7 +154,11 @@ Application.module()  ───────────────────�
  │                                   synchronous NORMAL, cache 32MB, temp MEMORY
  │                                   + createMissingTablesAndColumns + indexes
  │                                   + one-time auto_vacuum=INCREMENTAL migration
+ │                                   + one-time widgets PK → (owner_id, id) rebuild (non-additive)
  ├─ deviceRepository.markAllOffline()  reset stale is_online after a hard kill
+ ├─ CacheAwareWidgetRepository         decorator (composition root): widgets writes
+ │                                   keep knownWidgetIds + lastValues in sync (incl. cascade)
+ ├─ seed knownWidgetIds (findAll)      strict-model declared-set, from the table
  ├─ SHUTDOWN FLUSH HOOKS             ApplicationStopping  AND  Runtime shutdown hook
  │                                   (the JVM hook covers the tray's System.exit)
  ├─ ApplicationStopping → MdnsPublisher.stop()
@@ -196,8 +202,8 @@ enforced in app code (cascade deletes in route handlers).
 │ created_at            │   └────────────────────────┘   │ is_online / last_seen  │
 └───────────────────────┘                                │ device_type / connect. │
 ┌─ widgets ─────────────┐                                └────────────────────────┘
-│ id (=widget protocolId)│
-│ project_id / owner_id │
+│ PK (owner_id, id)      │
+│ project_id             │
 │ type                  │
 │ last_payload (base64) │
 │ last_seen_at          │
@@ -211,12 +217,22 @@ widget_history_hour     1-hour buckets {avg,min,max,count} default 365 days
 widget_history_day      1-day  buckets {avg,min,max,count} default unlimited (-1)
 ```
 
-Every history row also carries denormalized `project_id` + `owner_id` (scoping
-and cleanup without a JOIN). Aggregate tables have a UNIQUE index
-`(widget_id, COALESCE(series_id,''), bucket_at)` → idempotent `INSERT OR IGNORE`.
+`widgets` has a **composite PK `(owner_id, id)`** where `id` is the widget
+protocolId (`gauge1`, `temp`…): protocolIds are chosen locally per user and
+collide across tenants, so a single-column PK would lock the 2nd owner out of
+their own widget. Reads/writes resolve by `(ownerId, widgetId)` everywhere.
 
-> **Migration**: `createMissingTablesAndColumns()` adds missing columns at boot.
-> **Golden rule**: every new column must be `.nullable()` or `.default(...)`,
+Every history row also carries denormalized `project_id` + `owner_id` (scoping
+and cleanup without a JOIN); the history reads filter `WHERE widget_id=? AND
+owner_id=?`. Aggregate tables have a UNIQUE index
+`(widget_id, owner_id, COALESCE(series_id,''), bucket_at)` (owner-aware — two
+tenants colliding on a protocolId keep distinct buckets) → idempotent `INSERT OR IGNORE`.
+
+> **Migration**: `createMissingTablesAndColumns()` adds missing columns at boot
+> (additive). The one **non-additive** change — the `widgets` PK `id → (owner_id, id)`
+> — is a dedicated boot rebuild (create composite table → copy every row → swap),
+> proven zero-loss; it runs inside `init`, before any widget access.
+> **Golden rule**: every new additive column must be `.nullable()` or `.default(...)`,
 > else the `ALTER` fails on existing rows. Never rename a column (Exposed does
 > not track renames).
 
@@ -233,7 +249,7 @@ ESP : numeric sample (e.g. gauge = 23.5)
         ├──▶ numericHistoryBuffer        (RAW tier, opt-in, default ON)
         │
         └──▶ HistoryAggregators (RAM, TierAggregator + BucketAccumulator):
-               ├─ minute  60 s bucket      keyed by (widgetId, seriesId?, bucketAt)
+               ├─ minute  60 s bucket      keyed by (ownerId, widgetId, seriesId?, bucketAt)
                ├─ hour    3600 s bucket     bucketAt = (ts / size) * size
                └─ day     86400 s bucket    aggregates: min, max, avg(=sum/count), count
 
@@ -359,15 +375,16 @@ The wire format shared by the Arduino lib, the server, and the app.
 ```
 Application.kt          boot: main() + Application.module() + background loops
 common/                 ServerConfig, PortFinder, SystemTrayManager, StatusResponse
-database/               DatabaseFactory — SQLite hardening, tables, migrations, vacuum()
+database/               DatabaseFactory — SQLite hardening, tables, migrations, incrementalVacuum()
 auth/                   JWT, login/register, admin panel, user mgmt   (data/ + domain/)
 device/                 ESP/Arduino registration, tokens, DeviceType   (data/ + domain/)
 project/                user projects (opaque dashboard layout)        (data/ + domain/)
 widget/                 widgets + 5-tier time-series history           (data/ + domain/)
 relay/                  ★ CORE — DeviceRelay (non-blocking TCP), AppRelay (WS),
-                        FrameParser, DeviceOutbox, ControlEventBroadcaster, and the
-                        injected seams: ConnectionRegistry, HistoryBuffers,
-                        LastValueCache, PresenceStore
+                        FrameParser, DeviceOutbox, ControlEventBroadcaster, the
+                        CacheAwareWidgetRepository decorator, and the injected
+                        seams: ConnectionRegistry, HistoryBuffers, LastValueCache,
+                        PresenceStore
 backup/                 BackupManager — VACUUM INTO snapshot, restore
 discovery/              MdnsPublisher / DnsSdPublisher — _instantiot._tcp on the LAN
 ```
