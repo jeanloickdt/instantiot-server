@@ -49,3 +49,6 @@ build/jpackage-input/
 
 # Kotlin incremental build cache
 .kotlin/
+
+# Private local doc — actor map (stays local, never pushed)
+ARCHITECTURE_ACTORS.md
