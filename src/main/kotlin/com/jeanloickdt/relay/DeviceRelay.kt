@@ -233,11 +233,13 @@ private suspend fun handleDeviceConnection(
 /**
  * Processes one validated binary frame. Pure RAM/CPU on the read path:
  *   - heartbeat → return early
+ *   - strict model: drop the frame if (ownerId, widgetId) is not a declared widget
  *   - extract widgetId + payload → LastValueCache (RAM) + history buffer (RAM)
  *   - numeric value (validated finite) → 3 RAM aggregators (+ opt-in raw buffer)
  *   - broadcast the intact frame to the apps
- * No DB write here (last_payload is coalesced into the 5s flush). The only DB
- * touch is the RARE, gated auto-register, fired off the read path.
+ * No DB write here at all: last_payload is coalesced into the 5s flush, and a
+ * frame for an undeclared widget is dropped by the strict-model guard before any
+ * RAM write.
  *
  * Wrapped in try/catch: a single malformed/aberrant frame logs and is skipped —
  * it never tears down the connection (that isolation is per-frame, complementing
@@ -267,7 +269,7 @@ private suspend fun handleDeviceFrame(
         // no recipient: no widget on a dashboard awaits it, no row should store
         // it (a firmware typo, or a widget removed from the dash but left in the
         // device code). It is noise — drop it before any persistence,
-        // aggregation or live relay. (Replaces the old auto-register.)
+        // aggregation or live relay.
         if (WidgetKey(device.ownerId, widgetId) !in buffers.knownWidgetIds) return
 
         // RAM-only writes — keyed by (ownerId, widgetId), never widgetId alone
