@@ -35,7 +35,7 @@ data class VersionResponse(val version: String)
  * setup-oriented `/api/status`:
  *  - `GET /health`      → `{ "status": "ok", "uptimeMs": ... }` for load
  *    balancers / uptime monitors / `systemctl` health checks.
- *  - `GET /api/version` → `{ "version": "1.1.3" }` for the app and a future
+ *  - `GET /api/version` → `{ "version": "1.2.0" }` for the app and a future
  *    auto-update check, without needing a JWT.
  */
 fun Route.systemRoutes() {

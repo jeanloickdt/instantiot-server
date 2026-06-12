@@ -191,7 +191,7 @@ Both are unauthenticated:
 
 ```bash
 curl http://<server>:8080/health        # {"status":"ok","uptimeMs":...}
-curl http://<server>:8080/api/version   # {"version":"1.1.3"}
+curl http://<server>:8080/api/version   # {"version":"1.2.0"}
 ```
 
 Use `/health` for an uptime monitor or a load-balancer probe.
