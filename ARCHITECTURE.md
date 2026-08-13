@@ -53,7 +53,7 @@ once in `Application.module()` and passed down; tests build isolated instances):
 ```
   ConnectionRegistry          HistoryBuffers           LastValueCache (iface)
   ┌────────────────────┐      ┌──────────────────┐     ┌─────────────────────┐
-  │ appSessions        │      │ historyBuffer    │     │ put/get/drainDirty  │
+  │ appSessions (+out) │      │ historyBuffer    │     │ put/get/drainDirty  │
   │ deviceSessions     │      │ numericHistory…  │     │ evict — RAM now,     │
   │ deviceOutboxes     │      │ knownWidgetIds   │     │ Redis later (seam)   │
   └────────────────────┘      └──────────────────┘     └─────────────────────┘
@@ -409,8 +409,54 @@ isolation); reads suspend via `ByteReadChannel` so idle connections cost ~nothin
 is coalesced into the 5s flush); every `catch` around suspending code rethrows
 `CancellationException`; the disconnect `finally` closes the socket first then
 cleans up under `NonCancellable`; 1 bounded `DeviceOutbox` (Channel 8) per device
-writes via a `ByteWriteChannel`; the `SelectorManager` is closed at shutdown;
+writes via a `ByteWriteChannel`, and symmetrically 1 `AppOutbox` per app session
+guards the device→app direction (see below); the `SelectorManager` is closed at shutdown;
 the flush is guaranteed on both `ApplicationStopping` and the JVM shutdown hook.
+
+---
+
+### Backpressure both ways — `DeviceOutbox` / `AppOutbox`
+
+A WebSocket `send` suspends once the peer stops draining. Called from the device
+read coroutine, that suspension stops the device from being read at all: its
+receive buffer fills, the TCP window closes, and the board can no longer emit.
+One dead app takes a live device down with it — invisible on a LAN, common on
+mobile, where a backgrounded phone or a dropped link leaves a socket that is
+open but no longer reading.
+
+Every device→app send therefore goes through a per-session **`AppOutbox`**, and
+none of its methods suspend. The suspension still exists — it is TCP
+backpressure, it cannot be removed — but it now lives in a coroutine dedicated
+to that one app, scoped to its session, so it dies with it. A suspended
+coroutine holds no thread: a thousand zombie apps cost a thousand continuations.
+
+Two channels, deliberately, because the drop policies differ and a single
+`Channel` cannot express both — `DROP_OLDEST` applies to the whole channel (a
+control event could be the oldest, and `trySend` would always succeed, removing
+any way to detect a stuck session), while a default-capacity channel only lets
+you drop the *newest*. Kotlin exposes no producer-side API to evict the oldest
+selectively.
+
+| channel | policy | rationale |
+|---|---|---|
+| telemetry | `DROP_OLDEST`, capacity 64 | a stale reading is worthless; keep the freshest |
+| control | default capacity 64 | a failing `trySend` *is* the zombie signal |
+
+A session that cannot absorb a discrete control event is not slow, it is gone:
+it gets **closed** rather than losing the event. The app notices, reconnects and
+re-syncs through `/states`. The close is *launched*, never awaited — `close()`
+suspends, and calling it inline would reintroduce the very blocking the class
+removes.
+
+Capacities are generous on purpose: only a genuinely stuck session should
+overflow. A legitimate burst — a device coming back online while several buckets
+close — must never cost a healthy app its session. Eviction has to stay a strong
+signal, not an accident.
+
+Losing the relative order between the two channels is a feature here: during a
+stall you want `device_offline` to land immediately rather than behind sixty
+stale gauge values. That ordering never existed anyway — three of the four
+control-event sources run in coroutines other than the device's.
 
 ---
 
