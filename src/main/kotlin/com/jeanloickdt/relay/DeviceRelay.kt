@@ -306,25 +306,24 @@ private suspend fun handleDeviceFrame(
 }
 
 /**
- * Single dispatch point for device→app frames (seam: if a slow-app staller is
- * ever observed, a per-app outbox plugs in HERE without touching the read loop).
+ * Single dispatch point for device→app frames. The predicted slow-app staller
+ * is now handled: each session owns an [AppOutbox], so this never suspends.
  */
-private suspend fun dispatchToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
+private fun dispatchToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
     broadcastToApps(connections, projectId, frameBytes)
 }
 
-/** Broadcasts a binary frame to all connected apps watching a project. */
-private suspend fun broadcastToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
-    val appSessions = connections.getAppSessionsForProject(projectId)
-    appSessions.forEach { appSession ->
-        try {
-            appSession.session.send(Frame.Binary(true, frameBytes))
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger.warn("Failed to broadcast to userId=${appSession.userId} — removing session")
-            connections.unregisterApp(appSession.userId, appSession.session)
-        }
+/**
+ * Hands a binary frame to every app watching a project.
+ *
+ * Non-suspending by contract: called from the device read coroutine, a single
+ * unresponsive app would otherwise stop that device from being read at all —
+ * its receive buffer fills, the TCP window closes, and the board can no longer
+ * emit. The outbox absorbs the frame and drops the oldest under pressure.
+ */
+private fun broadcastToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
+    connections.getAppSessionsForProject(projectId).forEach { appSession ->
+        appSession.outbox.trySendTelemetry(frameBytes)
     }
 }
 

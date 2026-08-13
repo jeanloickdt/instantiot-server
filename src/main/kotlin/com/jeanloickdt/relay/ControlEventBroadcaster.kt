@@ -50,7 +50,7 @@ class ControlEventBroadcaster(
      * An ESP device has just connected over TCP.
      * Broadcast to all apps of the project.
      */
-    suspend fun deviceOnline(projectId: String, deviceId: String, deviceName: String) {
+    fun deviceOnline(projectId: String, deviceId: String, deviceName: String) {
         val event = ControlEvent(
             type       = ControlEventType.DEVICE_ONLINE,
             deviceId   = deviceId,
@@ -63,7 +63,7 @@ class ControlEventBroadcaster(
      * An ESP device has disconnected.
      * reason : DISCONNECTED / TOKEN_RENEWED / DELETED
      */
-    suspend fun deviceOffline(projectId: String, deviceId: String, reason: String) {
+    fun deviceOffline(projectId: String, deviceId: String, reason: String) {
         val event = ControlEvent(
             type     = ControlEventType.DEVICE_OFFLINE,
             deviceId = deviceId,
@@ -77,7 +77,7 @@ class ControlEventBroadcaster(
      * Sent to the emitting session only.
      * reason : DEVICE_OFFLINE / FORBIDDEN / RELAY_ERROR
      */
-    suspend fun commandFailed(
+    fun commandFailed(
         session: WebSocketSession,
         deviceId: String,
         reason: String
@@ -108,7 +108,7 @@ class ControlEventBroadcaster(
      *  - ~10 msg/h on the hour side
      *  - ~10 msg/day on the day side
      */
-    suspend fun bucketClosed(
+    fun bucketClosed(
         projectId: String,
         widgetId: String,
         seriesId: String?,
@@ -136,10 +136,7 @@ class ControlEventBroadcaster(
         if (targetSessions.isEmpty()) return
 
         targetSessions.forEach { appSession ->
-            try {
-                appSession.session.send(Frame.Text(jsonText))
-            } catch (e: Exception) {
-                logger.warn("Failed to send bucket_updated to userId=${appSession.userId} — removing session")
+            if (!appSession.outbox.trySendControl(jsonText)) {
                 connections.unregisterApp(appSession.userId, appSession.session)
             }
         }
@@ -149,26 +146,29 @@ class ControlEventBroadcaster(
     // Internal helpers
     // ────────────────────────────────────────────────────────────
 
-    private suspend fun broadcastToProject(projectId: String, event: ControlEvent) {
+    private fun broadcastToProject(projectId: String, event: ControlEvent) {
         val jsonText = json.encodeToString(event)
         val appSessions = connections.getAppSessionsForProject(projectId)
 
         appSessions.forEach { appSession ->
-            try {
-                appSession.session.send(Frame.Text(jsonText))
-            } catch (e: Exception) {
-                logger.warn("Failed to send event to userId=${appSession.userId} — removing session")
+            // The outbox never throws and never suspends. A `false` means the
+            // session could not even absorb a discrete control event — it has
+            // been closed, so drop it from the registry.
+            if (!appSession.outbox.trySendControl(jsonText)) {
                 connections.unregisterApp(appSession.userId, appSession.session)
             }
         }
     }
 
-    private suspend fun sendEventToSession(session: WebSocketSession, event: ControlEvent) {
+    private fun sendEventToSession(session: WebSocketSession, event: ControlEvent) {
         val jsonText = json.encodeToString(event)
-        try {
-            session.send(Frame.Text(jsonText))
-        } catch (e: Exception) {
-            logger.warn("Failed to send command_failed event — ${e.message}")
+        val appSession = connections.findAppSession(session)
+        if (appSession == null) {
+            logger.warn("command_failed for an unregistered session — dropped")
+            return
+        }
+        if (!appSession.outbox.trySendControl(jsonText)) {
+            connections.unregisterApp(appSession.userId, appSession.session)
         }
     }
 }
