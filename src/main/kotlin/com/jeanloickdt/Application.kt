@@ -401,12 +401,37 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // silently stop persisting and let the RAM buffers grow until OOM.
     val bgLog = LoggerFactory.getLogger("InstantIoT.maintenance")
 
+    // Flush cadence and its alert thresholds — see the loop below.
+    val FLUSH_PERIOD_MS = 5_000L
+    // A round costing a fifth of its period already deserves attention: it
+    // leaves little headroom before the loop starts stretching.
+    val FLUSH_SLOW_MS = 1_000L
+    // ~5 min at a 5 s period. A healthy server must still say so periodically,
+    // otherwise there is no baseline to compare a bad day against.
+    val FLUSH_HEARTBEAT_ROUNDS = 60L
+
     launch(Dispatchers.IO) {
+        // Timing the flush round is the leading indicator of saturation.
+        //
+        // This loop is `delay(period)` THEN work, not a fixed-rate scheduler:
+        // the effective period is `period + flush duration`. A slow flush
+        // therefore does not merely arrive late, it *stretches the interval* —
+        // the RAM buffers take in more, the next round has more to write, and
+        // the drift compounds. Degradation is gradual, which is exactly why it
+        // has to be measured rather than waited for.
+        //
+        // Row counts come back from the flush functions: the batch is already
+        // materialised there, whereas `.size` on a ConcurrentLinkedQueue is
+        // O(n) and would cost more than the flush it measures.
+        var round = 0L
         while (true) {
-            delay(5_000)
+            delay(FLUSH_PERIOD_MS)
+            val startedAt = System.nanoTime()
+            var opaqueRows = 0
+            var numericRows = 0
             try {
-                flushHistoryBuffer(buffers, widgetHistoryRepository)
-                flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
+                opaqueRows  = flushHistoryBuffer(buffers, widgetHistoryRepository)
+                numericRows = flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
                 flushLastValues(lastValues, cacheAwareWidgets)
                 flushClosedAggregatorBuckets(
                     minRepo  = widgetHistoryMinRepository,
@@ -416,6 +441,21 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 )
             } catch (e: Exception) {
                 bgLog.error("History flush round failed — retrying in 5s", e)
+            }
+            val tookMs = (System.nanoTime() - startedAt) / 1_000_000
+            round++
+            val summary = "flush took ${tookMs}ms — opaque=$opaqueRows numeric=$numericRows"
+            when {
+                // The round now costs more than its own period: the loop is
+                // behind and the buffers are growing between rounds.
+                tookMs >= FLUSH_PERIOD_MS ->
+                    bgLog.warn("$summary — EXCEEDS the ${FLUSH_PERIOD_MS}ms period, the loop is falling behind")
+                tookMs >= FLUSH_SLOW_MS ->
+                    bgLog.info("$summary — slow")
+                // Periodic baseline: without it, a healthy server logs nothing
+                // and there is no reference to compare a bad day against.
+                round % FLUSH_HEARTBEAT_ROUNDS == 0L ->
+                    bgLog.info("$summary — round $round")
             }
         }
     }
@@ -564,13 +604,13 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
 // Flush history buffer → SQLite WAL batch insert
 // Called every 5s + at shutdown
 // ============================================================
-private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, widgetHistoryRepository: WidgetHistoryRepository) {
+private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, widgetHistoryRepository: WidgetHistoryRepository): Int {
     val batch = mutableListOf<HistoryEntry>()
     while (buffers.historyBuffer.isNotEmpty()) {
         batch.add(buffers.historyBuffer.poll() ?: break)
     }
 
-    if (batch.isEmpty()) return
+    if (batch.isEmpty()) return 0
 
     val historyRows = batch.map { entry ->
         WidgetHistoryRow(
@@ -584,18 +624,19 @@ private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuf
     }
 
     widgetHistoryRepository.insertBatch(historyRows)
+    return historyRows.size
 }
 
 // ============================================================
 // Flush numeric history buffer → SQLite WAL batch insert
 // ============================================================
-private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, repo: WidgetHistoryNumericRepository) {
+private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, repo: WidgetHistoryNumericRepository): Int {
     val batch = mutableListOf<NumericHistoryEntry>()
     while (buffers.numericHistoryBuffer.isNotEmpty()) {
         batch.add(buffers.numericHistoryBuffer.poll() ?: break)
     }
 
-    if (batch.isEmpty()) return
+    if (batch.isEmpty()) return 0
 
     val rows = batch.map { entry ->
         WidgetHistoryNumericRow(
@@ -610,6 +651,7 @@ private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.His
     }
 
     repo.insertBatch(rows)
+    return rows.size
 }
 
 // ============================================================

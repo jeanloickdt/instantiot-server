@@ -99,7 +99,16 @@ class TokenServiceTest {
     @Test
     fun `verify rejects a tampered signature`() {
         val token = svc.issue("u", 0)
-        val tampered = token.dropLast(1) + if (token.last() == 'A') 'B' else 'A'
+        // Flip a character in the MIDDLE of the signature, not the last one.
+        // A 256-bit HMAC signature is 43 base64url characters: the final one
+        // carries only 4 significant bits, its 2 low bits being padding. 'A'
+        // and 'B' differ solely by one of those, so they decode to the SAME
+        // bytes — the token stays valid and the test fails intermittently.
+        val sigStart = token.lastIndexOf('.') + 1
+        val at = sigStart + 5
+        val tampered = token.substring(0, at) +
+            (if (token[at] == 'A') 'B' else 'A') +
+            token.substring(at + 1)
         assertFailsWith<JWTVerificationException> { svc.verifier.verify(tampered) }
     }
 
