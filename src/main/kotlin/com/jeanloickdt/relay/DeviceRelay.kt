@@ -219,13 +219,24 @@ private suspend fun handleDeviceConnection(
         runCatching { socket.close() }
         registered?.let { dev ->
             withContext(NonCancellable) {
-                runCatching { connections.unregisterDevice(dev.id) }
-                runCatching { presence.markOffline(dev.id) }
-                runCatching {
-                    events.deviceOffline(dev.projectId, dev.id, DeviceOfflineReason.DISCONNECTED)
+                // EVERY offline effect is gated on still owning the slot — not
+                // just the removal. A zombie whose timeout fires after the
+                // board reconnected must touch nothing: no red dot in the app,
+                // no offline row in the DB.
+                if (connections.unregisterDevice(dev.id, socket)) {
+                    runCatching { presence.markOffline(dev.id) }
+                    runCatching {
+                        events.deviceOffline(dev.projectId, dev.id, DeviceOfflineReason.DISCONNECTED)
+                    }
+                    logger.info("Device disconnected — deviceId=${dev.id}")
+                } else {
+                    // Supplanted: the board already reconnected on a newer
+                    // socket. If this line loops for one deviceId, it is two
+                    // boards flashed with the SAME token evicting each other —
+                    // not a network problem.
+                    logger.info("Stale connection closed — deviceId=${dev.id} (supplanted; fast reconnect, or a duplicated token?)")
                 }
             }
-            logger.info("Device disconnected — deviceId=${dev.id}")
         }
     }
 }

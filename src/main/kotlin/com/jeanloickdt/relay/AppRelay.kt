@@ -312,7 +312,10 @@ private suspend fun relayFrameToDevices(
             // coroutine. We clean up the session along the way and notify
             // the app so it can surface the error.
             logger.warn("Outbox closed for device=$targetDeviceId — removing session")
-            connections.unregisterDevice(targetDeviceId)
+            // Pass OUR view of the session: a dead outbox must never evict a
+            // session newer than itself — triggered by a button press landing
+            // exactly during a reconnect.
+            connections.unregisterDevice(targetDeviceId, deviceSession.socket)
             events.commandFailed(
                 session  = session,
                 deviceId = targetDeviceId,

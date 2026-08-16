@@ -147,10 +147,17 @@ class ConnectionRegistry {
         writeChannel: ByteWriteChannel,
         scope: CoroutineScope
     ) {
-        deviceSessions[deviceId] = DeviceSession(device, socket)
+        val previous = deviceSessions.put(deviceId, DeviceSession(device, socket))
         // Close any previous outbox (fast reconnect of the same deviceId)
         // to avoid leaking a consumer coroutine.
         deviceOutboxes.remove(deviceId)?.close()
+        // …and the previous SOCKET — the outbox half of this was always here,
+        // the socket half was the missing symmetry. Closing it wakes the old
+        // reader immediately (no 90 s zombie window); its cleanup then fails
+        // the ownership check above and touches nothing. ONLY safe because
+        // that check exists — without it this line would make the race fire
+        // on every reconnect instead of occasionally.
+        runCatching { previous?.socket?.close() }
         deviceOutboxes[deviceId] = DeviceOutbox(
             deviceId     = deviceId,
             writeChannel = writeChannel,
@@ -160,9 +167,31 @@ class ConnectionRegistry {
 
     // remove a device session — disconnection. Closes the outbox (→ the
     // consumer coroutine exits cleanly) and frees the references.
-    fun unregisterDevice(deviceId: DeviceId) {
-        deviceSessions.remove(deviceId)
-        deviceOutboxes.remove(deviceId)?.close()
+    /**
+     * Removes the session ONLY if [mine] is the socket still occupying the
+     * slot, and says whether it was.
+     *
+     * The ownership check is the fix for a production race: a zombie
+     * connection's timeout fires AFTER the board has reconnected, and its
+     * cleanup used to remove the NEW session — telemetry kept flowing (the
+     * reader holds locals) but every command failed with DEVICE_OFFLINE until
+     * the next physical reconnect, for hours.
+     *
+     * `===` (reference identity), never `==`: [DeviceSession] is a data class,
+     * and two different connections of the same board carry an equal
+     * [DeviceRow] — content equality would declare the zombie the owner.
+     *
+     * `computeIfPresent` makes test-and-remove atomic. A get-then-remove would
+     * shrink the race window instead of closing it — same bug, a thousand
+     * times rarer and a thousand times harder to find.
+     */
+    fun unregisterDevice(deviceId: DeviceId, mine: Socket): Boolean {
+        var owned = false
+        deviceSessions.computeIfPresent(deviceId) { _, s ->
+            if (s.socket === mine) { owned = true; null } else s   // null ⇒ atomic removal
+        }
+        if (owned) deviceOutboxes.remove(deviceId)?.close()
+        return owned
     }
 
     // find a device's session by its ID

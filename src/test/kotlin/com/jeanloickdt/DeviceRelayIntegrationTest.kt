@@ -263,6 +263,69 @@ class DeviceRelayIntegrationTest {
         }
     }
 
+    // ── la course du zombie — nettoyage périmé sur deviceSessions ─────────
+
+    @Test
+    fun `a supplanted connection cleans nothing — commands reach the new socket`() = testApplication {
+        // The production race, made deterministic: registering B closes A's
+        // socket, so A's cleanup runs NOW instead of at a 90 s timeout — and
+        // must fail the ownership check. Before the fix this test fails
+        // systematically: A's finally removed B's session, telemetry kept
+        // flowing, and every command died with DEVICE_OFFLINE for hours.
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort)
+        val ws = createClient { install(WebSockets) }
+
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+
+            // ── Connexion A ──
+            val espA = Socket("localhost", awaitBoundPort(tcpPort))
+            espA.getOutputStream().apply { write(handshake(deviceToken)); flush() }
+            val seen = mutableListOf<String>()
+            withTimeoutOrNull(5000) {
+                while (seen.none { it.contains("device_online") }) {
+                    (incoming.receive() as? Frame.Text)?.let { seen += it.readText() }
+                }
+            }
+            assertTrue(seen.any { it.contains("device_online") }, "A must come online")
+
+            // ── Connexion B, MÊME token → A est supplantée et sa socket fermée ──
+            Socket("localhost", awaitBoundPort(tcpPort)).use { espB ->
+                espB.soTimeout = 4000
+                espB.getOutputStream().apply { write(handshake(deviceToken)); flush() }
+
+                // Wait until A's reader has died and run its (stale) cleanup —
+                // its socket was closed by B's registration.
+                withTimeoutOrNull(5000) {
+                    while (espA.inputStream.read() != -1) { /* drain until EOF */ }
+                }
+
+                // The app must have seen NO device_offline: A's cleanup owns
+                // nothing anymore. (Drain whatever arrived without blocking.)
+                while (true) {
+                    val f = withTimeoutOrNull(300) { incoming.receive() } ?: break
+                    (f as? Frame.Text)?.let { seen += it.readText() }
+                }
+                assertTrue(seen.none { it.contains("device_offline") },
+                    "the stale cleanup must not broadcast a red dot for a live board")
+
+                // The DB still says online — the admin panel shows green.
+                assertTrue(deviceRepository.findById(deviceId)!!.isOnline,
+                    "presence must still be online after the stale cleanup")
+
+                // And THE symptom: a command from the app reaches B's socket.
+                val payload = floatLE(0.5f)
+                send(Frame.Binary(true, appCommandFrame(listOf(deviceId), widgetId, TYPE_HSLIDER, EV_SETVALUE, payload)))
+                val expected = deviceFrame(widgetId, TYPE_HSLIDER, EV_SETVALUE, payload)
+                val received = readExactly(espB.getInputStream(), expected.size)
+                assertContentEquals(expected, received)
+            }
+            runCatching { espA.close() }
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────
 
     /** Reads exactly [n] bytes from a blocking InputStream (or fails on timeout/EOF). */
