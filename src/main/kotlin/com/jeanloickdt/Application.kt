@@ -20,6 +20,9 @@
 package com.jeanloickdt
 
 import com.jeanloickdt.auth.authRoutes
+import com.jeanloickdt.automation.automationHealthRoutes
+import com.jeanloickdt.automation.emailConfigRoutes
+import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
 import com.jeanloickdt.auth.data.SqliteUserRepository
@@ -148,6 +151,37 @@ val widgetHistoryMinRepository: WidgetHistoryAggregateRepository  = SqliteWidget
 val widgetHistoryHourRepository: WidgetHistoryAggregateRepository = SqliteWidgetHistoryAggregateRepository(WidgetHistoryHourTable)
 val widgetHistoryDayRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryDayTable)
 
+// ── Rule events (socle automatisation) ──────────────────────
+// The relay produces, nobody consumes yet: the values channel keeps its
+// freshest 1024 and the discrete one its first 4096 — bounded either way.
+// The engine will drain them; until then this is inert.
+val eventSinks = com.jeanloickdt.event.EventSinks()
+
+/**
+ * Which widgets a rule watches. The rule cache will own this; until it
+ * exists, nobody watches and the WidgetValue producer publishes nothing —
+ * one predicate call per frame, nothing else.
+ */
+@Volatile
+var watchedWidgets: (com.jeanloickdt.relay.WidgetKey) -> Boolean = { false }
+
+// Message ledger — RAM on the hot path, drained by the 5 s flush. A plain
+// usage statistic here; the cloud edition reads it for its monthly quota.
+val messageUsage     = com.jeanloickdt.automation.MessageUsageCounter()
+val messageUsageRepo: com.jeanloickdt.automation.MessageUsageRepository =
+    com.jeanloickdt.automation.SqliteMessageUsageRepository()
+
+// The durability frontier. The sender registry is EMPTY until the delivery
+// channels exist (EMAIL via the operator's SMTP key, COMMAND via the
+// DeviceOutbox) — the worker leases nothing from an empty table and costs
+// one indexed SELECT per second.
+val pendingActions: com.jeanloickdt.automation.PendingActionRepository =
+    com.jeanloickdt.automation.SqlitePendingActionRepository()
+
+// The rules, in RAM — reloaded in module() once the DB is up, and after every
+// rule mutation (the CRUD's single coupling point).
+val ruleCache = com.jeanloickdt.automation.RuleCache()
+
 private val logger = LoggerFactory.getLogger("Application")
 
 // dbFile is injectable so tests boot the REAL module against a throwaway
@@ -212,6 +246,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         WidgetHistoryMinTable,
         WidgetHistoryHourTable,
         WidgetHistoryDayTable,
+        *com.jeanloickdt.automation.data.AutomationTables.ALL,
         dbFile = dbFile
     )
 
@@ -362,6 +397,9 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         lastValues  = lastValues,
         presence    = presence,
         events      = controlEvents,
+        sinks       = eventSinks,
+        watchedWidgets = { key -> watchedWidgets(key) },
+        usage       = messageUsage,
         tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort
     )
 
@@ -401,12 +439,46 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // silently stop persisting and let the RAM buffers grow until OOM.
     val bgLog = LoggerFactory.getLogger("InstantIoT.maintenance")
 
+    // Flush cadence and its alert thresholds — see the loop below.
+    val FLUSH_PERIOD_MS = 5_000L
+    // A round costing a fifth of its period already deserves attention: it
+    // leaves little headroom before the loop starts stretching.
+    val FLUSH_SLOW_MS = 1_000L
+    // ~5 min at a 5 s period. A healthy server must still say so periodically,
+    // otherwise there is no baseline to compare a bad day against.
+    val FLUSH_HEARTBEAT_ROUNDS = 60L
+
     launch(Dispatchers.IO) {
+        // Timing the flush round is the leading indicator of saturation.
+        //
+        // This loop is `delay(period)` THEN work, not a fixed-rate scheduler:
+        // the effective period is `period + flush duration`. A slow flush
+        // therefore does not merely arrive late, it *stretches the interval* —
+        // the RAM buffers take in more, the next round has more to write, and
+        // the drift compounds. Degradation is gradual, which is exactly why it
+        // has to be measured rather than waited for.
+        //
+        // Row counts come back from the flush functions: the batch is already
+        // materialised there, whereas `.size` on a ConcurrentLinkedQueue is
+        // O(n) and would cost more than the flush it measures.
+        var round = 0L
         while (true) {
-            delay(5_000)
+            delay(FLUSH_PERIOD_MS)
+            val startedAt = System.nanoTime()
+            var opaqueRows = 0
+            var numericRows = 0
             try {
-                flushHistoryBuffer(buffers, widgetHistoryRepository)
-                flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
+                opaqueRows  = flushHistoryBuffer(buffers, widgetHistoryRepository)
+
+                // message ledger — a handful of rows per cycle, one per owner
+                // that emitted since the last flush.
+                run {
+                    val period = com.jeanloickdt.automation.MessageUsageRepository.periodOf(System.currentTimeMillis())
+                    messageUsage.drain().forEach { (owner, delta) ->
+                        messageUsageRepo.add(owner, period, delta)
+                    }
+                }
+                numericRows = flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
                 flushLastValues(lastValues, cacheAwareWidgets)
                 flushClosedAggregatorBuckets(
                     minRepo  = widgetHistoryMinRepository,
@@ -416,6 +488,21 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 )
             } catch (e: Exception) {
                 bgLog.error("History flush round failed — retrying in 5s", e)
+            }
+            val tookMs = (System.nanoTime() - startedAt) / 1_000_000
+            round++
+            val summary = "flush took ${tookMs}ms — opaque=$opaqueRows numeric=$numericRows"
+            when {
+                // The round now costs more than its own period: the loop is
+                // behind and the buffers are growing between rounds.
+                tookMs >= FLUSH_PERIOD_MS ->
+                    bgLog.warn("$summary — EXCEEDS the ${FLUSH_PERIOD_MS}ms period, the loop is falling behind")
+                tookMs >= FLUSH_SLOW_MS ->
+                    bgLog.info("$summary — slow")
+                // Periodic baseline: without it, a healthy server logs nothing
+                // and there is no reference to compare a bad day against.
+                round % FLUSH_HEARTBEAT_ROUNDS == 0L ->
+                    bgLog.info("$summary — round $round")
             }
         }
     }
@@ -461,6 +548,110 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 }
             } catch (e: Exception) {
                 bgLog.error("History retention cleanup round failed — retrying next hour", e)
+            }
+        }
+    }
+
+    // ============================================================
+    // Rules engine (étape 5) — the piece between the event sinks and
+    // the durability frontier. Zero rules in the table = the cache is
+    // empty, watches() is false everywhere, and NOTHING changes.
+    // ============================================================
+    ruleCache.reload()
+    watchedWidgets = { key -> ruleCache.watches(key) }
+    val automationEngine = com.jeanloickdt.automation.AutomationEngine(
+        eventSinks, ruleCache, pendingActions,
+        com.jeanloickdt.automation.SqliteAutomationStateStore(), deviceRepository
+    )
+    launch(Dispatchers.Default) { automationEngine.run() }
+
+    // The health watch (étape 8) — the server is the only party that can see
+    // a silent delivery outage. 30 s cadence, warnings past the thresholds.
+    val healthWatch = com.jeanloickdt.automation.AutomationHealthWatch()
+    launch(Dispatchers.IO) {
+        while (true) {
+            delay(30_000)
+            try {
+                healthWatch.logAll(healthWatch.check(
+                    com.jeanloickdt.automation.snapshot(pendingActions, eventSinks, automationEngine, System.currentTimeMillis())
+                ))
+            } catch (e: Exception) {
+                bgLog.error("Health watch failed — retrying next round", e)
+            }
+        }
+    }
+
+
+    // The tick: offline confirmations every 10 s (the "afterS" debounce runs
+    // HERE, never as a delay in the engine — one offline rule must not freeze
+    // every rule for thirty seconds), stale sweep every 60 s.
+    val staleSweeper = com.jeanloickdt.event.WidgetStaleSweeper(lastValues, eventSinks)
+    val schedulerWorker = com.jeanloickdt.automation.SchedulerWorker(eventSinks)
+    launch(Dispatchers.Default) {
+        var i = 0
+        while (true) {
+            delay(10_000)
+            try {
+                automationEngine.tick(System.currentTimeMillis())
+                schedulerWorker.pollOnce()
+                if (++i % 6 == 0) {
+                    staleSweeper.sweep(ruleCache.watchedStaleKeys(), System.currentTimeMillis())
+                }
+            } catch (e: Exception) {
+                bgLog.error("Automation tick failed — retrying next tick", e)
+            }
+        }
+    }
+
+    // ============================================================
+    // Delivery loop — drains pending_actions every second. The lease inside
+    // the repo is the whole crash story: a pass that dies mid-batch leaves
+    // its rows leased, and any later pass picks them up when the lease
+    // expires. No recovery code, just an expiry.
+    // ============================================================
+    // ── Étape 6 : les expéditeurs EMAIL et COMMAND ──
+    // EMAIL lit sa config à CHAQUE envoi : une clé collée dans le panneau agit
+    // à la livraison suivante, sans redémarrage. Le destinataire : 'to' de la
+    // règle → l'email du compte (en cloud, le username iia EST l'email ; en
+    // self-host il ne l'est pas et ce maillon rend null) → l'adresse d'alerte
+    // du panneau. COMMAND passe par la même outbox que les commandes de
+    // l'app. PUSH attend le projet Firebase (le worker marque DEAD, motif
+    // clair, et l'API refuse déjà les règles PUSH là où il n'existera pas).
+    val emailSender = com.jeanloickdt.automation.EmailActionSender(
+        config = {
+            com.jeanloickdt.automation.EmailConfig(
+                apiKey    = com.jeanloickdt.common.ServerConfig.emailBrevoApiKey,
+                fromEmail = com.jeanloickdt.common.ServerConfig.emailFrom,
+                fromName  = com.jeanloickdt.common.ServerConfig.emailFromName,
+                defaultTo = com.jeanloickdt.common.ServerConfig.emailAlertTo
+            )
+        },
+        accountEmail = { ownerId ->
+            userRepository.findById(ownerId)?.username?.takeIf { "@" in it }
+        }
+    )
+    val commandSender = com.jeanloickdt.automation.CommandActionSender(
+        deviceOwner = { deviceId -> deviceRepository.findById(deviceId)?.ownerId },
+        sendToDevice = { deviceId, frame ->
+            // discret, jamais streaming : une commande de règle ne se jette pas
+            connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
+        }
+    )
+    val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(
+        pendingActions,
+        senders = mapOf(
+            com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
+            com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
+        )
+    )
+
+    launch(Dispatchers.IO) {
+        while (true) {
+            delay(1_000)
+            try {
+                deliveryWorker.runOnce()
+            } catch (e: Exception) {
+                bgLog.error("Delivery pass failed — retrying next second", e)
             }
         }
     }
@@ -542,7 +733,13 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
+        val accountPurge = com.jeanloickdt.auth.AccountPurge(
+            userRepository, projectRepository, deviceRepository, cacheAwareWidgets,
+            widgetHistoryRepository, widgetHistoryNumericRepository,
+            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+            connections, controlEvents
+        )
+        authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, accountPurge)
         projectRoutes(
             projectRepository, deviceRepository, cacheAwareWidgets,
             widgetHistoryRepository, widgetHistoryNumericRepository,
@@ -550,6 +747,20 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             connections, controlEvents
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
+        emailConfigRoutes(userRepository, emailSender)
+        automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
+        ruleRoutes(
+            ruleCache, cacheAwareWidgets, deviceRepository,
+            com.jeanloickdt.automation.RulePolicies(
+                // The OFFRE boundary: no Firebase credentials can ship in a
+                // public repo, so PUSH rules are refused at creation with a
+                // message that says why — not enqueued into DEAD rows.
+                allowedActionTypes = setOf(
+                    com.jeanloickdt.automation.RuleDefinition.TYPE_EMAIL,
+                    com.jeanloickdt.automation.RuleDefinition.TYPE_COMMAND
+                )
+            )
+        )
         widgetRoutes(
             cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
@@ -564,13 +775,13 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
 // Flush history buffer → SQLite WAL batch insert
 // Called every 5s + at shutdown
 // ============================================================
-private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, widgetHistoryRepository: WidgetHistoryRepository) {
+private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, widgetHistoryRepository: WidgetHistoryRepository): Int {
     val batch = mutableListOf<HistoryEntry>()
     while (buffers.historyBuffer.isNotEmpty()) {
         batch.add(buffers.historyBuffer.poll() ?: break)
     }
 
-    if (batch.isEmpty()) return
+    if (batch.isEmpty()) return 0
 
     val historyRows = batch.map { entry ->
         WidgetHistoryRow(
@@ -584,18 +795,19 @@ private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuf
     }
 
     widgetHistoryRepository.insertBatch(historyRows)
+    return historyRows.size
 }
 
 // ============================================================
 // Flush numeric history buffer → SQLite WAL batch insert
 // ============================================================
-private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, repo: WidgetHistoryNumericRepository) {
+private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, repo: WidgetHistoryNumericRepository): Int {
     val batch = mutableListOf<NumericHistoryEntry>()
     while (buffers.numericHistoryBuffer.isNotEmpty()) {
         batch.add(buffers.numericHistoryBuffer.poll() ?: break)
     }
 
-    if (batch.isEmpty()) return
+    if (batch.isEmpty()) return 0
 
     val rows = batch.map { entry ->
         WidgetHistoryNumericRow(
@@ -610,6 +822,7 @@ private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.His
     }
 
     repo.insertBatch(rows)
+    return rows.size
 }
 
 // ============================================================

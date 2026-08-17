@@ -46,6 +46,7 @@ import io.ktor.websocket.readBytes
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.exposed.sql.selectAll
 import org.mindrot.jbcrypt.BCrypt
 import java.net.ServerSocket
 import java.net.Socket
@@ -86,6 +87,7 @@ class DeviceRelayIntegrationTest {
             UserTable, ProjectTable, DeviceTable, WidgetTable,
             WidgetHistoryTable, WidgetHistoryNumericTable,
             WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
+            *com.jeanloickdt.automation.data.AutomationTables.ALL,
             dbFile = tmpDb
         )
         val userId = userRepository.create("alice", BCrypt.hashpw("pw", BCrypt.gensalt()))
@@ -263,6 +265,240 @@ class DeviceRelayIntegrationTest {
         }
     }
 
+    // ── les producteurs d'événements, bout en bout ────────────────────────
+
+    @Test
+    fun `presence and watched values reach the rule sinks`() = testApplication {
+        val tcpPort = reserveFreePort()
+        val sinks = com.jeanloickdt.event.EventSinks()
+        wireRelay(tcpPort, sinks = sinks, watched = { it.widgetId == widgetId })
+
+        val ws = createClient { install(WebSockets) }
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.getOutputStream().apply {
+                    write(handshake(deviceToken))
+                    write(deviceFrame(widgetId, TYPE_GAUGE, EV_SETVALUE, floatLE(42.5f)))
+                    flush()
+                }
+                collectUntilOnlineAndBinary()
+            }
+        }
+        // The socket closed with the use{} block — the offline path runs in the
+        // connection's finally, so poll while accumulating everything drained.
+        val discrete = mutableListOf<com.jeanloickdt.event.RelayEvent>()
+        var tries = 0
+        while (tries++ < 50 && discrete.none { it is com.jeanloickdt.event.RelayEvent.DeviceOffline }) {
+            while (true) discrete.add(sinks.discrete.tryReceive().getOrNull() ?: break)
+            if (discrete.none { it is com.jeanloickdt.event.RelayEvent.DeviceOffline }) kotlinx.coroutines.delay(100)
+        }
+        val online  = discrete.filterIsInstance<com.jeanloickdt.event.RelayEvent.DeviceOnline>().singleOrNull()
+        val offline = discrete.filterIsInstance<com.jeanloickdt.event.RelayEvent.DeviceOffline>().singleOrNull()
+        assertTrue(online != null, "DeviceOnline must reach the discrete sink")
+        assertTrue(offline != null, "DeviceOffline must reach the discrete sink")
+        assertEquals(ownerId, online.ownerId)
+        assertEquals("disconnected", offline.reason)
+
+        // And the WATCHED widget's value crossed the lossy sink.
+        val value = sinks.values.tryReceive().getOrNull() as? com.jeanloickdt.event.RelayEvent.WidgetValue
+        assertTrue(value != null, "a watched widget's sample must be published")
+        assertEquals(42.5, value.value, 0.001)
+        assertEquals(ownerId, value.ownerId)
+    }
+
+    @Test
+    fun `an unwatched widget publishes nothing — the producer-side gate`() = testApplication {
+        val tcpPort = reserveFreePort()
+        val sinks = com.jeanloickdt.event.EventSinks()
+        wireRelay(tcpPort, sinks = sinks, watched = { false })
+
+        val ws = createClient { install(WebSockets) }
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.getOutputStream().apply {
+                    write(handshake(deviceToken))
+                    write(deviceFrame(widgetId, TYPE_GAUGE, EV_SETVALUE, floatLE(1f)))
+                    flush()
+                }
+                collectUntilOnlineAndBinary()
+            }
+        }
+
+        assertTrue(sinks.values.tryReceive().getOrNull() == null,
+            "with no rule watching, the hot path must publish no value at all")
+    }
+
+    // ── le moteur de règles, bout en bout ─────────────────────────────────
+
+    @Test
+    fun `a rule fires from a real TCP frame into pending_actions`() = testApplication {
+        // The acceptance criterion of étape 5, mirror of étape 4's sqlite3
+        // test: a rule INSERTED IN SQL (the REST API is étape 9), a frame over
+        // the real socket, and a durable action row at the other end. The full
+        // path: parse → strict guard → producer gate → sink → engine → enqueue.
+        org.jetbrains.exposed.sql.transactions.transaction {
+            exec("""INSERT INTO automation_rules
+                (id, owner_id, name, enabled, trigger_kind, trigger_widget_id, definition, created_at, updated_at)
+                VALUES ('r-e2e', '$ownerId', 'e2e', 1, 'value', '$widgetId',
+                '{"when":{"kind":"value","above":20.0},"cooldownS":0,"actions":[{"type":"PUSH","title":"seuil","body":"{{value}}"}]}', 0, 0)""")
+        }
+        val cache = com.jeanloickdt.automation.RuleCache().apply { reload() }
+        val sinks = com.jeanloickdt.event.EventSinks()
+        val engine = com.jeanloickdt.automation.AutomationEngine(
+            sinks, cache, com.jeanloickdt.automation.SqlitePendingActionRepository(),
+            com.jeanloickdt.automation.SqliteAutomationStateStore(), deviceRepository
+        )
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort, sinks = sinks, watched = cache::watches)
+
+        val ws = createClient { install(WebSockets) }
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.getOutputStream().apply {
+                    write(handshake(deviceToken))
+                    write(deviceFrame(widgetId, TYPE_GAUGE, EV_SETVALUE, floatLE(42.5f)))
+                    flush()
+                }
+                collectUntilOnlineAndBinary()
+            }
+        }
+
+        // Drain the sink into the engine deterministically (the loop coroutine
+        // is production wiring; the test drives the same calls by hand).
+        while (true) {
+            val e = sinks.values.tryReceive().getOrNull() ?: break
+            engine.handle(e)
+        }
+
+        val rows = org.jetbrains.exposed.sql.transactions.transaction {
+            com.jeanloickdt.automation.data.PendingActionTable.selectAll()
+                .map { it[com.jeanloickdt.automation.data.PendingActionTable.type] to
+                       it[com.jeanloickdt.automation.data.PendingActionTable.payload] }
+        }
+        assertEquals(1, rows.size, "the frame crossed the threshold — one durable action expected")
+        assertEquals("PUSH", rows.single().first)
+        assertTrue("42.5" in rows.single().second, "the value must be rendered into the payload")
+    }
+
+    // ── la course du zombie — nettoyage périmé sur deviceSessions ─────────
+
+    @Test
+    fun `a supplanted connection cleans nothing — commands reach the new socket`() = testApplication {
+        // The production race, made deterministic: registering B closes A's
+        // socket, so A's cleanup runs NOW instead of at a 90 s timeout — and
+        // must fail the ownership check. Before the fix this test fails
+        // systematically: A's finally removed B's session, telemetry kept
+        // flowing, and every command died with DEVICE_OFFLINE for hours.
+        val tcpPort = reserveFreePort()
+        val sinks = com.jeanloickdt.event.EventSinks()
+        wireRelay(tcpPort, sinks = sinks)
+        val ws = createClient { install(WebSockets) }
+
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+
+            // ── Connexion A ──
+            val espA = Socket("localhost", awaitBoundPort(tcpPort))
+            espA.getOutputStream().apply { write(handshake(deviceToken)); flush() }
+            val seen = mutableListOf<String>()
+            withTimeoutOrNull(5000) {
+                while (seen.none { it.contains("device_online") }) {
+                    (incoming.receive() as? Frame.Text)?.let { seen += it.readText() }
+                }
+            }
+            assertTrue(seen.any { it.contains("device_online") }, "A must come online")
+
+            // ── Connexion B, MÊME token → A est supplantée et sa socket fermée ──
+            Socket("localhost", awaitBoundPort(tcpPort)).use { espB ->
+                espB.soTimeout = 4000
+                espB.getOutputStream().apply { write(handshake(deviceToken)); flush() }
+
+                // Wait until A's reader has died and run its (stale) cleanup —
+                // its socket was closed by B's registration.
+                withTimeoutOrNull(5000) {
+                    while (espA.inputStream.read() != -1) { /* drain until EOF */ }
+                }
+
+                // The app must have seen NO device_offline: A's cleanup owns
+                // nothing anymore. (Drain whatever arrived without blocking.)
+                while (true) {
+                    val f = withTimeoutOrNull(300) { incoming.receive() } ?: break
+                    (f as? Frame.Text)?.let { seen += it.readText() }
+                }
+                assertTrue(seen.none { it.contains("device_offline") },
+                    "the stale cleanup must not broadcast a red dot for a live board")
+
+                // No false DeviceOffline into the RULE feed either — once rules
+                // exist, that lie would become a push notification.
+                val ruleEvents = buildList {
+                    while (true) add(sinks.discrete.tryReceive().getOrNull() ?: break)
+                }
+                assertTrue(ruleEvents.none { it is com.jeanloickdt.event.RelayEvent.DeviceOffline },
+                    "the stale cleanup must not feed a false DeviceOffline to the engine")
+
+                // The DB still says online — the admin panel shows green.
+                assertTrue(deviceRepository.findById(deviceId)!!.isOnline,
+                    "presence must still be online after the stale cleanup")
+
+                // And THE symptom: a command from the app reaches B's socket.
+                val payload = floatLE(0.5f)
+                send(Frame.Binary(true, appCommandFrame(listOf(deviceId), widgetId, TYPE_HSLIDER, EV_SETVALUE, payload)))
+                val expected = deviceFrame(widgetId, TYPE_HSLIDER, EV_SETVALUE, payload)
+                val received = readExactly(espB.getInputStream(), expected.size)
+                assertContentEquals(expected, received)
+            }
+            runCatching { espA.close() }
+        }
+    }
+
+    // ── le fusible de débit, bout en bout ─────────────────────────────────
+
+    @Test
+    fun `a flooding board is throttled at the burst, not buffered without bound`() = testApplication {
+        val tcpPort = reserveFreePort()
+        val buffers = com.jeanloickdt.relay.HistoryBuffers()
+        wireRelay(tcpPort, buffers = buffers)
+
+        val ws = createClient { install(WebSockets) }
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                val out = esp.getOutputStream()
+                out.write(handshake(deviceToken))
+                out.flush()
+                // A loop() without delay(): 300 valid frames as fast as the
+                // socket accepts them. The fuse is 50/s with a burst of 100.
+                repeat(300) {
+                    out.write(deviceFrame(widgetId, TYPE_GAUGE, EV_SETVALUE, floatLE(it.toFloat())))
+                }
+                out.flush()
+                collectUntilOnlineAndBinary()
+                // The server is still draining the flood from its receive
+                // buffer — closing now would measure a race, not the fuse.
+                // Wait until the count stops moving.
+                var previous = -1
+                while (buffers.historyBuffer.size != previous) {
+                    previous = buffers.historyBuffer.size
+                    kotlinx.coroutines.delay(200)
+                }
+            }
+        }
+
+        val stored = buffers.historyBuffer.size
+        // The burst passes (a healthy backlog flush must never be punished),
+        // the rest is dropped. The margin covers refill during the send.
+        assertTrue(stored >= 100, "the burst itself must pass — only $stored stored")
+        assertTrue(stored <= 150, "the flood must be capped near the burst — $stored stored out of 300")
+    }
+
     // ── helpers ─────────────────────────────────────────────────
 
     /** Reads exactly [n] bytes from a blocking InputStream (or fails on timeout/EOF). */
@@ -299,9 +535,13 @@ class DeviceRelayIntegrationTest {
      * With DI, every test builds its OWN SessionRegistry + broadcaster:
      * no shared global state, so no cross-test cleanup is needed.
      */
-    private fun io.ktor.server.testing.ApplicationTestBuilder.wireRelay(tcpPort: Int) {
+    private fun io.ktor.server.testing.ApplicationTestBuilder.wireRelay(
+        tcpPort: Int,
+        buffers: com.jeanloickdt.relay.HistoryBuffers = com.jeanloickdt.relay.HistoryBuffers(),
+        sinks: com.jeanloickdt.event.EventSinks? = null,
+        watched: (com.jeanloickdt.relay.WidgetKey) -> Boolean = { false }
+    ) {
         val connections = com.jeanloickdt.relay.ConnectionRegistry()
-        val buffers     = com.jeanloickdt.relay.HistoryBuffers()
         val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
         val presence    = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
         val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
@@ -316,6 +556,8 @@ class DeviceRelayIntegrationTest {
             startDeviceRelay(
                 deviceRepository,
                 connections, buffers, lastValues, presence, events,
+                sinks = sinks,
+                watchedWidgets = watched,
                 tcpPort = tcpPort
             )
         }

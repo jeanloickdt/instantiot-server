@@ -412,3 +412,31 @@ class FrameParserTest {
         assertTrue(expected.contentEquals(actual), "byte arrays differ")
     }
 }
+
+/**
+ * Contrôle croisé du banc de charge : ces octets sortent TELS QUELS du codec
+ * Python (`banc-de-charge/protocol.py`). Si ce test tombe, le générateur émet
+ * des trames que le serveur rejette — et un banc qui mesure des trames
+ * rejetées mesure le vide, sans jamais le dire.
+ */
+class LoadHarnessFrameCompatTest {
+
+    private fun hex(s: String) = s.split(" ").map { it.toInt(16).toByte() }.toByteArray()
+
+    @Test
+    fun `le battement du generateur Python est accepte`() {
+        val frame = hex("aa 01 04 00 00 00 fe 00 c2")
+        assertTrue(FrameParser.isValid(frame), "trame rejetée par isValid")
+        assertEquals(0xFE, FrameParser.extractType(frame))
+    }
+
+    @Test
+    fun `une mesure du generateur Python est accepte et lisible`() {
+        val frame = hex("aa 01 0d 00 00 05 74 65 6d 70 31 03 01 00 00 b4 41 95")
+        assertTrue(FrameParser.isValid(frame), "trame rejetée par isValid")
+        // extractWidgetId ne doit PAS renvoyer null : c'est ce retour qui fait
+        // sortir handleDeviceFrame avant toute écriture.
+        assertEquals("temp1", FrameParser.extractWidgetId(frame))
+        assertEquals(0x03, FrameParser.extractType(frame))
+    }
+}

@@ -61,4 +61,13 @@ interface UserRepository {
     fun updateCredentials(id: String, newUsername: String?, newPwdHash: String?)
 
     fun count(): Long
+
+    /**
+     * Removes the account row. Called LAST inside the purge transaction —
+     * as long as this row exists, the deletion is retryable by its owner.
+     */
+    fun delete(id: String)
+
+    /** Admin head-count — the guard that keeps the last admin undeletable. */
+    fun countAdmins(): Long
 }

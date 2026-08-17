@@ -64,6 +64,16 @@ document.addEventListener('alpine:init', () => {
       busy: false,
       msg: '', msgType: ''
     },
+    emailForm: {
+      apiKey: '',            // never pre-filled — the server returns only the tail
+      apiKeyLast4: null,
+      from: '', fromName: '', alertTo: '',
+      testTo: '',            // where the test goes — never locked by managedByEnv
+      configured: false,
+      managedByEnv: false,   // cloud: the key comes from the environment
+      busy: false,
+      msg: '', msgType: ''
+    },
 
     // ── Data ───────────────────────────────────────────────
     stats: {
@@ -414,6 +424,76 @@ document.addEventListener('alpine:init', () => {
     },
 
     // ── Backup config ──────────────────────────────────────
+    // ── Email (Brevo) ──────────────────────────────────────
+    async loadEmailConfig() {
+      const res = await this.api('/api/admin/email-config');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.emailForm.apiKey       = '';   // the secret never comes back
+      this.emailForm.apiKeyLast4  = data.apiKeyLast4 || null;
+      this.emailForm.from         = data.from || '';
+      this.emailForm.fromName     = data.fromName || '';
+      this.emailForm.alertTo      = data.alertTo || '';
+      this.emailForm.configured   = data.configured;
+      this.emailForm.managedByEnv = data.managedByEnv;
+    },
+
+    async saveEmailConfig() {
+      this.emailForm.msg = '';
+      this.emailForm.msgType = '';
+      const body = {
+        from:     this.emailForm.from,
+        fromName: this.emailForm.fromName,
+        alertTo:  this.emailForm.alertTo
+      };
+      // An untouched key field means "keep the stored key" — sending '' would
+      // silently erase it.
+      if (this.emailForm.apiKey) body.apiKey = this.emailForm.apiKey;
+
+      const res = await this.api('/api/admin/email-config', {
+        method: 'PATCH',
+        body: JSON.stringify(body)
+      });
+      if (res && res.ok) {
+        this.emailForm.msg = this.t('email.saved');
+        this.emailForm.msgType = 'success';
+        this.emailForm.apiKey = '';
+        await this.loadEmailConfig();
+      } else if (res) {
+        const data = await res.json().catch(() => null);
+        this.emailForm.msg = data?.error || this.t('email.saveError');
+        this.emailForm.msgType = 'error';
+      }
+    },
+
+    async sendTestEmail() {
+      if (this.emailForm.busy) return;
+      this.emailForm.busy = true;
+      this.emailForm.msg = this.t('email.testing');
+      this.emailForm.msgType = 'success';
+      try {
+        // Empty means "let the server decide": the account address in
+        // cloud, the default recipient in self-host.
+        const to = this.emailForm.testTo.trim();
+        const res = await this.api('/api/admin/email-config/test', {
+          method: 'POST',
+          body: JSON.stringify(to ? { to } : {})
+        });
+        if (res && res.ok) {
+          const data = await res.json().catch(() => null);
+          this.emailForm.msg = data?.message || this.t('email.testOk');
+        } else if (res) {
+          const data = await res.json().catch(() => null);
+          // The server's reason is the useful part: bad key, no recipient,
+          // Brevo unreachable. Never swallow it behind a generic message.
+          this.emailForm.msg = data?.error || this.t('email.testFail');
+          this.emailForm.msgType = 'error';
+        }
+      } finally {
+        this.emailForm.busy = false;
+      }
+    },
+
     async loadBackupConfig() {
       const res = await this.api('/api/admin/backup/config');
       if (!res || !res.ok) return;
@@ -567,6 +647,9 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'retention':
           this.loadHistoryConfig();
+          break;
+        case 'email':
+          this.loadEmailConfig();
           break;
         case 'backups':
           this.loadBackupConfig();

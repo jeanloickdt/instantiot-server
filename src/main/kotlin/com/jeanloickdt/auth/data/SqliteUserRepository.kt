@@ -112,6 +112,20 @@ class SqliteUserRepository : UserRepository {
         }
     }
 
+    override fun delete(id: String) {
+        transaction {
+            // the parameter `id` shadows nothing here, but the qualified column
+            // needs the builder-scoped eq
+            UserTable.deleteWhere { with(SqlExpressionBuilder) { UserTable.id eq id } }
+        }
+    }
+
+    override fun countAdmins(): Long {
+        return transaction {
+            UserTable.selectAll().where { UserTable.role eq "admin" }.count()
+        }
+    }
+
     private fun ResultRow.toUserRow() = UserRow(
         id              = this[UserTable.id],
         username        = this[UserTable.username],

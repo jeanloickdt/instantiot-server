@@ -87,6 +87,9 @@
       <polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/>
       <line x1="10" y1="12" x2="14" y2="12"/>
     </symbol>
+    <symbol id="icon-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="4" width="20" height="16" rx="2"/><polyline points="2 7 12 13 22 7"/>
+    </symbol>
     <symbol id="icon-info" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
     </symbol>
@@ -157,7 +160,7 @@
 <!-- ============================================================ -->
 <div class="app-shell"
      :class="{ 'sidebar-collapsed': sidebarCollapsed, 'mobile-menu-open': mobileMenuOpen }"
-     x-show="['dashboard','devices','users','settings','retention','backups'].includes(view)">
+     x-show="['dashboard','devices','users','settings','retention','backups','email'].includes(view)">
 
   <header class="mobile-topbar">
     <button class="burger-btn" @click="mobileMenuOpen = true" :title="t('a11y.openMenu')" :aria-label="t('a11y.openMenu')">
@@ -216,6 +219,11 @@
          @click.prevent="navigate('backups'); mobileMenuOpen = false" :title="t('nav.backups')">
         <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-archive"/></svg>
         <span class="sidebar-link-label" x-text="t('nav.backups')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'email' }"
+         @click.prevent="navigate('email'); mobileMenuOpen = false" :title="t('nav.email')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-mail"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.email')"></span>
       </a>
     </nav>
 
@@ -595,6 +603,84 @@
     </div>
 
     <!-- BACKUPS -->
+    <!-- EMAIL -->
+    <div class="page" x-show="view === 'email'">
+      <div class="container container-narrow">
+        <div class="page-header">
+          <h1 x-text="t('email.title')"></h1>
+          <p class="page-header-desc" x-text="t('email.intro')"></p>
+        </div>
+
+        <p class="page-note" x-show="emailForm.managedByEnv">
+          <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
+          <span x-text="t('email.managedByEnv')"></span>
+        </p>
+
+        <form class="form-card" @submit.prevent="saveEmailConfig()">
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('email.apiKey')"></span>
+            </label>
+            <input type="password" class="form-input" x-model="emailForm.apiKey"
+                   :placeholder="emailForm.apiKeyLast4 ? ('\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022' + emailForm.apiKeyLast4) : 'xkeysib-\u2026'"
+                   :disabled="emailForm.managedByEnv" autocomplete="off">
+            <p class="config-note" x-text="t('email.apiKeyHint')"></p>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('email.from')"></span>
+            </label>
+            <input type="email" class="form-input" x-model="emailForm.from"
+                   placeholder="alertes@mondomaine.fr" :disabled="emailForm.managedByEnv">
+            <p class="config-note" x-text="t('email.fromHint')"></p>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('email.fromName')"></span>
+            </label>
+            <input type="text" class="form-input" x-model="emailForm.fromName"
+                   placeholder="InstantIoT" :disabled="emailForm.managedByEnv">
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('email.alertTo')"></span>
+            </label>
+            <input type="email" class="form-input" x-model="emailForm.alertTo"
+                   placeholder="moi@exemple.fr" :disabled="emailForm.managedByEnv">
+            <p class="config-note" x-text="t('email.alertToHint')"></p>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('email.testTo')"></span>
+            </label>
+            <input type="email" class="form-input" x-model="emailForm.testTo"
+                   :placeholder="t('email.testToPlaceholder')">
+            <p class="config-note" x-text="t('email.testToHint')"></p>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary" x-text="t('email.save')"
+                    :disabled="emailForm.managedByEnv || emailForm.busy"></button>
+            <button type="button" class="btn-secondary"
+                    @click="sendTestEmail()" :disabled="emailForm.busy">
+              <svg class="icon" aria-hidden="true"><use href="#icon-mail"/></svg>
+              <span x-text="emailForm.busy ? t('email.testing') : t('email.test')"></span>
+            </button>
+            <p class="form-msg" :class="emailForm.msgType" x-text="emailForm.msg"></p>
+          </div>
+        </form>
+
+        <p class="page-note">
+          <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
+          <span x-text="t('email.brevoHint')"></span>
+        </p>
+      </div>
+    </div>
+
     <div class="page" x-show="view === 'backups'">
       <div class="container container-narrow">
         <div class="page-header">
