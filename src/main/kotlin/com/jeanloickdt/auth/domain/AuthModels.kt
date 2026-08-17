@@ -186,6 +186,19 @@ data class AdminUserEntry(
     val createdAtMs: Long
 )
 
+/**
+ * Admin-side account creation — the email-less replacement for an invite
+ * link. The password here is PROVISIONAL: the account is created with
+ * `passwordChanged=false`, so the first login forces its owner onto a
+ * password the admin never knew. Same mechanic as the bootstrap admin/admin.
+ */
+@Serializable
+data class AdminCreateUserRequest(
+    val username: String,
+    val password: String,
+    val role: String = "user"
+)
+
 @Serializable
 data class AdminUserListResponse(
     val users: List<AdminUserEntry>

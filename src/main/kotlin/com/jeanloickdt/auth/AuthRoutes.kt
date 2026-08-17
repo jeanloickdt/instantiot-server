@@ -466,6 +466,48 @@ fun Route.adminUsersRoute(userRepository: UserRepository, purge: AccountPurge) {
         call.respond(HttpStatusCode.OK, AdminUserListResponse(list))
     }
 
+    // ── Create a user (by the admin) ───────────────────────
+    // The email-less edition of account management: registration can stay
+    // CLOSED (secure-by-default) and the admin provisions accounts directly.
+    // The password given here is provisional — passwordChanged=false makes
+    // the first login force a change, so the admin never durably knows a
+    // user's password. Exactly the bootstrap admin/admin mechanic, reused.
+    post("/api/admin/users") {
+        call.requireAdmin(userRepository) ?: return@post
+        val body = call.receive<AdminCreateUserRequest>()
+
+        if (!USERNAME_REGEX.matches(body.username)) {
+            return@post call.respond(HttpStatusCode.BadRequest,
+                ApiError("Username must be 3-32 chars (letters, digits, underscore)"))
+        }
+        if (body.password.length < PASSWORD_MIN_LENGTH || body.password.length > PASSWORD_MAX_LENGTH) {
+            return@post call.respond(HttpStatusCode.BadRequest,
+                ApiError("Password must be $PASSWORD_MIN_LENGTH-$PASSWORD_MAX_LENGTH characters"))
+        }
+        if (body.role != "user" && body.role != "admin") {
+            return@post call.respond(HttpStatusCode.BadRequest,
+                ApiError("Role must be 'user' or 'admin'"))
+        }
+        if (userRepository.findByUsername(body.username) != null) {
+            return@post call.respond(HttpStatusCode.Conflict,
+                ApiError("Username already taken"))
+        }
+
+        val id = userRepository.create(
+            username        = body.username,
+            pwdHash         = BCrypt.hashpw(body.password, BCrypt.gensalt()),
+            role            = body.role,
+            // provisional password → forced change at first login
+            passwordChanged = false
+        )
+        call.respond(HttpStatusCode.Created, AdminUserEntry(
+            id          = id,
+            username    = body.username,
+            role        = body.role,
+            createdAtMs = System.currentTimeMillis()
+        ))
+    }
+
     // ── Delete MY account — everything, forever ────────────
     // The guard: the LAST admin cannot delete itself. On self-host that
     // would orphan the panel until a restart recreates admin/admin — a
