@@ -450,7 +450,7 @@ private fun currentHistoryConfig(): HistoryConfigResponse = HistoryConfigRespons
 // No email in V1 — the admin communicates the new password to
 // the user out-of-band (SMS, IRL, etc.).
 // ============================================================
-fun Route.adminUsersRoute(userRepository: UserRepository) {
+fun Route.adminUsersRoute(userRepository: UserRepository, purge: AccountPurge) {
 
     // ── List (read-only) ──────────────────────────────────
     get("/api/admin/users") {
@@ -464,6 +464,56 @@ fun Route.adminUsersRoute(userRepository: UserRepository) {
             )
         }
         call.respond(HttpStatusCode.OK, AdminUserListResponse(list))
+    }
+
+    // ── Delete MY account — everything, forever ────────────
+    // The guard: the LAST admin cannot delete itself. On self-host that
+    // would orphan the panel until a restart recreates admin/admin — a
+    // footgun, not a freedom. Any other account: gone, with every project,
+    // device, widget and history row it owned.
+    delete("/api/users/me") {
+        val userId = call.principal<JWTPrincipal>()?.subject
+            ?: return@delete call.respond(HttpStatusCode.Unauthorized)
+        val user = userRepository.findById(userId)
+            ?: return@delete call.respond(HttpStatusCode.Unauthorized)
+
+        if (user.role == "admin" && userRepository.countAdmins() <= 1) {
+            return@delete call.respond(
+                HttpStatusCode.Conflict,
+                ApiError("Cannot delete the last admin account")
+            )
+        }
+
+        val report = purge.purge(userId)
+        call.respond(HttpStatusCode.OK, report)
+    }
+
+    // ── Delete a user (by the admin) ───────────────────────
+    // Not oneself: self-deletion goes through /api/users/me so that
+    // destroying your own account is always an explicit, distinct act —
+    // never a slip of the finger in a user list.
+    delete("/api/admin/users/{id}") {
+        val admin = call.requireAdmin(userRepository) ?: return@delete
+        val targetId = call.parameters["id"]
+            ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing user id"))
+
+        if (targetId == admin.id) {
+            return@delete call.respond(
+                HttpStatusCode.BadRequest,
+                ApiError("Use DELETE /api/users/me to delete your own account")
+            )
+        }
+        val target = userRepository.findById(targetId)
+            ?: return@delete call.respond(HttpStatusCode.NotFound, ApiError("User not found"))
+        if (target.role == "admin" && userRepository.countAdmins() <= 1) {
+            return@delete call.respond(
+                HttpStatusCode.Conflict,
+                ApiError("Cannot delete the last admin account")
+            )
+        }
+
+        val report = purge.purge(targetId)
+        call.respond(HttpStatusCode.OK, report)
     }
 
     // ── Reset a user's password (by the admin) ─────────────
@@ -648,7 +698,8 @@ fun Route.authRoutes(
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository,
     connections: ConnectionRegistry,
-    tokenService: TokenService
+    tokenService: TokenService,
+    purge: AccountPurge
 ) {
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository, tokenService)
@@ -663,7 +714,7 @@ fun Route.authRoutes(
         adminConfigRoute(userRepository)
         adminHistoryConfigRoute(userRepository)
         adminBackupRoute(userRepository)
-        adminUsersRoute(userRepository)
+        adminUsersRoute(userRepository, purge)
         adminRestartRoute(userRepository)
     }
 }

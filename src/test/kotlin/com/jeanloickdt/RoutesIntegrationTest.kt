@@ -128,7 +128,13 @@ class RoutesIntegrationTest {
             )
             routing {
                 systemRoutes()
-                authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
+                val accountPurge = com.jeanloickdt.auth.AccountPurge(
+                    userRepository, projectRepository, deviceRepository, cacheAwareWidgets,
+                    widgetHistoryRepository, widgetHistoryNumericRepository,
+                    widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+                    connections, events
+                )
+                authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, accountPurge)
                 projectRoutes(
                     projectRepository, deviceRepository, cacheAwareWidgets,
                     widgetHistoryRepository, widgetHistoryNumericRepository,

@@ -640,7 +640,13 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             ))
         }
 
-        authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService)
+        val accountPurge = com.jeanloickdt.auth.AccountPurge(
+            userRepository, projectRepository, deviceRepository, cacheAwareWidgets,
+            widgetHistoryRepository, widgetHistoryNumericRepository,
+            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+            connections, controlEvents
+        )
+        authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, accountPurge)
         projectRoutes(
             projectRepository, deviceRepository, cacheAwareWidgets,
             widgetHistoryRepository, widgetHistoryNumericRepository,
