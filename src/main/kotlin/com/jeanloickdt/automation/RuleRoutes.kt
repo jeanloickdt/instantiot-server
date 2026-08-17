@@ -164,6 +164,7 @@ fun Route.ruleRoutes(
                 }
             }
             cache.reload()   // the producers' gate flips here
+            materializeSchedule(id, definition, enabled = true)
             call.respond(HttpStatusCode.Created, listRules(ownerId).first { it.id == id })
         }
 
@@ -206,6 +207,17 @@ fun Route.ruleRoutes(
                 }
             }
             cache.reload()
+            // Re-materialise the next fire from the CURRENT row — definition
+            // and enabled may both have changed.
+            transaction {
+                AutomationRuleTable.selectAll()
+                    .where { AutomationRuleTable.id eq ruleId }
+                    .singleOrNull()
+            }?.let { row ->
+                RuleDefinition.parseOrNull(ruleId, row[AutomationRuleTable.definition])?.let { d ->
+                    materializeSchedule(ruleId, d, row[AutomationRuleTable.enabled])
+                }
+            }
             call.respond(HttpStatusCode.OK, listRules(ownerId).first { it.id == ruleId })
         }
 
@@ -268,6 +280,7 @@ private fun validateRule(
                 return HttpStatusCode.NotFound to "Device not found"
             }
         }
+        is Trigger.Schedule -> Unit   // the parse already validated at/tz/days
     }
 
     // COMMAND targets: same ownership reflex, at creation this time (the
@@ -298,15 +311,35 @@ private fun validateRule(
     return null
 }
 
+/**
+ * Keeps `scheduled_jobs` in step with the rule: the poll is an indexed range
+ * scan over PRE-COMPUTED next fires, never a parse of every schedule every
+ * ten seconds. A disabled or non-schedule rule simply has no row.
+ */
+private fun materializeSchedule(ruleId: String, definition: RuleDefinition, enabled: Boolean) {
+    val trigger = definition.trigger as? Trigger.Schedule
+    transaction {
+        ScheduledJobTable.deleteWhere { ScheduledJobTable.ruleId eq ruleId }
+        if (trigger != null && enabled) {
+            ScheduledJobTable.insert {
+                it[ScheduledJobTable.ruleId] = ruleId
+                it[nextRunAt]                = ScheduleMath.nextRunAfter(System.currentTimeMillis(), trigger)
+                it[timezone]                 = trigger.zone.id
+            }
+        }
+    }
+}
+
 private fun kindOf(d: RuleDefinition): String = when (d.trigger) {
     is Trigger.ValueThreshold -> "value"
     is Trigger.DeviceOffline  -> "offline"
     is Trigger.WidgetStale    -> "stale"
+    is Trigger.Schedule       -> "schedule"
 }
 
 private fun widgetIdFor(d: RuleDefinition, arg: String?): String? =
     when (d.trigger) {
-        is Trigger.DeviceOffline -> null   // device-keyed, the column stays null
+        is Trigger.DeviceOffline, is Trigger.Schedule -> null   // not widget-keyed
         else -> arg
     }
 

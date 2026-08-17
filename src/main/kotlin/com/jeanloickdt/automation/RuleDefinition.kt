@@ -76,6 +76,18 @@ sealed interface Trigger {
 
     /** The sensor stopped reporting — the sweeper detects, the rule reacts. */
     data object WidgetStale : Trigger
+
+    /**
+     * A wall-clock schedule, IN THE RULE'S TIMEZONE. "7 h" means 7 h where
+     * the user lives — the zone crosses daylight-saving changes with
+     * java.time, and `next_run_at` is materialised in UTC for the poll.
+     */
+    data class Schedule(
+        val minuteOfDay: Int,
+        /** Empty = every day. */
+        val days: Set<java.time.DayOfWeek>,
+        val zone: java.time.ZoneId
+    ) : Trigger
 }
 
 /**
@@ -113,6 +125,13 @@ data class RuleDefinition(
         const val TYPE_COMMAND = DeliveryWorker.TYPE_COMMAND
 
         private val KNOWN_TYPES = setOf(TYPE_PUSH, TYPE_EMAIL, TYPE_COMMAND)
+
+        private val DAY_NAMES = mapOf(
+            "mon" to java.time.DayOfWeek.MONDAY, "tue" to java.time.DayOfWeek.TUESDAY,
+            "wed" to java.time.DayOfWeek.WEDNESDAY, "thu" to java.time.DayOfWeek.THURSDAY,
+            "fri" to java.time.DayOfWeek.FRIDAY, "sat" to java.time.DayOfWeek.SATURDAY,
+            "sun" to java.time.DayOfWeek.SUNDAY
+        )
 
         fun defaultRearm(above: Boolean, threshold: Double): Double {
             val margin = max(HYSTERESIS_RATIO * abs(threshold), HYSTERESIS_FLOOR)
@@ -172,6 +191,28 @@ data class RuleDefinition(
                 }
 
                 "stale" -> Trigger.WidgetStale
+
+                "schedule" -> {
+                    val at = whenNode["at"]?.jsonPrimitive?.content
+                        ?: return ParseOutcome.Invalid("'schedule' needs at (\"HH:MM\")")
+                    val m = Regex("^([01]?\\d|2[0-3]):([0-5]\\d)$").matchEntire(at)
+                        ?: return ParseOutcome.Invalid("at must be \"HH:MM\" (24 h)")
+                    val zone = try {
+                        java.time.ZoneId.of(whenNode["tz"]?.jsonPrimitive?.content
+                            ?: return ParseOutcome.Invalid("'schedule' needs tz (IANA, e.g. America/Toronto)"))
+                    } catch (e: Exception) {
+                        return ParseOutcome.Invalid("unknown timezone")
+                    }
+                    val days = whenNode["days"]?.jsonArray?.map { d ->
+                        DAY_NAMES[d.jsonPrimitive.content.lowercase()]
+                            ?: return ParseOutcome.Invalid("unknown day '\${d.jsonPrimitive.content}'")
+                    }?.toSet() ?: emptySet()
+                    Trigger.Schedule(
+                        minuteOfDay = m.groupValues[1].toInt() * 60 + m.groupValues[2].toInt(),
+                        days = days,
+                        zone = zone
+                    )
+                }
 
                 else -> return ParseOutcome.Invalid("unknown kind '$kind'")
             }

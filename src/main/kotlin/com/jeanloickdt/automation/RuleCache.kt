@@ -81,15 +81,16 @@ class RuleCache {
     class Index(
         val valueByWidget: Map<WidgetKey, List<LoadedRule>>,
         val staleByWidget: Map<WidgetKey, List<LoadedRule>>,
-        val offlineByDevice: Map<Pair<String, String>, List<LoadedRule>>
+        val offlineByDevice: Map<Pair<String, String>, List<LoadedRule>>,
+        val scheduleById: Map<String, LoadedRule>
     ) {
         val ruleCount: Int =
             valueByWidget.values.sumOf { it.size } + staleByWidget.values.sumOf { it.size } +
-                offlineByDevice.values.sumOf { it.size }
+                offlineByDevice.values.sumOf { it.size } + scheduleById.size
     }
 
     @Volatile
-    private var index = Index(emptyMap(), emptyMap(), emptyMap())
+    private var index = Index(emptyMap(), emptyMap(), emptyMap(), emptyMap())
 
     /** The hot-path gate — one volatile read and two map lookups. */
     fun watches(key: WidgetKey): Boolean {
@@ -108,6 +109,9 @@ class RuleCache {
     /** Every offline rule — the sweeper tick walks these for confirmations. */
     fun allOfflineRules(): List<LoadedRule> = index.offlineByDevice.values.flatten()
 
+    /** The schedule rule behind a TimeReached event. */
+    fun scheduleRule(ruleId: String): LoadedRule? = index.scheduleById[ruleId]
+
     /**
      * Rebuild the snapshot from the tables. Called at boot and after every
      * rule mutation (the CRUD's single coupling point). Invalid definitions
@@ -117,6 +121,7 @@ class RuleCache {
         val value = HashMap<WidgetKey, MutableList<LoadedRule>>()
         val stale = HashMap<WidgetKey, MutableList<LoadedRule>>()
         val offline = HashMap<Pair<String, String>, MutableList<LoadedRule>>()
+        val schedule = HashMap<String, LoadedRule>()
 
         transaction {
             val states = AutomationStateTable.selectAll().associate {
@@ -151,11 +156,13 @@ class RuleCache {
 
                         is Trigger.DeviceOffline ->
                             offline.getOrPut(rule.ownerId to t.deviceId) { mutableListOf() }.add(rule)
+
+                        is Trigger.Schedule -> schedule[rule.id] = rule
                     }
                 }
         }
 
-        index = Index(value, stale, offline)
+        index = Index(value, stale, offline, schedule)
         if (index.ruleCount > 0) logger.info("Rule cache reloaded — ${index.ruleCount} enabled rule(s)")
     }
 }

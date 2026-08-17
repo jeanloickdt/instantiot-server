@@ -143,7 +143,18 @@ class AutomationEngine(
                     rearmIfTriggered(rule)
                 }
 
-            else -> Unit   // TimeReached, QuotaReached… — no rule kinds yet
+            is RelayEvent.TimeReached -> {
+                val rule = cache.scheduleRule(event.ruleId) ?: return
+                // Each occurrence fires — no latch: "every day at 7 h" means
+                // every day. The cooldown still caps pathological schedules,
+                // and the key is the WALL-CLOCK target: a poll racing a
+                // restart dedups on the index.
+                if (cooldownOk(rule, event.scheduledFor)) {
+                    fire(rule, factTime = event.scheduledFor, value = null)
+                }
+            }
+
+            else -> Unit   // QuotaReached, DeviceRejected… — no rule kinds yet
         }
     }
 

@@ -20,6 +20,7 @@
 package com.jeanloickdt
 
 import com.jeanloickdt.auth.authRoutes
+import com.jeanloickdt.automation.automationHealthRoutes
 import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
@@ -564,16 +565,35 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     )
     launch(Dispatchers.Default) { automationEngine.run() }
 
+    // The health watch (étape 8) — the server is the only party that can see
+    // a silent delivery outage. 30 s cadence, warnings past the thresholds.
+    val healthWatch = com.jeanloickdt.automation.AutomationHealthWatch()
+    launch(Dispatchers.IO) {
+        while (true) {
+            delay(30_000)
+            try {
+                healthWatch.logAll(healthWatch.check(
+                    com.jeanloickdt.automation.snapshot(pendingActions, eventSinks, automationEngine, System.currentTimeMillis())
+                ))
+            } catch (e: Exception) {
+                bgLog.error("Health watch failed — retrying next round", e)
+            }
+        }
+    }
+
+
     // The tick: offline confirmations every 10 s (the "afterS" debounce runs
     // HERE, never as a delay in the engine — one offline rule must not freeze
     // every rule for thirty seconds), stale sweep every 60 s.
     val staleSweeper = com.jeanloickdt.event.WidgetStaleSweeper(lastValues, eventSinks)
+    val schedulerWorker = com.jeanloickdt.automation.SchedulerWorker(eventSinks)
     launch(Dispatchers.Default) {
         var i = 0
         while (true) {
             delay(10_000)
             try {
                 automationEngine.tick(System.currentTimeMillis())
+                schedulerWorker.pollOnce()
                 if (++i % 6 == 0) {
                     staleSweeper.sweep(ruleCache.watchedStaleKeys(), System.currentTimeMillis())
                 }
@@ -691,6 +711,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             connections, controlEvents
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
+        automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
         ruleRoutes(
             ruleCache, cacheAwareWidgets, deviceRepository,
             com.jeanloickdt.automation.RulePolicies(

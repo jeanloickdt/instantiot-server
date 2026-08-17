@@ -92,6 +92,10 @@ interface PendingActionRepository {
 
     /** DEAD rows — the other number worth watching. */
     fun deadCount(): Long
+
+    /** Rows still awaiting delivery — context for the age, not a health signal
+     *  by itself: ten 3-second-old rows are fine, ONE ten-minute-old row is not. */
+    fun pendingCount(): Long
 }
 
 class SqlitePendingActionRepository : PendingActionRepository {
@@ -182,6 +186,12 @@ class SqlitePendingActionRepository : PendingActionRepository {
     override fun deadCount(): Long = transaction {
         PendingActionTable.selectAll()
             .where { PendingActionTable.status eq PendingAction.DEAD }
+            .count()
+    }
+
+    override fun pendingCount(): Long = transaction {
+        PendingActionTable.selectAll()
+            .where { PendingActionTable.status eq PendingAction.PENDING }
             .count()
     }
 
