@@ -21,6 +21,7 @@ package com.jeanloickdt
 
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.automation.automationHealthRoutes
+import com.jeanloickdt.automation.emailConfigRoutes
 import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
@@ -176,7 +177,6 @@ val messageUsageRepo: com.jeanloickdt.automation.MessageUsageRepository =
 // one indexed SELECT per second.
 val pendingActions: com.jeanloickdt.automation.PendingActionRepository =
     com.jeanloickdt.automation.SqlitePendingActionRepository()
-val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(pendingActions, senders = emptyMap())
 
 // The rules, in RAM — reloaded in module() once the DB is up, and after every
 // rule mutation (the CRUD's single coupling point).
@@ -609,6 +609,42 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // its rows leased, and any later pass picks them up when the lease
     // expires. No recovery code, just an expiry.
     // ============================================================
+    // ── Étape 6 : les expéditeurs EMAIL et COMMAND ──
+    // EMAIL lit sa config à CHAQUE envoi : une clé collée dans le panneau agit
+    // à la livraison suivante, sans redémarrage. Le destinataire : 'to' de la
+    // règle → l'email du compte (en cloud, le username iia EST l'email ; en
+    // self-host il ne l'est pas et ce maillon rend null) → l'adresse d'alerte
+    // du panneau. COMMAND passe par la même outbox que les commandes de
+    // l'app. PUSH attend le projet Firebase (le worker marque DEAD, motif
+    // clair, et l'API refuse déjà les règles PUSH là où il n'existera pas).
+    val emailSender = com.jeanloickdt.automation.EmailActionSender(
+        config = {
+            com.jeanloickdt.automation.EmailConfig(
+                apiKey    = com.jeanloickdt.common.ServerConfig.emailBrevoApiKey,
+                fromEmail = com.jeanloickdt.common.ServerConfig.emailFrom,
+                fromName  = com.jeanloickdt.common.ServerConfig.emailFromName,
+                defaultTo = com.jeanloickdt.common.ServerConfig.emailAlertTo
+            )
+        },
+        accountEmail = { ownerId ->
+            userRepository.findById(ownerId)?.username?.takeIf { "@" in it }
+        }
+    )
+    val commandSender = com.jeanloickdt.automation.CommandActionSender(
+        deviceOwner = { deviceId -> deviceRepository.findById(deviceId)?.ownerId },
+        sendToDevice = { deviceId, frame ->
+            // discret, jamais streaming : une commande de règle ne se jette pas
+            connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
+        }
+    )
+    val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(
+        pendingActions,
+        senders = mapOf(
+            com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
+            com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
+        )
+    )
+
     launch(Dispatchers.IO) {
         while (true) {
             delay(1_000)
@@ -711,6 +747,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             connections, controlEvents
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
+        emailConfigRoutes(userRepository, emailSender)
         automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
         ruleRoutes(
             ruleCache, cacheAwareWidgets, deviceRepository,

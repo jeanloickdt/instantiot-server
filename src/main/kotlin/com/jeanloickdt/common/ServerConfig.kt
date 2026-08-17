@@ -171,6 +171,18 @@ object ServerConfig {
      * The admin can disable it via PATCH /api/admin/history-config if their
      * setup requires it (e.g. 100+ sensors at 100Hz on a 16GB SD card).
      */
+    // ── Email (alertes) — panneau admin en self-host, environnement en cloud ──
+    // Si BREVO_API_KEY est posée dans l'environnement (cloud), elle GAGNE et le
+    // panneau passe en lecture seule : une édition écrasée au prochain
+    // redémarrage serait pire qu'un refus clair.
+    val emailManagedByEnv: Boolean get() = !System.getenv("BREVO_API_KEY").isNullOrBlank()
+    var emailBrevoApiKey: String = ""
+        get() = System.getenv("BREVO_API_KEY")?.takeIf { it.isNotBlank() } ?: field
+    var emailFrom: String = ""
+        get() = System.getenv("EMAIL_FROM")?.takeIf { it.isNotBlank() } ?: field
+    var emailFromName: String = "InstantIoT"
+    var emailAlertTo: String = ""
+
     var historyRawEnabled: Boolean = true
         private set
 
@@ -335,6 +347,10 @@ object ServerConfig {
             tcpPort = props.getProperty("tcp.port", "9001").toIntOrNull() ?: 9001
 
             // History — iWidgets rework (tiered-aggregation architecture)
+            emailBrevoApiKey = props.getProperty("email.brevo.api_key", "")
+            emailFrom        = props.getProperty("email.from", "")
+            emailFromName    = props.getProperty("email.from.name", "InstantIoT")
+            emailAlertTo     = props.getProperty("email.alert.to", "")
             historyRawEnabled = props.getProperty("history.raw.enabled", "true")
                 .toBooleanStrictOrNull() ?: true
             historyRetentionRawDays = props.getProperty("history.retention.raw.days", "1")
@@ -386,6 +402,14 @@ object ServerConfig {
      * (partial update). No restart needed — the values
      * are re-read on each cleanup / write cycle by the next iter.
      */
+    fun saveEmailConfig(apiKey: String?, from: String?, fromName: String?, alertTo: String?) {
+        if (apiKey != null)   emailBrevoApiKey = apiKey
+        if (from != null)     emailFrom = from
+        if (fromName != null) emailFromName = fromName
+        if (alertTo != null)  emailAlertTo = alertTo
+        writeProperties()
+    }
+
     fun saveHistoryConfig(
         rawEnabled: Boolean? = null,
         retentionRawDays: Int? = null,
@@ -408,6 +432,10 @@ object ServerConfig {
         val props = Properties()
         props.setProperty("http.port", httpPort.toString())
         props.setProperty("tcp.port", tcpPort.toString())
+        props.setProperty("email.brevo.api_key", if (emailManagedByEnv) "" else emailBrevoApiKey)
+        props.setProperty("email.from", emailFrom)
+        props.setProperty("email.from.name", emailFromName)
+        props.setProperty("email.alert.to", emailAlertTo)
         props.setProperty("history.raw.enabled", historyRawEnabled.toString())
         props.setProperty("history.retention.raw.days", historyRetentionRawDays.toString())
         props.setProperty("history.retention.opaque.days", historyRetentionOpaqueDays.toString())
