@@ -32,6 +32,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 
 @Serializable
 data class EmailConfigResponse(
@@ -105,15 +107,26 @@ fun Route.emailConfigRoutes(
         post("/api/admin/email-config/test") {
             val admin = call.requireAdmin(userRepository) ?: return@post
             val body = runCatching { call.receive<TestEmailRequest>() }.getOrElse { TestEmailRequest() }
-            val to = body.to
+            // The sender's own chain, in the same order: what the caller asks,
+            // then the account address (in cloud the username IS the iia
+            // email — so a cloud admin never has to configure anything to
+            // test), then the panel's default recipient (the self-host case).
+            val to = body.to?.takeIf { it.isNotBlank() }
+                ?: admin.username.takeIf { "@" in it }
                 ?: ServerConfig.emailAlertTo.takeIf { it.isNotBlank() }
                 ?: return@post call.respond(HttpStatusCode.BadRequest,
-                    ApiError("No recipient: set alertTo first, or pass {\"to\": …}"))
+                    ApiError("No recipient: type an address, or set a default recipient first"))
 
             val probe = PendingAction(
                 id = -1, idempotencyKey = "test", ownerId = admin.id, ruleId = null,
                 type = DeliveryWorker.TYPE_EMAIL,
-                payload = """{"to":"$to","subject":"InstantIoT — email de test","body":"La configuration email fonctionne."}""",
+                // Built, not spliced: an address holding a quote would
+                // otherwise produce a payload the sender cannot parse.
+                payload = buildJsonObject {
+                    put("to", to)
+                    put("subject", "InstantIoT — email de test")
+                    put("body", "La configuration email fonctionne.")
+                }.toString(),
                 status = PendingAction.PENDING, attempts = 0, nextAttemptAt = 0, occurredAt = 0
             )
             when (val r = sender.send(probe)) {

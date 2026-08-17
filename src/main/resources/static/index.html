@@ -653,6 +653,15 @@
             <p class="config-note" x-text="t('email.alertToHint')"></p>
           </div>
 
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('email.testTo')"></span>
+            </label>
+            <input type="email" class="form-input" x-model="emailForm.testTo"
+                   :placeholder="t('email.testToPlaceholder')">
+            <p class="config-note" x-text="t('email.testToHint')"></p>
+          </div>
+
           <div class="form-actions">
             <button type="submit" class="btn-primary" x-text="t('email.save')"
                     :disabled="emailForm.managedByEnv || emailForm.busy"></button>

@@ -68,6 +68,7 @@ document.addEventListener('alpine:init', () => {
       apiKey: '',            // never pre-filled — the server returns only the tail
       apiKeyLast4: null,
       from: '', fromName: '', alertTo: '',
+      testTo: '',            // where the test goes — never locked by managedByEnv
       configured: false,
       managedByEnv: false,   // cloud: the key comes from the environment
       busy: false,
@@ -471,13 +472,16 @@ document.addEventListener('alpine:init', () => {
       this.emailForm.msg = this.t('email.testing');
       this.emailForm.msgType = 'success';
       try {
-        const to = this.emailForm.alertTo;
+        // Empty means "let the server decide": the account address in
+        // cloud, the default recipient in self-host.
+        const to = this.emailForm.testTo.trim();
         const res = await this.api('/api/admin/email-config/test', {
           method: 'POST',
           body: JSON.stringify(to ? { to } : {})
         });
         if (res && res.ok) {
-          this.emailForm.msg = this.t('email.testOk') + (to ? ' ' + to : '');
+          const data = await res.json().catch(() => null);
+          this.emailForm.msg = data?.message || this.t('email.testOk');
         } else if (res) {
           const data = await res.json().catch(() => null);
           // The server's reason is the useful part: bad key, no recipient,
