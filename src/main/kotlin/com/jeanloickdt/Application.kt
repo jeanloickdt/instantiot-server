@@ -20,6 +20,7 @@
 package com.jeanloickdt
 
 import com.jeanloickdt.auth.authRoutes
+import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
 import com.jeanloickdt.auth.data.SqliteUserRepository
@@ -690,6 +691,18 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             connections, controlEvents
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
+        ruleRoutes(
+            ruleCache, cacheAwareWidgets, deviceRepository,
+            com.jeanloickdt.automation.RulePolicies(
+                // The OFFRE boundary: no Firebase credentials can ship in a
+                // public repo, so PUSH rules are refused at creation with a
+                // message that says why — not enqueued into DEAD rows.
+                allowedActionTypes = setOf(
+                    com.jeanloickdt.automation.RuleDefinition.TYPE_EMAIL,
+                    com.jeanloickdt.automation.RuleDefinition.TYPE_COMMAND
+                )
+            )
+        )
         widgetRoutes(
             cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,

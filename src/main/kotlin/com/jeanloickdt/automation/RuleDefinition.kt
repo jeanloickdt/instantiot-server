@@ -119,22 +119,37 @@ data class RuleDefinition(
             return if (above) threshold - margin else threshold + margin
         }
 
+        /** Parse, or the human reason it failed — the API's 400 carries it. */
+        sealed interface ParseOutcome {
+            data class Ok(val definition: RuleDefinition) : ParseOutcome
+            data class Invalid(val reason: String) : ParseOutcome
+        }
+
         /**
          * Parse, or `null` with a LOUD log. The same policy as `plans.json`:
          * broken data degrades ITS rule, never the engine — a crash here would
          * turn one malformed row into "no automations for anybody".
          */
-        fun parseOrNull(ruleId: String, json: String): RuleDefinition? = try {
+        fun parseOrNull(ruleId: String, json: String): RuleDefinition? =
+            when (val r = parse(json)) {
+                is ParseOutcome.Ok -> r.definition
+                is ParseOutcome.Invalid -> {
+                    logger.error("Rule $ruleId has an invalid definition (${r.reason}) — IGNORED, not evaluated")
+                    null
+                }
+            }
+
+        fun parse(json: String): ParseOutcome = try {
             val root = Json.parseToJsonElement(json).jsonObject
             val whenNode = root["when"]?.jsonObject
-                ?: return invalid(ruleId, "missing 'when'")
+                ?: return ParseOutcome.Invalid("missing 'when'")
 
             val trigger: Trigger = when (val kind = whenNode["kind"]?.jsonPrimitive?.content) {
                 "value" -> {
                     val above = whenNode["above"]?.jsonPrimitive?.doubleOrNull
                     val below = whenNode["below"]?.jsonPrimitive?.doubleOrNull
                     if ((above == null) == (below == null)) {
-                        return invalid(ruleId, "'value' needs exactly one of above/below")
+                        return ParseOutcome.Invalid("'value' needs exactly one of above/below")
                     }
                     val isAbove = above != null
                     val threshold = above ?: below!!
@@ -143,48 +158,43 @@ data class RuleDefinition(
                         ?: defaultRearm(isAbove, threshold)
                     // A rearm on the wrong side of the threshold disables the
                     // hysteresis entirely — refuse rather than flap.
-                    if (isAbove && rearm >= threshold) return invalid(ruleId, "rearmBelow must be < above")
-                    if (!isAbove && rearm <= threshold) return invalid(ruleId, "rearmAbove must be > below")
+                    if (isAbove && rearm >= threshold) return ParseOutcome.Invalid("rearmBelow must be < above")
+                    if (!isAbove && rearm <= threshold) return ParseOutcome.Invalid("rearmAbove must be > below")
                     Trigger.ValueThreshold(isAbove, threshold, rearm)
                 }
 
                 "offline" -> {
                     val deviceId = whenNode["deviceId"]?.jsonPrimitive?.content
-                        ?: return invalid(ruleId, "'offline' needs deviceId")
+                        ?: return ParseOutcome.Invalid("'offline' needs deviceId")
                     val afterS = whenNode["afterS"]?.jsonPrimitive?.intOrNull
-                    if (afterS != null && afterS < 0) return invalid(ruleId, "afterS must be >= 0")
+                    if (afterS != null && afterS < 0) return ParseOutcome.Invalid("afterS must be >= 0")
                     Trigger.DeviceOffline(deviceId, (afterS?.toLong() ?: (DEFAULT_OFFLINE_AFTER_MS / 1000)) * 1000)
                 }
 
                 "stale" -> Trigger.WidgetStale
 
-                else -> return invalid(ruleId, "unknown kind '$kind'")
+                else -> return ParseOutcome.Invalid("unknown kind '$kind'")
             }
 
             val cooldownS = root["cooldownS"]?.jsonPrimitive?.intOrNull
-            if (cooldownS != null && cooldownS < 0) return invalid(ruleId, "cooldownS must be >= 0")
+            if (cooldownS != null && cooldownS < 0) return ParseOutcome.Invalid("cooldownS must be >= 0")
 
             val actions = root["actions"]?.jsonArray?.map { el ->
                 val obj = el.jsonObject
                 val type = obj["type"]?.jsonPrimitive?.content
-                    ?: return invalid(ruleId, "action without type")
-                if (type !in KNOWN_TYPES) return invalid(ruleId, "unknown action type '$type'")
+                    ?: return ParseOutcome.Invalid("action without type")
+                if (type !in KNOWN_TYPES) return ParseOutcome.Invalid("unknown action type '$type'")
                 ActionSpec(type, JsonObject(obj.filterKeys { it != "type" }))
             } ?: emptyList()
-            if (actions.isEmpty()) return invalid(ruleId, "no actions — a rule that does nothing is a bug upstream")
+            if (actions.isEmpty()) return ParseOutcome.Invalid("no actions — a rule that does nothing is a bug upstream")
 
-            RuleDefinition(
+            ParseOutcome.Ok(RuleDefinition(
                 trigger    = trigger,
                 cooldownMs = (cooldownS?.toLong() ?: (DEFAULT_COOLDOWN_MS / 1000)) * 1000,
                 actions    = actions
-            )
+            ))
         } catch (e: Exception) {
-            invalid(ruleId, e.message ?: e::class.simpleName ?: "unparseable")
-        }
-
-        private fun invalid(ruleId: String, why: String): RuleDefinition? {
-            logger.error("Rule $ruleId has an invalid definition ($why) — IGNORED, not evaluated")
-            return null
+            ParseOutcome.Invalid(e.message ?: e::class.simpleName ?: "unparseable")
         }
     }
 }
