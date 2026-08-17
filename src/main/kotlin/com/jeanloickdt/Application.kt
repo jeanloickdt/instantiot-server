@@ -176,6 +176,10 @@ val pendingActions: com.jeanloickdt.automation.PendingActionRepository =
     com.jeanloickdt.automation.SqlitePendingActionRepository()
 val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(pendingActions, senders = emptyMap())
 
+// The rules, in RAM — reloaded in module() once the DB is up, and after every
+// rule mutation (the CRUD's single coupling point).
+val ruleCache = com.jeanloickdt.automation.RuleCache()
+
 private val logger = LoggerFactory.getLogger("Application")
 
 // dbFile is injectable so tests boot the REAL module against a throwaway
@@ -542,6 +546,38 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 }
             } catch (e: Exception) {
                 bgLog.error("History retention cleanup round failed — retrying next hour", e)
+            }
+        }
+    }
+
+    // ============================================================
+    // Rules engine (étape 5) — the piece between the event sinks and
+    // the durability frontier. Zero rules in the table = the cache is
+    // empty, watches() is false everywhere, and NOTHING changes.
+    // ============================================================
+    ruleCache.reload()
+    watchedWidgets = { key -> ruleCache.watches(key) }
+    val automationEngine = com.jeanloickdt.automation.AutomationEngine(
+        eventSinks, ruleCache, pendingActions,
+        com.jeanloickdt.automation.SqliteAutomationStateStore(), deviceRepository
+    )
+    launch(Dispatchers.Default) { automationEngine.run() }
+
+    // The tick: offline confirmations every 10 s (the "afterS" debounce runs
+    // HERE, never as a delay in the engine — one offline rule must not freeze
+    // every rule for thirty seconds), stale sweep every 60 s.
+    val staleSweeper = com.jeanloickdt.event.WidgetStaleSweeper(lastValues, eventSinks)
+    launch(Dispatchers.Default) {
+        var i = 0
+        while (true) {
+            delay(10_000)
+            try {
+                automationEngine.tick(System.currentTimeMillis())
+                if (++i % 6 == 0) {
+                    staleSweeper.sweep(ruleCache.watchedStaleKeys(), System.currentTimeMillis())
+                }
+            } catch (e: Exception) {
+                bgLog.error("Automation tick failed — retrying next tick", e)
             }
         }
     }

@@ -46,6 +46,7 @@ import io.ktor.websocket.readBytes
 import io.ktor.websocket.readText
 import io.ktor.websocket.send
 import kotlinx.coroutines.withTimeoutOrNull
+import org.jetbrains.exposed.sql.selectAll
 import org.mindrot.jbcrypt.BCrypt
 import java.net.ServerSocket
 import java.net.Socket
@@ -329,6 +330,60 @@ class DeviceRelayIntegrationTest {
 
         assertTrue(sinks.values.tryReceive().getOrNull() == null,
             "with no rule watching, the hot path must publish no value at all")
+    }
+
+    // ── le moteur de règles, bout en bout ─────────────────────────────────
+
+    @Test
+    fun `a rule fires from a real TCP frame into pending_actions`() = testApplication {
+        // The acceptance criterion of étape 5, mirror of étape 4's sqlite3
+        // test: a rule INSERTED IN SQL (the REST API is étape 9), a frame over
+        // the real socket, and a durable action row at the other end. The full
+        // path: parse → strict guard → producer gate → sink → engine → enqueue.
+        org.jetbrains.exposed.sql.transactions.transaction {
+            exec("""INSERT INTO automation_rules
+                (id, owner_id, name, enabled, trigger_kind, trigger_widget_id, definition, created_at, updated_at)
+                VALUES ('r-e2e', '$ownerId', 'e2e', 1, 'value', '$widgetId',
+                '{"when":{"kind":"value","above":20.0},"cooldownS":0,"actions":[{"type":"PUSH","title":"seuil","body":"{{value}}"}]}', 0, 0)""")
+        }
+        val cache = com.jeanloickdt.automation.RuleCache().apply { reload() }
+        val sinks = com.jeanloickdt.event.EventSinks()
+        val engine = com.jeanloickdt.automation.AutomationEngine(
+            sinks, cache, com.jeanloickdt.automation.SqlitePendingActionRepository(),
+            com.jeanloickdt.automation.SqliteAutomationStateStore(), deviceRepository
+        )
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort, sinks = sinks, watched = cache::watches)
+
+        val ws = createClient { install(WebSockets) }
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-1"))
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.getOutputStream().apply {
+                    write(handshake(deviceToken))
+                    write(deviceFrame(widgetId, TYPE_GAUGE, EV_SETVALUE, floatLE(42.5f)))
+                    flush()
+                }
+                collectUntilOnlineAndBinary()
+            }
+        }
+
+        // Drain the sink into the engine deterministically (the loop coroutine
+        // is production wiring; the test drives the same calls by hand).
+        while (true) {
+            val e = sinks.values.tryReceive().getOrNull() ?: break
+            engine.handle(e)
+        }
+
+        val rows = org.jetbrains.exposed.sql.transactions.transaction {
+            com.jeanloickdt.automation.data.PendingActionTable.selectAll()
+                .map { it[com.jeanloickdt.automation.data.PendingActionTable.type] to
+                       it[com.jeanloickdt.automation.data.PendingActionTable.payload] }
+        }
+        assertEquals(1, rows.size, "the frame crossed the threshold — one durable action expected")
+        assertEquals("PUSH", rows.single().first)
+        assertTrue("42.5" in rows.single().second, "the value must be rendered into the payload")
     }
 
     // ── la course du zombie — nettoyage périmé sur deviceSessions ─────────
