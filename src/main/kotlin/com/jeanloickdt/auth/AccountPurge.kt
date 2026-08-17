@@ -96,7 +96,15 @@ class AccountPurge(
     private val events: ControlEventBroadcaster
 ) {
 
-    suspend fun purge(ownerId: String): PurgeReport {
+    /**
+     * @param deleteUserRow false = leave the users row in place — the CLOUD
+     *   deletion flow anonymises and tombstones it instead, because a
+     *   stateless iia JWT lives up to 7 days and the JIT provisioning would
+     *   happily re-create a deleted account from a still-valid token. The
+     *   local flow always deletes: its validation checks the row, so removal
+     *   IS the revocation.
+     */
+    suspend fun purge(ownerId: String, deleteUserRow: Boolean = true): PurgeReport {
         val projects = projectRepository.findAllByOwner(ownerId)
 
         // ── Phase 1 : kicks — I/O, never rolled back ──────────────────────
@@ -148,7 +156,7 @@ class AccountPurge(
 
             // The users row LAST — as long as it exists, the deletion is
             // retryable by its owner.
-            userRepository.delete(ownerId)
+            if (deleteUserRow) userRepository.delete(ownerId)
         }
 
         logger.info("Account purged — ownerId=$ownerId projects=${projects.size} devices=$devicesKicked")
