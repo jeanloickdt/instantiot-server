@@ -148,6 +148,34 @@ val widgetHistoryMinRepository: WidgetHistoryAggregateRepository  = SqliteWidget
 val widgetHistoryHourRepository: WidgetHistoryAggregateRepository = SqliteWidgetHistoryAggregateRepository(WidgetHistoryHourTable)
 val widgetHistoryDayRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryDayTable)
 
+// ── Rule events (socle automatisation) ──────────────────────
+// The relay produces, nobody consumes yet: the values channel keeps its
+// freshest 1024 and the discrete one its first 4096 — bounded either way.
+// The engine will drain them; until then this is inert.
+val eventSinks = com.jeanloickdt.event.EventSinks()
+
+/**
+ * Which widgets a rule watches. The rule cache will own this; until it
+ * exists, nobody watches and the WidgetValue producer publishes nothing —
+ * one predicate call per frame, nothing else.
+ */
+@Volatile
+var watchedWidgets: (com.jeanloickdt.relay.WidgetKey) -> Boolean = { false }
+
+// Message ledger — RAM on the hot path, drained by the 5 s flush. A plain
+// usage statistic here; the cloud edition reads it for its monthly quota.
+val messageUsage     = com.jeanloickdt.automation.MessageUsageCounter()
+val messageUsageRepo: com.jeanloickdt.automation.MessageUsageRepository =
+    com.jeanloickdt.automation.SqliteMessageUsageRepository()
+
+// The durability frontier. The sender registry is EMPTY until the delivery
+// channels exist (EMAIL via the operator's SMTP key, COMMAND via the
+// DeviceOutbox) — the worker leases nothing from an empty table and costs
+// one indexed SELECT per second.
+val pendingActions: com.jeanloickdt.automation.PendingActionRepository =
+    com.jeanloickdt.automation.SqlitePendingActionRepository()
+val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(pendingActions, senders = emptyMap())
+
 private val logger = LoggerFactory.getLogger("Application")
 
 // dbFile is injectable so tests boot the REAL module against a throwaway
@@ -212,6 +240,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         WidgetHistoryMinTable,
         WidgetHistoryHourTable,
         WidgetHistoryDayTable,
+        *com.jeanloickdt.automation.data.AutomationTables.ALL,
         dbFile = dbFile
     )
 
@@ -362,6 +391,9 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         lastValues  = lastValues,
         presence    = presence,
         events      = controlEvents,
+        sinks       = eventSinks,
+        watchedWidgets = { key -> watchedWidgets(key) },
+        usage       = messageUsage,
         tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort
     )
 
@@ -431,6 +463,15 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             var numericRows = 0
             try {
                 opaqueRows  = flushHistoryBuffer(buffers, widgetHistoryRepository)
+
+                // message ledger — a handful of rows per cycle, one per owner
+                // that emitted since the last flush.
+                run {
+                    val period = com.jeanloickdt.automation.MessageUsageRepository.periodOf(System.currentTimeMillis())
+                    messageUsage.drain().forEach { (owner, delta) ->
+                        messageUsageRepo.add(owner, period, delta)
+                    }
+                }
                 numericRows = flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
                 flushLastValues(lastValues, cacheAwareWidgets)
                 flushClosedAggregatorBuckets(
@@ -501,6 +542,23 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 }
             } catch (e: Exception) {
                 bgLog.error("History retention cleanup round failed — retrying next hour", e)
+            }
+        }
+    }
+
+    // ============================================================
+    // Delivery loop — drains pending_actions every second. The lease inside
+    // the repo is the whole crash story: a pass that dies mid-batch leaves
+    // its rows leased, and any later pass picks them up when the lease
+    // expires. No recovery code, just an expiry.
+    // ============================================================
+    launch(Dispatchers.IO) {
+        while (true) {
+            delay(1_000)
+            try {
+                deliveryWorker.runOnce()
+            } catch (e: Exception) {
+                bgLog.error("Delivery pass failed — retrying next second", e)
             }
         }
     }

@@ -65,6 +65,7 @@ class WidgetHistoryIsolationTest {
             UserTable, ProjectTable, DeviceTable, WidgetTable,
             WidgetHistoryTable, WidgetHistoryNumericTable,
             WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
+            *com.jeanloickdt.automation.data.AutomationTables.ALL,
             dbFile = tmpDb
         )
     }

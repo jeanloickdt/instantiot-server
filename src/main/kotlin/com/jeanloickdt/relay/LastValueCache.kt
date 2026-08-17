@@ -63,6 +63,16 @@ interface LastValueCache {
 
     /** Drops a widget's entry (widget deleted) — RAM-leak/correctness hook. */
     fun evict(ownerId: String, widgetId: String)
+
+    /**
+     * The widgets among [watched] whose last sample is older than [cutoffMs] —
+     * the "sensor went quiet" read. [watched] is passed in rather than scanning
+     * everything: widgets no rule watches must never be swept, and the caller
+     * (the rules side) is the one who knows which ones matter. A dedicated
+     * method rather than exposing the map: the map is this class's own
+     * business.
+     */
+    fun staleSince(cutoffMs: Long, watched: Set<WidgetKey>): List<Pair<WidgetKey, Long>>
 }
 
 class InMemoryLastValueCache : LastValueCache {
@@ -88,4 +98,12 @@ class InMemoryLastValueCache : LastValueCache {
         values.remove(key)
         dirty.remove(key)
     }
+
+    override fun staleSince(cutoffMs: Long, watched: Set<WidgetKey>): List<Pair<WidgetKey, Long>> =
+        // Iterate the WATCHED set, not the cache: rules per node number in the
+        // hundreds, cached widgets in the tens of thousands.
+        watched.mapNotNull { key ->
+            val last = values[key] ?: return@mapNotNull null
+            if (last.at < cutoffMs) key to last.at else null
+        }
 }

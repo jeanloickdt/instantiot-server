@@ -84,6 +84,7 @@ object DeviceOfflineReason {
     const val DISCONNECTED  = "disconnected"     // normal TCP disconnect (network loss, socket closed)
     const val TOKEN_RENEWED = "token_renewed"    // admin regenerated the token → old one kicked
     const val DELETED       = "deleted"          // admin deleted the device
+    const val RATE_LIMITED  = "rate_limited"     // board flooded past the per-device fuse for 30 s
 }
 
 /**

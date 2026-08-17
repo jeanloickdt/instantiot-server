@@ -197,6 +197,21 @@ object DatabaseFactory {
             exec("CREATE INDEX IF NOT EXISTS idx_history_min_project  ON widget_history_min  (project_id)")
             exec("CREATE INDEX IF NOT EXISTS idx_history_hour_project ON widget_history_hour (project_id)")
             exec("CREATE INDEX IF NOT EXISTS idx_history_day_project  ON widget_history_day  (project_id)")
+
+            // ── Automations & notifications ──
+            // The UNIQUE on idempotency_key is THE GUARANTEE, not an
+            // optimisation: the engine may evaluate the same event twice
+            // (restart mid-batch) and the second INSERT must die on this
+            // constraint rather than send the owner two pushes.
+            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_idempotency ON pending_actions (idempotency_key)")
+            // The DeliveryWorker's every-second sweep: "what is due?"
+            exec("CREATE INDEX IF NOT EXISTS idx_pending_due ON pending_actions (status, next_attempt_at)")
+            // The rule cache load, same shape as knownWidgetIds seeding
+            exec("CREATE INDEX IF NOT EXISTS idx_rules_owner_widget ON automation_rules (owner_id, trigger_widget_id)")
+            // The scheduler's poll — an indexed range scan, not a table scan
+            exec("CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_jobs (next_run_at)")
+            // Delivery fans out per owner: all their tokens in one read
+            exec("CREATE INDEX IF NOT EXISTS idx_push_tokens_owner ON push_tokens (owner_id)")
         }
 
         // Switch the file to incremental auto-vacuum so the recurring reclaim is

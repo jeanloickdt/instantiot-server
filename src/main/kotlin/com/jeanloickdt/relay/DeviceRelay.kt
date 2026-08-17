@@ -100,6 +100,16 @@ fun Application.startDeviceRelay(
     lastValues: LastValueCache,
     presence: PresenceStore,
     events: ControlEventBroadcaster,
+    /**
+     * Rule-event producers. Null = publish nothing (self-hosted pays zero).
+     * [watchedWidgets] gates WidgetValue at the producer: without it, 100 % of
+     * the traffic would be pushed toward an engine that discards 99 % of it.
+     * Defaults to "nobody watches" until the rule cache exists.
+     */
+    sinks: com.jeanloickdt.event.EventSinks? = null,
+    watchedWidgets: (WidgetKey) -> Boolean = { false },
+    /** The messages.perMonth ledger — one RAM bump per accepted data frame. */
+    usage: com.jeanloickdt.automation.MessageUsageCounter? = null,
     tcpPort: Int = 9001
 ) {
     // SupervisorJob: device↔device isolation (a crashing connection does not
@@ -107,6 +117,12 @@ fun Application.startDeviceRelay(
     // suspending; DB work is explicitly offloaded to Dispatchers.IO.
     val relayScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     val selectorManager = SelectorManager(Dispatchers.IO)
+
+    // The fuse ceiling — hardcoded: the fuse protects the machine from one
+    // faulty board, and a loop() without delay() does not care who hosts you.
+    // (The cloud edition lets its plan file TIGHTEN this; never create it.)
+    val frameRate = FrameRateLimiter.DEFAULT_RATE_PER_SECOND
+    logger.info("Device frame fuse: $frameRate frames/s per board (burst ${frameRate * 2})")
 
     relayScope.launch {
         val serverSocket = aSocket(selectorManager).tcp().bind(port = tcpPort)
@@ -133,6 +149,10 @@ fun Application.startDeviceRelay(
                         lastValues       = lastValues,
                         presence         = presence,
                         events           = events,
+                        frameRatePerSecond = frameRate,
+                        sinks            = sinks,
+                        watchedWidgets   = watchedWidgets,
+                        usage            = usage,
                         scope            = relayScope
                     )
                 }
@@ -162,6 +182,10 @@ private suspend fun handleDeviceConnection(
     lastValues: LastValueCache,
     presence: PresenceStore,
     events: ControlEventBroadcaster,
+    frameRatePerSecond: Int,
+    sinks: com.jeanloickdt.event.EventSinks?,
+    watchedWidgets: (WidgetKey) -> Boolean,
+    usage: com.jeanloickdt.automation.MessageUsageCounter?,
     scope: CoroutineScope
 ) {
     val deviceAddress = socket.remoteAddress.toString()
@@ -169,6 +193,7 @@ private suspend fun handleDeviceConnection(
     val writeCh = socket.openWriteChannel(autoFlush = false)
 
     var registered: DeviceRow? = null
+    var rateLimited = false
     try {
         // ── Handshake (bounded by HANDSHAKE_TIMEOUT_MS) ──
         val handshake = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { readDeviceHandshake(readCh) }
@@ -196,16 +221,50 @@ private suspend fun handleDeviceConnection(
         logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceAddress " +
             "heartbeat=${handshake.heartbeatMs ?: "legacy"}ms timeout=${sessionTimeoutMs}ms")
         events.deviceOnline(device.projectId, device.id, device.name)
+        sinks?.publish(com.jeanloickdt.event.RelayEvent.DeviceOnline(
+            device.ownerId, device.id, System.currentTimeMillis()
+        ))
 
         // ── Read loop (sequential, RAM/CPU only) ──
+        // One fuse per connection, owned by this coroutine — no shared state,
+        // freed with the socket. See FrameRateLimiter for why per device.
+        //
+        // The heartbeat fuse is separate and two orders of magnitude wider:
+        // exempting heartbeats from the data fuse is right (dropping one would
+        // make the fuse look like a network timeout) but without its own
+        // ceiling the exemption is a hole — 10 000 heartbeats/s bounded by
+        // nothing.
+        val fuse = FrameRateLimiter(frameRatePerSecond)
+        val heartbeatFuse = FrameRateLimiter(FrameRateLimiter.HEARTBEAT_RATE_PER_SECOND)
         while (true) {
             val frame = withTimeoutOrNull(sessionTimeoutMs) { readFrame(readCh) } ?: break
             if (!FrameParser.isValid(frame)) {
                 logger.warn("Invalid frame from device=${device.id} — ignored")
                 continue
             }
+            // Monotonic, not wall-clock: an NTP correction that steps the wall
+            // clock backwards would freeze the refill until it caught up, and a
+            // perfectly healthy board would burn its burst, open an abuse
+            // streak, and be evicted for a problem that is not its own.
+            val now = System.nanoTime() / 1_000_000
+            val isHeartbeat = FrameParser.extractType(frame) == TYPE_HEARTBEAT.toInt()
+            val gate = if (isHeartbeat) heartbeatFuse else fuse
+            if (!gate.tryAcquire(now)) {
+                if (gate.dropped == 1L) {
+                    logger.warn("Device ${device.id} is over budget (${if (isHeartbeat) "heartbeats" else "frames"}) — dropping (a sketch without delay()?)")
+                }
+                if (gate.shouldDisconnect(now)) {
+                    rateLimited = true
+                    logger.warn("Device ${device.id} flooded severely for 30 s straight (${gate.dropped} dropped) — closing")
+                    break
+                }
+                continue   // frame dropped, socket kept — never a delay
+            }
+            // Accepted data frames feed the messages.perMonth ledger — one
+            // RAM bump; heartbeats and dropped frames never count.
+            if (!isHeartbeat) usage?.increment(device.ownerId)
             // inline + sequential: one bad frame is isolated inside handleDeviceFrame
-            handleDeviceFrame(frame, device, connections, buffers, lastValues)
+            handleDeviceFrame(frame, device, connections, buffers, lastValues, sinks, watchedWidgets)
         }
     } catch (e: CancellationException) {
         throw e
@@ -221,12 +280,31 @@ private suspend fun handleDeviceConnection(
             withContext(NonCancellable) {
                 // EVERY offline effect is gated on still owning the slot — not
                 // just the removal. A zombie whose timeout fires after the
-                // board reconnected must touch nothing: no red dot in the app,
-                // no offline row in the DB.
+                // board reconnected must touch nothing: no red dot in the app
+                // (markOffline + deviceOffline), and no false DeviceOffline
+                // into the RULE feed — or "warn me if the greenhouse drops"
+                // would push a lie about a live board.
                 if (connections.unregisterDevice(dev.id, socket)) {
                     runCatching { presence.markOffline(dev.id) }
                     runCatching {
-                        events.deviceOffline(dev.projectId, dev.id, DeviceOfflineReason.DISCONNECTED)
+                        // rate_limited tells the owner WHY: a silent cap creates a
+                        // support ticket, an explained one fixes the sketch.
+                        val reason = if (rateLimited) DeviceOfflineReason.RATE_LIMITED
+                                     else DeviceOfflineReason.DISCONNECTED
+                        events.deviceOffline(dev.projectId, dev.id, reason)
+
+                        val at = System.currentTimeMillis()
+                        sinks?.publish(com.jeanloickdt.event.RelayEvent.DeviceOffline(
+                            dev.ownerId, dev.id, reason, at
+                        ))
+                        // The fuse eviction is ALSO a system event: "your board is
+                        // broken" is a fact a rule may want to act on, distinct
+                        // from a mere disconnection.
+                        if (rateLimited) {
+                            sinks?.publish(com.jeanloickdt.event.RelayEvent.DeviceRejected(
+                                dev.ownerId, dev.id, DeviceOfflineReason.RATE_LIMITED, at
+                            ))
+                        }
                     }
                     logger.info("Device disconnected — deviceId=${dev.id}")
                 } else {
@@ -261,7 +339,9 @@ private suspend fun handleDeviceFrame(
     device: DeviceRow,
     connections: ConnectionRegistry,
     buffers: HistoryBuffers,
-    lastValues: LastValueCache
+    lastValues: LastValueCache,
+    sinks: com.jeanloickdt.event.EventSinks? = null,
+    watchedWidgets: (WidgetKey) -> Boolean = { false }
 ) {
     try {
         // Heartbeat (0xFE): byte reception already reset the read timeout — drop.
@@ -297,10 +377,22 @@ private suspend fun handleDeviceFrame(
                 logger.warn("Dropping non-finite sample widget=$widgetId series=${sample.seriesId} value=${sample.value}")
                 return@let
             }
+            // Raw tier — the most expensive setting there is per device: it
+            // doubles disk growth (428 vs 202 bytes per frame, measured). Here
+            // the operator's switch alone decides; the cloud edition adds a
+            // per-account plan gate on top.
             if (ServerConfig.historyRawEnabled) {
                 buffers.numericHistoryBuffer.add(
                     NumericHistoryEntry(widgetId, device.projectId, device.ownerId, sample.seriesId, sample.value, now)
                 )
+            }
+            // Rule feed — gated at the producer: only widgets a rule actually
+            // watches are published, so with no rules this line costs one
+            // predicate call and nothing else.
+            if (sinks != null && watchedWidgets(WidgetKey(device.ownerId, widgetId))) {
+                sinks.publish(com.jeanloickdt.event.RelayEvent.WidgetValue(
+                    device.ownerId, widgetId, sample.seriesId, sample.value, now
+                ))
             }
             HistoryAggregators.minute.collect(widgetId, sample.seriesId, now, sample.value, device.projectId, device.ownerId)
             HistoryAggregators.hour.collect(widgetId, sample.seriesId, now, sample.value, device.projectId, device.ownerId)

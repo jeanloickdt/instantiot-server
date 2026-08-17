@@ -76,7 +76,7 @@ import kotlin.time.Duration.Companion.minutes
  * registration gating.
  *
  * Harness: each test gets a fresh throwaway SQLite DB (temp file) via the
- * new `DatabaseFactory.init(dbFile = ...)` overload, and a slim Ktor app that
+ * new `DatabaseFactory.init(*com.jeanloickdt.automation.data.AutomationTables.ALL,dbFile = ...)` overload, and a slim Ktor app that
  * wires only the plugins + auth + routes — NO TCP relay, mDNS or background
  * loops (those bind real ports and would make the test flaky). The routes run
  * against the same global repositories as production.
@@ -90,6 +90,7 @@ class RoutesIntegrationTest {
             UserTable, ProjectTable, DeviceTable, WidgetTable,
             WidgetHistoryTable, WidgetHistoryNumericTable,
             WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
+            *com.jeanloickdt.automation.data.AutomationTables.ALL,
             dbFile = tmpDb
         )
         ServerConfig.registrationOpen = false
