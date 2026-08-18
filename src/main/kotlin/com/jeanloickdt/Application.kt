@@ -22,6 +22,7 @@ package com.jeanloickdt
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.automation.automationHealthRoutes
 import com.jeanloickdt.automation.emailConfigRoutes
+import com.jeanloickdt.signal.signalRoutes
 import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
@@ -145,6 +146,8 @@ val userRepository: UserRepository               = SqliteUserRepository()
 val projectRepository: ProjectRepository         = SqliteProjectRepository()
 val deviceRepository: DeviceRepository           = SqliteDeviceRepository()
 val widgetRepository: WidgetRepository           = SqliteWidgetRepository()
+val signalRepository: com.jeanloickdt.signal.domain.SignalRepository =
+    com.jeanloickdt.signal.data.SqliteSignalRepository()
 val widgetHistoryRepository: WidgetHistoryRepository = SqliteWidgetHistoryRepository()
 val widgetHistoryNumericRepository: WidgetHistoryNumericRepository = SqliteWidgetHistoryNumericRepository()
 val widgetHistoryMinRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryMinTable)
@@ -246,6 +249,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         WidgetHistoryMinTable,
         WidgetHistoryHourTable,
         WidgetHistoryDayTable,
+        com.jeanloickdt.signal.data.SignalTable,
         *com.jeanloickdt.automation.data.AutomationTables.ALL,
         dbFile = dbFile
     )
@@ -400,6 +404,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         sinks       = eventSinks,
         watchedWidgets = { key -> watchedWidgets(key) },
         usage       = messageUsage,
+        signals     = signalRepository,
         tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort
     )
 
@@ -748,6 +753,10 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
         emailConfigRoutes(userRepository, emailSender)
+        // No policies: a self-hosted node's limit is its own disk, so the
+        // default gate — which always allows — is the honest one. The cloud
+        // edition passes a SignalPolicies with its quota there.
+        signalRoutes(signalRepository, deviceRepository)
         automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
         ruleRoutes(
             ruleCache, cacheAwareWidgets, deviceRepository,
