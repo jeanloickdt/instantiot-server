@@ -126,13 +126,28 @@ object SignalFrame {
     private fun readFloat(b: ByteArray): Float? = readInt32(b)?.let { Float.fromBits(it) }
 
     /**
-     * Builds a SIGNAL frame — used by the tests, and later by the app→board
-     * setpoint path. `deviceIds` is empty: the relay knows the board.
+     * Builds a SIGNAL frame.
+     *
+     * [deviceId]decides who is told which board this is:
+     *
+     *  - **null** — board-bound. `DEV_COUNT` is 0 because the board already
+     *    knows it is itself, and the lib's decoder REQUIRES 0: a device list
+     *    on an inbound frame is how it tells a signal from a widget.
+     *  - **set** — app-bound. The app needs it, and not as a nicety:
+     *    addresses are enumerated per board, so `tt`'s I5 and `bb`'s I5 are
+     *    two different signals. Without the identity the app cannot tell them
+     *    apart, and a gauge would show whichever arrived last.
      */
-    fun build(address: Int, tag: Int, value: ByteArray): ByteArray {
+    fun build(address: Int, tag: Int, value: ByteArray, deviceId: String? = null): ByteArray {
         require(address in 0..255) { "address out of range: $address" }
-        val body = byteArrayOf(
-            0x00,                 // DEV_COUNT
+        val device = deviceId?.encodeToByteArray()
+        require(device == null || device.size <= 255) { "deviceId too long" }
+        val head = if (device == null) {
+            byteArrayOf(0x00)                                    // DEV_COUNT = 0
+        } else {
+            byteArrayOf(0x01, device.size.toByte()) + device      // DEV_COUNT = 1
+        }
+        val body = head + byteArrayOf(
             0x01,                 // WID_LEN
             address.toByte(),     // the address
             TYPE_SIGNAL.toByte(),
@@ -144,6 +159,23 @@ object SignalFrame {
             (body.size and 0xFF).toByte(),
             ((body.size shr 8) and 0xFF).toByte()
         ) + body + byteArrayOf(crc)
+    }
+
+    /**
+     * The same signal, re-addressed to the apps.
+     *
+     * A board's frame carries no identity — the connection already proved it.
+     * An app watching a project sees several boards at once and must be told,
+     * so the relay stamps the device in on the way out.
+     *
+     * Returns null for anything that is not a well-formed signal frame; the
+     * caller then has nothing to forward, which is the right outcome.
+     */
+    fun forApps(frame: ByteArray, deviceId: String): ByteArray? {
+        val address = address(frame) ?: return null
+        val tag = tag(frame) ?: return null
+        val payload = FrameParser.extractPayload(frame) ?: return null
+        return build(address, tag, payload, deviceId)
     }
 
     fun floatBytes(v: Float): ByteArray {

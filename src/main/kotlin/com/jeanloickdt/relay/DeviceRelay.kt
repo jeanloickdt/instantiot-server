@@ -393,7 +393,15 @@ private suspend fun handleDeviceFrame(
             )
             // An undeclared address never reaches an app: it is noise, and
             // showing it would make the diagnostic harder, not easier.
-            if (accepted) dispatchToApps(connections, device.projectId, frameBytes)
+            //
+            // The frame is REBUILT with the device stamped in. A board sends
+            // none — it knows it is itself — but an app watches several boards
+            // and addresses are per board, so without it `tt`'s I5 and `bb`'s
+            // I5 would land on the same widget.
+            if (accepted) {
+                com.jeanloickdt.signal.SignalFrame.forApps(frameBytes, device.id)
+                    ?.let { dispatchToApps(connections, device.projectId, it) }
+            }
             return
         }
 

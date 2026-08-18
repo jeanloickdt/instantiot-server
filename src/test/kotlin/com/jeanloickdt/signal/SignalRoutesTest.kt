@@ -66,6 +66,8 @@ import org.mindrot.jbcrypt.BCrypt
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -269,22 +271,89 @@ class SignalRoutesTest {
             "one byte on the wire — 256 would not fit")
     }
 
+    // ── Changer le type ───────────────────────────────────────────────────
+    //
+    // Il est modifiable, et ce que ça coûte est précis : la valeur stockée,
+    // pas l'historique. Le prix est là parce que `lastPayload` porte des
+    // octets encodés avec l'ANCIEN tag — les rejouer sous le nouveau enverrait
+    // à la carte un float lu comme un entier.
+
     @Test
-    fun `the type is not editable — the sketch and the history already rely on it`() = testApplication {
+    fun `the type can be changed`() = testApplication {
         installTestApp()
         val (token, dev) = account("gina")
         client.createSignal(token, dev, """{"label":"x","type":"float"}""")
 
-        // An unknown field is ignored by the DTO rather than accepted.
-        client.patch("/api/devices/$dev/signals/I0") {
+        val r = client.patch("/api/devices/$dev/signals/I0") {
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
             setBody("""{"type":"bool"}""")
         }
 
-        assertEquals("float", signals.find(signals.listByOwner(
-            userRepository.findByUsername("gina")!!.id).first().ownerId, dev, 0)!!.type,
-            "changing it would silently reinterpret every stored sample")
+        assertEquals(HttpStatusCode.OK, r.status, r.bodyAsText())
+        assertEquals("bool", json(r.bodyAsText())["type"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `changing the type drops the stored value, so nothing is replayed under the wrong tag`() = testApplication {
+        var sent: ByteArray? = null
+        installTestApp(sendToDevice = { _, frame -> sent = frame; true })
+        val (token, dev) = account("hana")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+        client.writeValue(token, dev, 0, """{"value":23.4}""")
+        val owner = userRepository.findByUsername("hana")!!.id
+        assertNotNull(signals.find(owner, dev, 0)!!.lastPayload, "précondition : une valeur est stockée")
+
+        client.patch("/api/devices/$dev/signals/I0") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"type":"int"}""")
+        }
+
+        assertNull(signals.find(owner, dev, 0)!!.lastPayload,
+            "23.4 relu comme un entier vaudrait 1_102_263_091 — envoyé à une pompe")
+
+        sent = null
+        assertEquals(0, SignalSetpoint.restoreOnConnect(signals, owner, dev) { _, f -> sent = f; true })
+        assertNull(sent, "et rien ne part à la reconnexion")
+    }
+
+    @Test
+    fun `a patch that repeats the current type keeps the stored value`() = testApplication {
+        installTestApp(sendToDevice = { _, _ -> true })
+        val (token, dev) = account("ilan")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+        client.writeValue(token, dev, 0, """{"value":23.4}""")
+        val owner = userRepository.findByUsername("ilan")!!.id
+
+        // Une app qui renvoie tout le formulaire, type compris, ne doit rien perdre.
+        client.patch("/api/devices/$dev/signals/I0") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"label":"Renommée","type":"float"}""")
+        }
+
+        val after = signals.find(owner, dev, 0)!!
+        assertEquals("Renommée", after.label)
+        assertNotNull(after.lastPayload,
+            "renvoyer le type inchangé n'est pas un changement de type")
+    }
+
+    @Test
+    fun `an unknown type is refused on patch too`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("jade")
+        client.createSignal(token, dev, """{"label":"x","type":"float"}""")
+
+        val r = client.patch("/api/devices/$dev/signals/I0") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"type":"decimal128"}""")
+        }
+
+        assertEquals(HttpStatusCode.BadRequest, r.status)
+        assertEquals("float", signals.find(
+            userRepository.findByUsername("jade")!!.id, dev, 0)!!.type)
     }
 
     // ── Le quota ──────────────────────────────────────────────────────────

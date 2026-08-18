@@ -78,6 +78,15 @@ interface SignalRepository {
     /** The lowest free address on that board, or null when the space is full. */
     fun nextFreeAddress(ownerId: String, deviceId: String): Int?
 
+    /**
+     * Modifies a declaration.
+     *
+     * [type] is editable — but changing it **drops the stored value**, and
+     * that is not a detail. `lastPayload` holds bytes encoded with the old
+     * type tag; replaying them under the new one would send the board a float
+     * read as an int. Dropping costs one value the next write re-establishes;
+     * keeping would send 1_102_263_091 to a pump.
+     */
     fun update(
         ownerId: String,
         deviceId: String,
@@ -89,6 +98,7 @@ interface SignalRepository {
         maxValue: Double? = null,
         historised: Boolean? = null,
         direction: String? = null,
+        type: String? = null,
         nowMs: Long
     ): Boolean
 
