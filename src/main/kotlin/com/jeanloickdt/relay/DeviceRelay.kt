@@ -110,6 +110,11 @@ fun Application.startDeviceRelay(
     watchedWidgets: (WidgetKey) -> Boolean = { false },
     /** The messages.perMonth ledger — one RAM bump per accepted data frame. */
     usage: com.jeanloickdt.automation.MessageUsageCounter? = null,
+    /**
+     * The 2.0 value store. Null keeps the node on the widget path only — a
+     * SIGNAL frame is then dropped rather than half-handled.
+     */
+    signals: com.jeanloickdt.signal.domain.SignalRepository? = null,
     tcpPort: Int = 9001
 ) {
     // SupervisorJob: device↔device isolation (a crashing connection does not
@@ -153,6 +158,7 @@ fun Application.startDeviceRelay(
                         sinks            = sinks,
                         watchedWidgets   = watchedWidgets,
                         usage            = usage,
+                        signals          = signals,
                         scope            = relayScope
                     )
                 }
@@ -186,6 +192,7 @@ private suspend fun handleDeviceConnection(
     sinks: com.jeanloickdt.event.EventSinks?,
     watchedWidgets: (WidgetKey) -> Boolean,
     usage: com.jeanloickdt.automation.MessageUsageCounter?,
+    signals: com.jeanloickdt.signal.domain.SignalRepository?,
     scope: CoroutineScope
 ) {
     val deviceAddress = socket.remoteAddress.toString()
@@ -264,7 +271,7 @@ private suspend fun handleDeviceConnection(
             // RAM bump; heartbeats and dropped frames never count.
             if (!isHeartbeat) usage?.increment(device.ownerId)
             // inline + sequential: one bad frame is isolated inside handleDeviceFrame
-            handleDeviceFrame(frame, device, connections, buffers, lastValues, sinks, watchedWidgets)
+            handleDeviceFrame(frame, device, connections, buffers, lastValues, sinks, watchedWidgets, signals)
         }
     } catch (e: CancellationException) {
         throw e
@@ -341,12 +348,39 @@ private suspend fun handleDeviceFrame(
     buffers: HistoryBuffers,
     lastValues: LastValueCache,
     sinks: com.jeanloickdt.event.EventSinks? = null,
-    watchedWidgets: (WidgetKey) -> Boolean = { false }
+    watchedWidgets: (WidgetKey) -> Boolean = { false },
+    signals: com.jeanloickdt.signal.domain.SignalRepository? = null
 ) {
     try {
         // Heartbeat (0xFE): byte reception already reset the read timeout — drop.
         val type = FrameParser.extractType(frameBytes)
         if (type == TYPE_HEARTBEAT.toInt()) return
+
+        // SIGNAL (0x20) — the 2.0 value path. It rides this very layout, so the
+        // branch sits here and the widget path below is untouched.
+        if (type == com.jeanloickdt.signal.SignalFrame.TYPE_SIGNAL) {
+            if (signals == null) return   // no signal store wired: not our frame
+            val accepted = com.jeanloickdt.signal.ingestSignalFrame(
+                frameBytes  = frameBytes,
+                ownerId     = device.ownerId,
+                deviceId    = device.id,
+                deviceName  = device.name,
+                projectId   = device.projectId,
+                signals     = signals,
+                buffers     = buffers,
+                lastValues  = lastValues,
+                // Self-hosted has no plan file: the raw tier is the operator's
+                // switch alone, which ServerConfig already answers downstream.
+                rawAllowed  = true,
+                sinks       = sinks,
+                watched     = watchedWidgets,
+                nowMs       = System.currentTimeMillis()
+            )
+            // An undeclared address never reaches an app: it is noise, and
+            // showing it would make the diagnostic harder, not easier.
+            if (accepted) dispatchToApps(connections, device.projectId, frameBytes)
+            return
+        }
 
         val widgetId      = FrameParser.extractWidgetId(frameBytes) ?: return
         val payloadBytes  = FrameParser.extractPayload(frameBytes)  ?: return
