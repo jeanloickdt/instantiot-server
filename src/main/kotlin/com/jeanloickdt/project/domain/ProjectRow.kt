@@ -25,6 +25,7 @@ data class ProjectRow(
     val ownerId: String,
     val name: String,
     val layoutJson: String, // full ProjectLayout — opaque blob
+    val version: Int,
     val createdAt: Long,
     val updatedAt: Long
 )

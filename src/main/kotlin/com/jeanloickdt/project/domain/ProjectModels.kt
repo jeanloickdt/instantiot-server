@@ -42,7 +42,21 @@ data class UpdateProjectNameRequest(
 // ProjectLayout serialized as JSON — opaque blob for the server
 @Serializable
 data class UpdateProjectLayoutRequest(
-    val layoutJson: String
+    val layoutJson: String,
+    /**
+     * The version the app loaded. Omit it and the write goes through
+     * unchecked — the pre-2.0 behaviour, kept only so an app that has not been
+     * updated yet keeps working. It buys no protection.
+     */
+    val version: Int? = null
+)
+
+/** What a 409 hands back: enough for the app to reload instead of guessing. */
+@Serializable
+data class LayoutConflictResponse(
+    val error: String,
+    val currentVersion: Int,
+    val currentLayoutJson: String
 )
 
 // ============================================================
@@ -55,6 +69,11 @@ data class ProjectResponse(
     val id: String,
     val name: String,
     val layoutJson: String, // full ProjectLayout — the app deserializes it
+    /**
+     * Hand this back when saving. Without it the server cannot tell a fresh
+     * edit from one made against a copy someone else has already replaced.
+     */
+    val version: Int,
     val createdAt: Long,
     val updatedAt: Long
 )

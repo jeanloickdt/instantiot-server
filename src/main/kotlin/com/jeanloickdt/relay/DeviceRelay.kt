@@ -228,6 +228,21 @@ private suspend fun handleDeviceConnection(
         logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceAddress " +
             "heartbeat=${handshake.heartbeatMs ?: "legacy"}ms timeout=${sessionTimeoutMs}ms")
         events.deviceOnline(device.projectId, device.id, device.name)
+
+        // A setpoint is a STATE, so it survives the board's reboot: replay what
+        // was asked of it while it was away. Measures are never replayed — what
+        // the board IS is the board's to say.
+        if (signals != null) {
+            try {
+                com.jeanloickdt.signal.SignalSetpoint.restoreOnConnect(
+                    signals, device.ownerId, device.id
+                ) { _, frame -> connections.deviceOutboxes[device.id]?.send(frame, isStreaming = false) ?: false }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.warn("Setpoint restore failed for ${device.id} — ${e.message}")
+            }
+        }
         sinks?.publish(com.jeanloickdt.event.RelayEvent.DeviceOnline(
             device.ownerId, device.id, System.currentTimeMillis()
         ))
@@ -458,7 +473,7 @@ private fun dispatchToApps(connections: ConnectionRegistry, projectId: String, f
  * its receive buffer fills, the TCP window closes, and the board can no longer
  * emit. The outbox absorbs the frame and drops the oldest under pressure.
  */
-private fun broadcastToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
+fun broadcastToApps(connections: ConnectionRegistry, projectId: String, frameBytes: ByteArray) {
     connections.getAppSessionsForProject(projectId).forEach { appSession ->
         appSession.outbox.trySendTelemetry(frameBytes)
     }

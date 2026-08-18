@@ -20,6 +20,7 @@
 // project/data/SqliteWidgetHistoryRepository.kt
 package com.jeanloickdt.project.data
 
+import com.jeanloickdt.project.domain.LayoutWrite
 import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.domain.ProjectRow
 import org.jetbrains.exposed.sql.*
@@ -88,12 +89,28 @@ class SqliteProjectRepository : ProjectRepository {
     // ============================================================
     // Sync full layout — opaque blob — bump updatedAt
     // ============================================================
-    override fun updateLayout(id: String, layoutJson: String): Boolean {
+    override fun updateLayout(id: String, layoutJson: String, expectedVersion: Int?): LayoutWrite {
         return transaction {
+            // Read and write in ONE transaction: between a separate read and a
+            // separate write, a second app fits entirely — which is the very
+            // race this guard exists to close.
+            val row = ProjectTable.selectAll()
+                .where { ProjectTable.id eq id }
+                .limit(1).firstOrNull()
+                ?: return@transaction LayoutWrite.NotFound
+
+            val current = row[ProjectTable.version]
+            if (expectedVersion != null && expectedVersion != current) {
+                return@transaction LayoutWrite.Conflict(current, row[ProjectTable.layoutJson])
+            }
+
+            val next = current + 1
             ProjectTable.update({ ProjectTable.id eq id }) {
                 it[ProjectTable.layoutJson] = layoutJson
+                it[ProjectTable.version]    = next
                 it[ProjectTable.updatedAt]  = System.currentTimeMillis()
-            } > 0
+            }
+            LayoutWrite.Ok(next)
         }
     }
 
@@ -123,6 +140,7 @@ class SqliteProjectRepository : ProjectRepository {
         ownerId    = this[ProjectTable.ownerId],
         name       = this[ProjectTable.name],
         layoutJson = this[ProjectTable.layoutJson],
+        version    = this[ProjectTable.version],
         createdAt  = this[ProjectTable.createdAt],
         updatedAt  = this[ProjectTable.updatedAt]
     )

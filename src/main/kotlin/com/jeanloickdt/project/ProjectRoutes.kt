@@ -43,6 +43,8 @@ import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import org.jetbrains.exposed.sql.transactions.transaction
 
+private val logger = org.slf4j.LoggerFactory.getLogger("ProjectRoutes")
+
 fun Route.projectRoutes(
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository,
@@ -71,6 +73,7 @@ fun Route.projectRoutes(
                         id         = it.id,
                         name       = it.name,
                         layoutJson = it.layoutJson,
+                        version    = it.version,
                         createdAt  = it.createdAt,
                         updatedAt  = it.updatedAt
                     )
@@ -100,6 +103,7 @@ fun Route.projectRoutes(
                 id         = project.id,
                 name       = project.name,
                 layoutJson = project.layoutJson,
+                version    = project.version,
                 createdAt  = project.createdAt,
                 updatedAt  = project.updatedAt
             ))
@@ -126,6 +130,7 @@ fun Route.projectRoutes(
                 id         = project.id,
                 name       = project.name,
                 layoutJson = project.layoutJson,
+                version    = project.version,
                 createdAt  = project.createdAt,
                 updatedAt  = project.updatedAt
             ))
@@ -163,6 +168,7 @@ fun Route.projectRoutes(
                 id         = updated.id,
                 name       = updated.name,
                 layoutJson = updated.layoutJson,
+                version    = updated.version,
                 createdAt  = updated.createdAt,
                 updatedAt  = updated.updatedAt
             ))
@@ -188,12 +194,39 @@ fun Route.projectRoutes(
             }
 
             val body = call.receive<UpdateProjectLayoutRequest>()
-            projectRepository.updateLayout(projectId, body.layoutJson)
+            if (body.version == null) {
+                // Not refused — an app that predates the guard must keep
+                // working. But it is worth a line: while this happens, two
+                // phones editing the same dashboard can still erase each other.
+                logger.warn("Layout write without a version on project $projectId — " +
+                    "concurrent edits are unprotected until the app sends one")
+            }
 
-            call.respond(HttpStatusCode.OK, mapOf(
-                "message"   to "Layout updated",
-                "projectId" to projectId
-            ))
+            when (val r = projectRepository.updateLayout(projectId, body.layoutJson, body.version)) {
+                is com.jeanloickdt.project.domain.LayoutWrite.Ok -> {
+                    // The other phones learn about it now, instead of walking
+                    // into a 409 the next time they save. The guard prevents the
+                    // loss; this is what makes the loss rare.
+                    events.layoutChanged(projectId, r.version)
+                    call.respond(HttpStatusCode.OK, mapOf(
+                        "message"   to "Layout updated",
+                        "projectId" to projectId,
+                        "version"   to r.version.toString()
+                    ))
+                }
+
+                is com.jeanloickdt.project.domain.LayoutWrite.Conflict ->
+                    // 409 with the winning layout attached: "somebody saved" is
+                    // useless to the app without "and here is what they saved".
+                    call.respond(HttpStatusCode.Conflict, com.jeanloickdt.project.domain.LayoutConflictResponse(
+                        error = "This dashboard changed since you opened it",
+                        currentVersion = r.currentVersion,
+                        currentLayoutJson = r.currentLayoutJson
+                    ))
+
+                is com.jeanloickdt.project.domain.LayoutWrite.NotFound ->
+                    call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
+            }
         }
 
         // ============================================================
