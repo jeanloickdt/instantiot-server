@@ -27,6 +27,15 @@ object ProjectTable : Table("projects") {
     val ownerId    = text("owner_id")
     val name       = text("name")
     val layoutJson = text("layout_json").default("{}") // full ProjectLayout — opaque blob
+    /**
+     * Bumped on every layout write. It is the concurrency token: two apps
+     * editing the same dashboard both hold a version, and the second to save
+     * is refused instead of silently erasing the first.
+     *
+     * A counter rather than `updatedAt`: two saves inside the same millisecond
+     * would both pass, and a clock adjustment can move a timestamp backwards.
+     */
+    val version    = integer("version").default(1)
     val createdAt  = long("created_at")
     val updatedAt  = long("updated_at")
     override val primaryKey = PrimaryKey(id)

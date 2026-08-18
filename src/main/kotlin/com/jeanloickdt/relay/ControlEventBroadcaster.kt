@@ -60,6 +60,25 @@ class ControlEventBroadcaster(
     }
 
     /**
+     * The dashboard was edited — by another phone, or by this one.
+     *
+     * Only the version travels. Pushing the whole layout on every debounced
+     * save would send a blob to every session several times a minute, for
+     * something most of them do not need: an app that is merely watching its
+     * gauges has no use for the new geometry until someone looks at it.
+     *
+     * And the version is what makes this self-sorting: the app that just saved
+     * already holds it and does nothing, an app that is behind knows to refetch.
+     * Nobody has to track who originated the change.
+     */
+    fun layoutChanged(projectId: String, version: Int) {
+        broadcastToProject(projectId, ControlEvent(
+            type    = ControlEventType.LAYOUT_CHANGED,
+            version = version
+        ))
+    }
+
+    /**
      * An ESP device has disconnected.
      * reason : DISCONNECTED / TOKEN_RENEWED / DELETED
      */

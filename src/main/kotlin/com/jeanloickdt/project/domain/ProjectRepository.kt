@@ -35,11 +35,30 @@ interface ProjectRepository {
     fun updateName(id: String, name: String): Boolean
 
     // Sync full layout — called with debounce from the app
-    fun updateLayout(id: String, layoutJson: String): Boolean
+    /**
+     * Writes the layout under optimistic concurrency.
+     *
+     * [expectedVersion] null keeps the legacy behaviour — write and hope. It
+     * exists only so an app that has not been updated yet keeps working; it
+     * offers no protection, and that is the point of naming it.
+     */
+    fun updateLayout(id: String, layoutJson: String, expectedVersion: Int? = null): LayoutWrite
 
     // Delete a project
     fun delete(id: String): Boolean
 
     // Total number of projects
     fun count(): Long
+}
+/**
+ * What a layout write did.
+ *
+ * [Conflict] carries the current state so the caller can answer the app with
+ * something it can act on — "someone else saved" is useless without "and here
+ * is what they saved".
+ */
+sealed interface LayoutWrite {
+    data class Ok(val version: Int) : LayoutWrite
+    data class Conflict(val currentVersion: Int, val currentLayoutJson: String) : LayoutWrite
+    data object NotFound : LayoutWrite
 }

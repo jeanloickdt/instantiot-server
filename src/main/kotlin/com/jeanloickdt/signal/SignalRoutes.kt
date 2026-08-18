@@ -36,6 +36,7 @@ import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
 import io.ktor.server.routing.patch
 import io.ktor.server.routing.post
+import io.ktor.server.routing.put
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -68,6 +69,14 @@ data class CreateSignalRequest(
     val maxValue: Double? = null,
     val historised: Boolean = true,
     val direction: String = SignalTable.DIRECTION_MEASURE
+)
+
+@Serializable
+data class WriteSignalValueRequest(
+    /** For bool/int/float/enum. `1`/`0` for a bool. */
+    val value: Double? = null,
+    /** For string signals. */
+    val text: String? = null
 )
 
 @Serializable
@@ -120,7 +129,14 @@ fun Route.signalRoutes(
     signals: SignalRepository,
     devices: DeviceRepository,
     policies: SignalPolicies = SignalPolicies(),
-    clock: () -> Long = System::currentTimeMillis
+    clock: () -> Long = System::currentTimeMillis,
+    /**
+     * The seam onto the device outbox. The default refuses to deliver, which
+     * makes an unwired node store setpoints without pretending they arrived.
+     */
+    sendToDevice: suspend (deviceId: String, frame: ByteArray) -> Boolean = { _, _ -> false },
+    /** Hands the new value to every app watching the board's project. */
+    broadcastToApps: (projectId: String, frame: ByteArray) -> Unit = { _, _ -> }
 ) {
     authenticate("jwt") {
 
@@ -225,6 +241,35 @@ fun Route.signalRoutes(
                 historised = body.historised, direction = body.direction, nowMs = clock()
             )
             call.respond(HttpStatusCode.OK, signals.find(ownerId, deviceId, address)!!.toDto())
+        }
+
+        /**
+         * Writes a setpoint — what the app WANTS, as opposed to what the board
+         * says it is. Stored first, then sent: an offline board finds it at its
+         * next connection instead of losing it.
+         */
+        put("/api/devices/{deviceId}/signals/{address}/value") {
+            val ownerId = call.principal<JWTPrincipal>()?.subject
+                ?: return@put call.respond(HttpStatusCode.Unauthorized)
+            val deviceId = call.ownedDevice(devices, ownerId) ?: return@put
+            val address = call.address() ?: return@put
+            val body = call.receive<WriteSignalValueRequest>()
+
+            val projectId = devices.findById(deviceId)?.projectId
+            when (val r = SignalSetpoint.write(
+                signals, ownerId, deviceId, address, body.value, body.text, clock(), sendToDevice,
+                broadcast = { frame -> projectId?.let { broadcastToApps(it, frame) } }
+            )) {
+                is SignalSetpoint.Outcome.Delivered ->
+                    call.respond(HttpStatusCode.OK, mapOf("delivered" to true))
+                is SignalSetpoint.Outcome.Stored ->
+                    // 202: recorded, not yet acted upon. Saying OK would claim
+                    // the board did something it has not seen.
+                    call.respond(HttpStatusCode.Accepted,
+                        mapOf("delivered" to false, "reason" to "device offline — will be restored on connect"))
+                is SignalSetpoint.Outcome.Refused ->
+                    call.respond(HttpStatusCode.BadRequest, ApiError(r.reason))
+            }
         }
 
         delete("/api/devices/{deviceId}/signals/{address}") {

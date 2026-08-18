@@ -756,7 +756,16 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         // No policies: a self-hosted node's limit is its own disk, so the
         // default gate — which always allows — is the honest one. The cloud
         // edition passes a SignalPolicies with its quota there.
-        signalRoutes(signalRepository, deviceRepository)
+        signalRoutes(
+            signals = signalRepository,
+            devices = deviceRepository,
+            sendToDevice = { deviceId, frame ->
+                connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
+            },
+            broadcastToApps = { projectId, frame ->
+                com.jeanloickdt.relay.broadcastToApps(connections, projectId, frame)
+            }
+        )
         automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
         ruleRoutes(
             ruleCache, cacheAwareWidgets, deviceRepository,

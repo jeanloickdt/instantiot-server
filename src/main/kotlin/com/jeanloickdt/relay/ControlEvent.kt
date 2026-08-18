@@ -55,7 +55,16 @@ data class ControlEvent(
     val min: Double? = null,              // min value of the bucket
     val max: Double? = null,              // max value of the bucket
     val count: Int? = null,               // number of aggregated samples
-    val granularity: String? = null       // "minute" | "hour" | "day"
+    val granularity: String? = null,      // "minute" | "hour" | "day"
+    // ─── LAYOUT_CHANGED fields ─────────────────────────────
+    /**
+     * The version the dashboard now holds.
+     *
+     * The event carries no layout: the app compares this with the version it
+     * has and refetches only if it is behind. An app that just saved gets its
+     * own version back and ignores the event — no need to track who sent it.
+     */
+    val version: Int? = null
 )
 
 /**
@@ -66,6 +75,7 @@ object ControlEventType {
     const val DEVICE_OFFLINE  = "device_offline"
     const val COMMAND_FAILED  = "command_failed"
     const val BUCKET_UPDATED  = "bucket_updated"
+    const val LAYOUT_CHANGED  = "layout_changed"
 }
 
 /**
