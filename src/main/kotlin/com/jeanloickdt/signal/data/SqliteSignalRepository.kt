@@ -128,8 +128,22 @@ class SqliteSignalRepository : SignalRepository {
         maxValue: Double?,
         historised: Boolean?,
         direction: String?,
+        type: String?,
         nowMs: Long
     ): Boolean = transaction {
+        // Read first: whether the type actually CHANGES decides the fate of
+        // the stored value, and a PATCH that repeats the current type must
+        // not throw it away.
+        val current = SignalTable.selectAll()
+            .where {
+                (SignalTable.ownerId eq ownerId) and
+                    (SignalTable.deviceId eq deviceId) and
+                    (SignalTable.address eq address)
+            }
+            .limit(1).firstOrNull() ?: return@transaction false
+
+        val typeChanged = type != null && type != current[SignalTable.type]
+
         SignalTable.update({
             (SignalTable.ownerId eq ownerId) and
                 (SignalTable.deviceId eq deviceId) and
@@ -142,6 +156,14 @@ class SqliteSignalRepository : SignalRepository {
             if (maxValue != null)   row[SignalTable.maxValue] = maxValue
             if (historised != null) row[SignalTable.historised] = historised
             if (direction != null)  row[SignalTable.direction] = direction
+            if (typeChanged) {
+                row[SignalTable.type] = type!!
+                // The bytes were encoded with the OLD tag. Replaying them
+                // under the new one is what would send a float to a board
+                // expecting an int — see the contract in SignalRepository.
+                row[SignalTable.lastPayload] = null
+                row[SignalTable.lastSeenAt] = null
+            }
             row[SignalTable.updatedAt] = nowMs
         } > 0
     }

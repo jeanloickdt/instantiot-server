@@ -22,6 +22,7 @@ package com.jeanloickdt.signal
 import com.jeanloickdt.relay.FrameParser
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -172,5 +173,59 @@ class SignalFrameTest {
             }
         }
         return crc.toByte()
+    }
+
+    // ── L'identite de la carte, sur le chemin des apps ────────────────────
+    //
+    // Elle ne voyage QUE vers les apps. Une carte n'en a pas besoin — la
+    // connexion l'a deja prouvee — et la lib REFUSE une trame qui en porte
+    // une : c'est ainsi qu'elle distingue un signal d'un widget.
+
+    @Test
+    fun `a board-bound frame carries no device`() {
+        val frame = SignalFrame.build(5, SignalFrame.TAG_FLOAT, SignalFrame.floatBytes(23.4f))
+        assertEquals(0, frame[4].toInt(), "DEV_COUNT doit rester 0 : la lib rejette le reste")
+        assertEquals(14, frame.size, "et la trame garde sa taille chiffree")
+    }
+
+    @Test
+    fun `an app-bound frame names the board, and still reads the same`() {
+        val board = SignalFrame.build(5, SignalFrame.TAG_FLOAT, SignalFrame.floatBytes(23.4f))
+
+        val forApps = SignalFrame.forApps(board, "dev-tt")!!
+
+        assertEquals(1, forApps[4].toInt(), "DEV_COUNT = 1")
+        assertEquals(5, SignalFrame.address(forApps), "l'adresse se relit malgre le decalage")
+        assertEquals(23.4, SignalFrame.numericValue(forApps)!!, 0.001)
+        assertTrue(SignalFrame.isSignal(forApps))
+    }
+
+    @Test
+    fun `two boards at the same address stay distinguishable`() {
+        val board = SignalFrame.build(5, SignalFrame.TAG_FLOAT, SignalFrame.floatBytes(1f))
+
+        val fromTt = SignalFrame.forApps(board, "dev-tt")!!
+        val fromBb = SignalFrame.forApps(board, "dev-bb")!!
+
+        // Sans l'identite ces deux trames seraient identiques, et une jauge
+        // afficherait celle qui arrive en dernier.
+        assertFalse(fromTt.contentEquals(fromBb))
+        assertEquals(SignalFrame.address(fromTt), SignalFrame.address(fromBb))
+    }
+
+    @Test
+    fun `a text signal survives the re-address`() {
+        val board = SignalFrame.build(9, SignalFrame.TAG_STRING, "MAINTENANCE".toByteArray())
+
+        val forApps = SignalFrame.forApps(board, "dev-tt")!!
+
+        assertEquals(9, SignalFrame.address(forApps))
+        assertEquals(SignalFrame.TAG_STRING, SignalFrame.tag(forApps))
+        assertNull(SignalFrame.numericValue(forApps), "un texte n'a pas d'echantillon numerique")
+    }
+
+    @Test
+    fun `what is not a signal is not re-addressed`() {
+        assertNull(SignalFrame.forApps(byteArrayOf(0xAA.toByte(), 0x01, 0x00, 0x00), "dev-tt"))
     }
 }

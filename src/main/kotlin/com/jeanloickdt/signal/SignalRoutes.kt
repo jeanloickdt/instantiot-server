@@ -96,6 +96,11 @@ data class WriteSignalValueResponse(
 @Serializable
 data class UpdateSignalRequest(
     val label: String? = null,
+    /**
+     * Editable — but changing it drops the stored value. See the contract on
+     * [com.jeanloickdt.signal.domain.SignalRepository.update].
+     */
+    val type: String? = null,
     val unit: String? = null,
     val decimals: Int? = null,
     val minValue: Double? = null,
@@ -234,6 +239,10 @@ fun Route.signalRoutes(
             if (body.direction != null && body.direction !in KNOWN_DIRECTIONS) {
                 return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Unknown direction"))
             }
+            if (body.type != null && body.type !in KNOWN_TYPES) {
+                return@patch call.respond(HttpStatusCode.BadRequest,
+                    ApiError("Unknown type '${body.type}' — one of $KNOWN_TYPES"))
+            }
             if (body.decimals != null && body.decimals !in 0..6) {
                 return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Decimals must be 0-6"))
             }
@@ -245,14 +254,17 @@ fun Route.signalRoutes(
                 return@patch call.respond(HttpStatusCode.BadRequest, ApiError("min must be < max"))
             }
 
-            // The type is deliberately NOT editable: a sketch already writes it,
-            // and history already holds its samples. Changing it would silently
-            // reinterpret both. Delete and recreate is the honest path.
+            // The type IS editable. What it costs is written down in one
+            // place — the repository contract — and it costs the stored
+            // value, not the history: samples already recorded stay the
+            // numbers they were, and a client that changes float→string is
+            // choosing to leave a curve behind, not to corrupt one.
             signals.update(
                 ownerId = ownerId, deviceId = deviceId, address = address,
                 label = body.label?.trim(), unit = body.unit, decimals = body.decimals,
                 minValue = body.minValue, maxValue = body.maxValue,
-                historised = body.historised, direction = body.direction, nowMs = clock()
+                historised = body.historised, direction = body.direction,
+                type = body.type, nowMs = clock()
             )
             call.respond(HttpStatusCode.OK, signals.find(ownerId, deviceId, address)!!.toDto())
         }

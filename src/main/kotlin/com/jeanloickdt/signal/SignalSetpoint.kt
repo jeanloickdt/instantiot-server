@@ -100,7 +100,9 @@ object SignalSetpoint {
         // The apps hear about it whether or not the board is reachable: the
         // SIGNAL changed, and that is what an observer subscribed to. A gauge
         // showing a setpoint must not wait for a board that is asleep.
-        broadcast(frame)
+        //
+        // Their copy carries the device; the board's does not — see [SignalFrame.build].
+        broadcast(SignalFrame.forApps(frame, deviceId) ?: frame)
 
         return if (send(deviceId, frame)) Outcome.Delivered(stored) else Outcome.Stored(stored)
     }
