@@ -79,6 +79,20 @@ data class WriteSignalValueRequest(
     val text: String? = null
 )
 
+/**
+ * The answer to a setpoint write.
+ *
+ * A declared type rather than a `mapOf`: a map whose values are a Boolean and
+ * a String has no serializer kotlinx can guess, and it fails at *response*
+ * time — a 500 on a route whose logic ran perfectly. The compiler cannot warn
+ * about that, so the shape is written down here instead.
+ */
+@Serializable
+data class WriteSignalValueResponse(
+    val delivered: Boolean,
+    val reason: String? = null
+)
+
 @Serializable
 data class UpdateSignalRequest(
     val label: String? = null,
@@ -261,12 +275,14 @@ fun Route.signalRoutes(
                 broadcast = { frame -> projectId?.let { broadcastToApps(it, frame) } }
             )) {
                 is SignalSetpoint.Outcome.Delivered ->
-                    call.respond(HttpStatusCode.OK, mapOf("delivered" to true))
+                    call.respond(HttpStatusCode.OK, WriteSignalValueResponse(delivered = true))
                 is SignalSetpoint.Outcome.Stored ->
                     // 202: recorded, not yet acted upon. Saying OK would claim
                     // the board did something it has not seen.
-                    call.respond(HttpStatusCode.Accepted,
-                        mapOf("delivered" to false, "reason" to "device offline — will be restored on connect"))
+                    call.respond(HttpStatusCode.Accepted, WriteSignalValueResponse(
+                        delivered = false,
+                        reason = "device offline — will be restored on connect"
+                    ))
                 is SignalSetpoint.Outcome.Refused ->
                     call.respond(HttpStatusCode.BadRequest, ApiError(r.reason))
             }

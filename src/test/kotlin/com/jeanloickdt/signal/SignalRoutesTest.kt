@@ -42,6 +42,7 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
+import io.ktor.client.request.put
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
@@ -90,11 +91,17 @@ class SignalRoutesTest {
         signals = SqliteSignalRepository()
     }
 
-    private fun ApplicationTestBuilder.installTestApp(policies: SignalPolicies = SignalPolicies()) {
+    private fun ApplicationTestBuilder.installTestApp(
+        policies: SignalPolicies = SignalPolicies(),
+        /** Default: the board is unreachable — the route's own default too. */
+        sendToDevice: suspend (String, ByteArray) -> Boolean = { _, _ -> false }
+    ) {
         application {
             install(ContentNegotiation) { json() }
             configureAuth(userRepository, tokenService)
-            routing { signalRoutes(signals, deviceRepository, policies) }
+            routing {
+                signalRoutes(signals, deviceRepository, policies, sendToDevice = sendToDevice)
+            }
         }
     }
 
@@ -113,6 +120,14 @@ class SignalRoutesTest {
     private suspend fun io.ktor.client.HttpClient.createSignal(
         token: String, deviceId: String, body: String
     ): HttpResponse = post("/api/devices/$deviceId/signals") {
+        header(HttpHeaders.Authorization, "Bearer $token")
+        contentType(ContentType.Application.Json)
+        setBody(body)
+    }
+
+    private suspend fun io.ktor.client.HttpClient.writeValue(
+        token: String, deviceId: String, address: Int, body: String
+    ): HttpResponse = put("/api/devices/$deviceId/signals/$address/value") {
         header(HttpHeaders.Authorization, "Bearer $token")
         contentType(ContentType.Application.Json)
         setBody(body)
@@ -292,5 +307,89 @@ class SignalRoutesTest {
 
         assertEquals(HttpStatusCode.PaymentRequired, third.status)
         assertEquals(2, seen, "the gate counts what exists, not what the request claims")
+    }
+
+    // ── Écrire une consigne ───────────────────────────────────────────────
+    //
+    // These go through the real HTTP response, not just SignalSetpoint.write.
+    // The logic had 16 tests and still shipped a 500: the failure was in
+    // SERIALIZING the answer, which no unit test on the write path can see.
+
+    @Test
+    fun `an offline board answers 202, with a body the client can actually read`() = testApplication {
+        installTestApp()   // sendToDevice returns false: the board is away
+        val (token, dev) = account("iris")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+
+        val r = client.writeValue(token, dev, 0, """{"value":21.5}""")
+
+        assertEquals(HttpStatusCode.Accepted, r.status, r.bodyAsText())
+        // Reading the body is the whole point: the status alone would have
+        // passed even when the response could not be serialized at all.
+        val body = json(r.bodyAsText())
+        assertEquals(false, body["delivered"]!!.jsonPrimitive.content.toBoolean())
+        assertTrue(body["reason"]!!.jsonPrimitive.content.isNotBlank(),
+            "202 without a reason leaves the app guessing why nothing happened")
+    }
+
+    @Test
+    fun `a delivered setpoint answers 200 and says so`() = testApplication {
+        installTestApp(sendToDevice = { _, _ -> true })
+        val (token, dev) = account("jules")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+
+        val r = client.writeValue(token, dev, 0, """{"value":21.5}""")
+
+        assertEquals(HttpStatusCode.OK, r.status, r.bodyAsText())
+        assertEquals(true, json(r.bodyAsText())["delivered"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun `the frame really reaches the outbox, addressed and valued`() = testApplication {
+        var sent: ByteArray? = null
+        installTestApp(sendToDevice = { _, frame -> sent = frame; true })
+        val (token, dev) = account("kenza")
+        client.createSignal(token, dev,
+            """{"label":"Consigne","type":"float","address":5,"direction":"setpoint"}""")
+
+        client.writeValue(token, dev, 5, """{"value":21.5}""")
+
+        assertEquals(5, SignalFrame.address(sent!!))
+        assertEquals(21.5, SignalFrame.numericValue(sent!!)!!, 0.001)
+    }
+
+    @Test
+    fun `writing a measure is refused, and the answer says why`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("lina")
+        client.createSignal(token, dev, """{"label":"Température","type":"float"}""")   // measure
+
+        val r = client.writeValue(token, dev, 0, """{"value":42}""")
+
+        assertEquals(HttpStatusCode.BadRequest, r.status)
+        assertTrue("measure" in json(r.bodyAsText())["error"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `an undeclared address is refused and names itself`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("marc")
+
+        val r = client.writeValue(token, dev, 9, """{"value":1}""")
+
+        assertEquals(HttpStatusCode.BadRequest, r.status)
+        assertTrue("I9" in json(r.bodyAsText())["error"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `another tenant's board is a 404, even to write a value`() = testApplication {
+        installTestApp()
+        val (tokenA, _) = account("nadia")
+        val (_, devB)   = account("omar")
+
+        val r = client.writeValue(tokenA, devB, 0, """{"value":1}""")
+
+        assertEquals(HttpStatusCode.NotFound, r.status,
+            "403 would confirm the board exists — 404 confirms nothing")
     }
 }
