@@ -45,11 +45,13 @@ import org.jetbrains.exposed.sql.Table
  * ## What deliberately does NOT live here
  *
  * **No send rate.** It is not a per-signal setting: the only throttle is the
- * platform's `caps["messages.perSecond"]`, the same number that already feeds
- * the fuse, pushed to the board so it stops before being disconnected.
+ * node's ceiling — the same number that already feeds the fuse, pushed to the
+ * board so it stops before being disconnected. Where that number comes from is
+ * the operator's business, not the signal's.
  *
  * **No history tier.** [historised] is a boolean. The minute/hour/day cascade is
- * internal and automatic; `raw` is a plan capability, not a choice.
+ * internal and automatic. Whether the raw tier is kept is decided elsewhere,
+ * by whoever runs the node.
  */
 object SignalTable : Table("signals") {
 
