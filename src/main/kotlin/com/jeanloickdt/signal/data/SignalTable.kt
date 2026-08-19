@@ -81,7 +81,24 @@ object SignalTable : Table("signals") {
      * There is no tier to pick: the cascade is internal, and `raw` is granted
      * by the plan.
      */
+    /** `value` ou `action`. Défaut `value` : ce qui existait le reste. */
+    val nature = varchar("nature", 16).default(NATURE_VALUE)
+
     val historised = bool("historised").default(true)
+
+    /**
+     * La carte retrouve-t-elle cette valeur en se reconnectant ?
+     *
+     * **C'est l'interrupteur de sûreté du modèle.** Une consigne doit revenir —
+     * la pompe était à 19 °C avant la coupure, elle doit y retourner. Une
+     * action ne doit jamais revenir : rejouer « ouvre le portail » à chaque
+     * hoquet du WiFi n'est pas un défaut d'affichage.
+     *
+     * Par défaut `true`, ce qui préserve le comportement d'avant ce champ :
+     * toute consigne ayant une valeur était rejouée, sans qu'on demande à
+     * personne. Le passer à `false` est une décision, pas un oubli.
+     */
+    val replayOnConnect = bool("replay_on_connect").default(true)
 
     /** `measure` (board writes) · `setpoint` (app writes) · `both`. */
     val direction = text("direction").default(DIRECTION_MEASURE)
@@ -99,6 +116,17 @@ object SignalTable : Table("signals") {
     const val DIRECTION_MEASURE  = "measure"
     const val DIRECTION_SETPOINT = "setpoint"
     const val DIRECTION_BOTH     = "both"
+
+    /**
+     * Ce qu'une adresse porte — et ce n'est pas déductible du reste.
+     *
+     * Une **action** n'a ni sens de lecture (elle va toujours de l'app vers la
+     * carte), ni historique (il n'y a pas de courbe), ni bornes, ni rejeu
+     * (rien n'est gardé). Ce n'est donc pas une valeur avec d'autres réglages,
+     * c'est une autre déclaration — d'où une colonne plutôt qu'une déduction.
+     */
+    const val NATURE_VALUE  = "value"
+    const val NATURE_ACTION = "action"
 
     const val TYPE_BOOL   = "bool"
     const val TYPE_INT    = "int"

@@ -35,7 +35,11 @@ data class SignalRow(
     val decimals: Int,
     val minValue: Double?,
     val maxValue: Double?,
+    /** `value` ou `action` — voir [com.jeanloickdt.signal.data.SignalTable.nature]. */
+    val nature: String = "value",
     val historised: Boolean,
+    /** Rejouée à la reconnexion — voir [com.jeanloickdt.signal.data.SignalTable.replayOnConnect]. */
+    val replayOnConnect: Boolean = true,
     val direction: String,
     val lastPayload: String?,
     val lastSeenAt: Long?
@@ -70,7 +74,9 @@ interface SignalRepository {
         decimals: Int = 1,
         minValue: Double? = null,
         maxValue: Double? = null,
+        nature: String = "value",
         historised: Boolean = true,
+        replayOnConnect: Boolean = true,
         direction: String = "measure",
         nowMs: Long
     ): Boolean
@@ -97,6 +103,7 @@ interface SignalRepository {
         minValue: Double? = null,
         maxValue: Double? = null,
         historised: Boolean? = null,
+        replayOnConnect: Boolean? = null,
         direction: String? = null,
         type: String? = null,
         nowMs: Long

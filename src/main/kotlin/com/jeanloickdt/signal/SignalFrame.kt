@@ -71,6 +71,10 @@ object SignalFrame {
      * than dropping it.
      */
     fun address(frame: ByteArray): Int? = try {
+        // Le TYPE d'abord : un EVENT a exactement la même disposition, et sans
+        // ce contrôle un appui de bouton se lirait comme une mesure — la
+        // symétrie de [com.jeanloickdt.relay.EventFrame.address].
+        if (!isSignal(frame)) return null
         var o = BODY
         val deviceCount = frame[o++].toInt() and 0xFF
         repeat(deviceCount) {

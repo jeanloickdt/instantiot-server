@@ -51,7 +51,9 @@ data class SignalDto(
     val decimals: Int,
     val minValue: Double?,
     val maxValue: Double?,
+    val nature: String,
     val historised: Boolean,
+    val replayOnConnect: Boolean,
     val direction: String,
     val lastPayload: String?,
     val lastSeenAt: Long?
@@ -67,7 +69,24 @@ data class CreateSignalRequest(
     val decimals: Int = 1,
     val minValue: Double? = null,
     val maxValue: Double? = null,
+    /**
+     * `value` ou `action`.
+     *
+     * Une **action** est normalisée par le serveur : écrite par l'app, sans
+     * historique, sans rejeu. Ce n'est pas de la rigidité — ces trois réglages
+     * n'ont rien à décrire sur un fait, et les laisser réglables créerait des
+     * déclarations incohérentes que personne ne saurait interpréter.
+     */
+    val nature: String = SignalTable.NATURE_VALUE,
     val historised: Boolean = true,
+    /**
+     * La carte retrouve-t-elle cette valeur en se reconnectant ?
+     *
+     * `true` par défaut — c'est le comportement qui existait avant ce champ.
+     * Le passer à `false` fait de cette adresse une ACTION : rien n'est
+     * rejoué, donc rien ne peut se déclencher tout seul.
+     */
+    val replayOnConnect: Boolean = true,
     val direction: String = SignalTable.DIRECTION_MEASURE
 )
 
@@ -106,6 +125,7 @@ data class UpdateSignalRequest(
     val minValue: Double? = null,
     val maxValue: Double? = null,
     val historised: Boolean? = null,
+    val replayOnConnect: Boolean? = null,
     val direction: String? = null
 )
 
@@ -125,9 +145,13 @@ class SignalPolicies(
 private fun SignalRow.toDto() = SignalDto(
     deviceId = deviceId, address = address, ref = SignalTable.render(address),
     label = label, type = type, unit = unit, decimals = decimals,
-    minValue = minValue, maxValue = maxValue, historised = historised,
+    minValue = minValue, maxValue = maxValue,
+    nature = nature, historised = historised,
+    replayOnConnect = replayOnConnect,
     direction = direction, lastPayload = lastPayload, lastSeenAt = lastSeenAt
 )
+
+private val KNOWN_NATURES = setOf(SignalTable.NATURE_VALUE, SignalTable.NATURE_ACTION)
 
 private val KNOWN_TYPES = setOf(
     SignalTable.TYPE_BOOL, SignalTable.TYPE_INT, SignalTable.TYPE_FLOAT,
@@ -179,9 +203,14 @@ fun Route.signalRoutes(
             val deviceId = call.ownedDevice(devices, ownerId) ?: return@post
             val body = call.receive<CreateSignalRequest>()
 
+            val isAction = body.nature == SignalTable.NATURE_ACTION
             val label = body.label.trim()
             if (label.length !in 1..64) {
                 return@post call.respond(HttpStatusCode.BadRequest, ApiError("Label must be 1-64 characters"))
+            }
+            if (body.nature !in KNOWN_NATURES) {
+                return@post call.respond(HttpStatusCode.BadRequest,
+                    ApiError("Unknown nature '${body.nature}' — one of $KNOWN_NATURES"))
             }
             if (body.type !in KNOWN_TYPES) {
                 return@post call.respond(HttpStatusCode.BadRequest,
@@ -215,7 +244,14 @@ fun Route.signalRoutes(
                 ownerId = ownerId, deviceId = deviceId, address = address,
                 label = label, type = body.type, unit = body.unit, decimals = body.decimals,
                 minValue = body.minValue, maxValue = body.maxValue,
-                historised = body.historised, direction = body.direction, nowMs = clock()
+                // Une action n'a ni sens, ni historique, ni rejeu — le serveur
+                // normalise plutôt que de refuser, pour qu'il soit impossible
+                // de créer une action incohérente.
+                nature = body.nature,
+                historised = if (isAction) false else body.historised,
+                replayOnConnect = if (isAction) false else body.replayOnConnect,
+                direction = if (isAction) SignalTable.DIRECTION_SETPOINT else body.direction,
+                nowMs = clock()
             )
             if (!created) {
                 return@post call.respond(HttpStatusCode.Conflict,
@@ -263,8 +299,8 @@ fun Route.signalRoutes(
                 ownerId = ownerId, deviceId = deviceId, address = address,
                 label = body.label?.trim(), unit = body.unit, decimals = body.decimals,
                 minValue = body.minValue, maxValue = body.maxValue,
-                historised = body.historised, direction = body.direction,
-                type = body.type, nowMs = clock()
+                historised = body.historised, replayOnConnect = body.replayOnConnect,
+                direction = body.direction, type = body.type, nowMs = clock()
             )
             call.respond(HttpStatusCode.OK, signals.find(ownerId, deviceId, address)!!.toDto())
         }

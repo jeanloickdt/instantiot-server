@@ -125,7 +125,13 @@ object SignalSetpoint {
     ): Int {
         var sent = 0
         val toRestore = signals.listByDevice(ownerId, deviceId)
-            .filter { it.direction != SignalTable.DIRECTION_MEASURE && it.lastPayload != null }
+            .filter {
+                it.direction != SignalTable.DIRECTION_MEASURE &&
+                    it.lastPayload != null &&
+                    // Le drapeau du signal, pas une règle en dur. Rejouer une
+                    // ACTION serait rouvrir un portail à chaque hoquet du WiFi.
+                    it.replayOnConnect
+            }
         for (signal in toRestore) {
             val payload = runCatching { Base64.getDecoder().decode(signal.lastPayload) }.getOrNull()
                 ?: continue
