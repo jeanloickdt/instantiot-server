@@ -461,4 +461,67 @@ class SignalRoutesTest {
         assertEquals(HttpStatusCode.NotFound, r.status,
             "403 would confirm the board exists — 404 confirms nothing")
     }
+
+    // ── La nature : une valeur, ou une action ─────────────────────────────
+    //
+    // Une action n'a ni sens de lecture, ni historique, ni rejeu. Le serveur
+    // NORMALISE au lieu de refuser : il doit etre impossible de creer une
+    // action incoherente, pas seulement decourage.
+
+    @Test
+    fun `an action comes out written by the app, with no history and no replay`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("nora")
+
+        val r = client.createSignal(token, dev,
+            """{"label":"Portail","type":"bool","nature":"action",
+                "historised":true,"replayOnConnect":true,"direction":"measure"}""")
+
+        assertEquals(HttpStatusCode.Created, r.status, r.bodyAsText())
+        val dto = json(r.bodyAsText())
+        assertEquals("action", dto.getValue("nature").jsonPrimitive.content)
+        assertEquals("setpoint", dto.getValue("direction").jsonPrimitive.content,
+            "une action va toujours de l'app vers la carte")
+        assertEquals(false, dto.getValue("historised").jsonPrimitive.content.toBoolean(),
+            "un fait n'a pas de courbe")
+        assertEquals(false, dto.getValue("replayOnConnect").jsonPrimitive.content.toBoolean(),
+            "et surtout : un portail ne se rouvre pas tout seul apres une coupure")
+    }
+
+    @Test
+    fun `a value keeps what it was given`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("omar2")
+
+        val r = client.createSignal(token, dev,
+            """{"label":"Consigne","type":"float","nature":"value",
+                "historised":true,"replayOnConnect":true,"direction":"setpoint"}""")
+
+        val dto = json(r.bodyAsText())
+        assertEquals("value", dto.getValue("nature").jsonPrimitive.content)
+        assertEquals(true, dto.getValue("replayOnConnect").jsonPrimitive.content.toBoolean())
+        assertEquals(true, dto.getValue("historised").jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun `the nature defaults to value, so nothing changed for what existed`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("pia")
+
+        val r = client.createSignal(token, dev, """{"label":"x","type":"float"}""")
+
+        assertEquals("value", json(r.bodyAsText()).getValue("nature").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `an unknown nature is refused with the list of the real ones`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("quentin")
+
+        val r = client.createSignal(token, dev,
+            """{"label":"x","type":"float","nature":"gesture"}""")
+
+        assertEquals(HttpStatusCode.BadRequest, r.status)
+        assertTrue("action" in json(r.bodyAsText()).getValue("error").jsonPrimitive.content)
+    }
 }

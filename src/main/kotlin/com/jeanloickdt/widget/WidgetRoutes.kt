@@ -51,7 +51,10 @@ fun Route.widgetRoutes(
     widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
     widgetHistoryHourRepository: WidgetHistoryAggregateRepository,
     widgetHistoryDayRepository: WidgetHistoryAggregateRepository,
-    lastValues: LastValueCache
+    lastValues: LastValueCache,
+    /** Les signaux du projet. `null` : la route sert les widgets seuls. */
+    signals: com.jeanloickdt.signal.domain.SignalRepository? = null,
+    devices: com.jeanloickdt.device.domain.DeviceRepository? = null
 ) {
 
     authenticate("jwt") {
@@ -203,7 +206,31 @@ fun Route.widgetRoutes(
                     )
                 }
 
-            call.respond(HttpStatusCode.OK, states)
+            // Les SIGNAUX aussi.
+            //
+            // Sans eux, un afficheur relié à un signal reste vide jusqu'à la
+            // prochaine écriture — invisible sur une mesure qui arrive
+            // cinquante fois par seconde, gênant sur une consigne qui change
+            // une fois par jour. La clé est celle du fil : `deviceId:adresse`.
+            val signalStates = if (signals != null && devices != null) {
+                val projectDevices = devices.findAllByProject(projectId)
+                    .filter { it.ownerId == ownerId }
+                projectDevices.flatMap { device ->
+                    signals.listByDevice(ownerId, device.id).mapNotNull { signal ->
+                        val key = "${device.id}:${signal.address}"
+                        val cached = lastValues.get(ownerId, key)
+                        val payload = cached?.payload ?: signal.lastPayload
+                        if (payload == null) null   // rien à montrer : on ne dit rien
+                        else WidgetStateResponse(
+                            widgetId   = key,
+                            payload    = payload,
+                            lastSeenAt = cached?.at ?: signal.lastSeenAt
+                        )
+                    }
+                }
+            } else emptyList()
+
+            call.respond(HttpStatusCode.OK, states + signalStates)
         }
 
         // ============================================================

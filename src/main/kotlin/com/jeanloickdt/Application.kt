@@ -714,7 +714,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // ============================================================
     // App relay — WebSocket /ws/app
     // ============================================================
-    configureAppRelay(projectRepository, connections, controlEvents)
+    configureAppRelay(projectRepository, connections, controlEvents, signalRepository)
 
     // ============================================================
     // REST routes
@@ -782,7 +782,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         widgetRoutes(
             cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
             widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-            lastValues
+            lastValues, signalRepository, deviceRepository
         )
 
         // TODO: add the routes of new modules here

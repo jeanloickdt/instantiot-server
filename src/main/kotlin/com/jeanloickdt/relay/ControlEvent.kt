@@ -104,4 +104,14 @@ object CommandFailedReason {
     const val DEVICE_OFFLINE = "device_offline"  // TCP session absent/closed
     const val FORBIDDEN      = "forbidden"       // device belongs to another user
     const val RELAY_ERROR    = "relay_error"     // exception during the TCP write
+
+    /**
+     * L'app a visé une adresse qui n'est déclarée sur aucune carte.
+     *
+     * Refuser plutôt que relayer, parce qu'une carte qui reçoit un événement
+     * sur une adresse qu'aucun bloc n'écoute ne peut rien en dire : le silence
+     * remonterait jusqu'à l'utilisateur, qui chercherait la panne dans son
+     * croquis. C'est le pendant de `UndeclaredSignals` — même trou, autre sens.
+     */
+    const val UNDECLARED_ADDRESS = "undeclared_address"
 }

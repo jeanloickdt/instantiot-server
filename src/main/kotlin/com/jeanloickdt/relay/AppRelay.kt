@@ -80,7 +80,12 @@ private val appInboundJson = Json { ignoreUnknownKeys = true; isLenient = true }
 fun Application.configureAppRelay(
     projectRepository: ProjectRepository,
     connections: ConnectionRegistry,
-    events: ControlEventBroadcaster
+    events: ControlEventBroadcaster,
+    /**
+     * Le dépôt des adresses déclarées. `null` laisse passer sans contrôle —
+     * un nœud sans dépôt de signaux n'a pas à devenir muet pour autant.
+     */
+    signals: com.jeanloickdt.signal.domain.SignalRepository? = null
 ) {
 
     install(WebSockets) {
@@ -188,7 +193,7 @@ fun Application.configureAppRelay(
                                     logger.warn("Invalid frame received from app userId=$userId — ignored")
                                     continue
                                 }
-                                relayFrameToDevices(this@webSocket, userId, frameBytes, connections, events)
+                                relayFrameToDevices(this@webSocket, userId, frameBytes, connections, events, signals)
                             }
                             is Frame.Text -> {
                                 handleAppTextMessage(appSession, incomingFrame.readText())
@@ -256,7 +261,8 @@ private suspend fun relayFrameToDevices(
     userId: String,
     frameBytes: ByteArray,
     connections: ConnectionRegistry,
-    events: ControlEventBroadcaster
+    events: ControlEventBroadcaster,
+    signals: com.jeanloickdt.signal.domain.SignalRepository? = null
 ) {
     val targetDeviceIds = FrameParser.extractDeviceIds(frameBytes)
     if (targetDeviceIds.isEmpty()) return
@@ -277,6 +283,22 @@ private suspend fun relayFrameToDevices(
                 deviceId = targetDeviceId,
                 reason   = CommandFailedReason.DEVICE_OFFLINE
             )
+            return@forEach
+        }
+
+        // Un EVENT vise une ADRESSE, et une adresse doit être déclarée.
+        //
+        // Relayer sans vérifier reproduirait le trou qu'`UndeclaredSignals` a
+        // fermé dans l'autre sens : la carte recevrait un événement qu'aucun
+        // bloc n'écoute, ne dirait rien, et l'utilisateur chercherait la panne
+        // dans son croquis. Ici on peut le nommer — alors on le nomme.
+        val refusal = EventFrame.refusalFor(trimmedFrame, userId, targetDeviceId, signals)
+        if (refusal != null) {
+            logger.info(
+                "Event refused — userId=$userId deviceId=$targetDeviceId " +
+                    "address=I${EventFrame.address(trimmedFrame)} reason=$refusal"
+            )
+            events.commandFailed(session = session, deviceId = targetDeviceId, reason = refusal)
             return@forEach
         }
 
@@ -304,6 +326,20 @@ private suspend fun relayFrameToDevices(
                 reason   = CommandFailedReason.RELAY_ERROR
             )
             return@forEach
+        }
+
+        // Un EVENT relayé laisse une trace.
+        //
+        // Sans elle, un succès et un « l'app n'a rien envoyé » se ressemblent
+        // exactement — aucune ligne dans les deux cas — et on ne peut pas les
+        // distinguer sans instrumenter à chaud. Une ligne par appui de bouton
+        // est un volume négligeable ; une valeur, non, c'est pourquoi ce log
+        // ne concerne que les événements.
+        EventFrame.address(trimmedFrame)?.let { addr ->
+            logger.info(
+                "Event relayed — deviceId=$targetDeviceId address=I$addr " +
+                    "kind=0x${EventFrame.kind(trimmedFrame)?.toString(16)}"
+            )
         }
 
         val enqueued = outbox.send(trimmedFrame, isStreaming)

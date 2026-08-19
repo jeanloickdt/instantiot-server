@@ -269,4 +269,38 @@ class SignalSetpointTest {
             "the restore rebuilds a frame from the stored bytes — no second encoding path to drift")
         assertNull(java.util.Base64.getDecoder().decode(stored).let { if (it.size == 4) null else "wrong size" })
     }
+
+    // ── Le rejeu est un choix du signal, pas une regle en dur ─────────────
+
+    @Test
+    fun `an action is never replayed — nothing is there to open a gate by itself`(): Unit = runBlocking {
+        signals.create(
+            ownerId = OWNER, deviceId = TT, address = 9, label = "Portail",
+            type = SignalTable.TYPE_BOOL, direction = SignalTable.DIRECTION_SETPOINT,
+            replayOnConnect = false, nowMs = 0
+        )
+        write(9, 1.0)
+        assertNotNull(signals.find(OWNER, TT, 9)!!.lastPayload, "precondition : une valeur a circule")
+        sent.clear()
+
+        assertEquals(0, SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send),
+            "rejouer « ouvre le portail » a chaque hoquet du WiFi n'est pas un defaut d'affichage")
+        assertTrue(sent.isEmpty())
+    }
+
+    @Test
+    fun `a setpoint still comes back — that is what makes it a state`(): Unit = runBlocking {
+        declare(5)   // replayOnConnect vaut true par defaut
+        write(5, 21.5)
+        sent.clear()
+
+        assertEquals(1, SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send))
+    }
+
+    @Test
+    fun `the flag defaults to true, so nothing changed for what existed`(): Unit = runBlocking {
+        declare(5)
+        assertTrue(signals.find(OWNER, TT, 5)!!.replayOnConnect,
+            "le comportement d'avant ce champ est le defaut : le desactiver est une decision")
+    }
 }

@@ -69,7 +69,9 @@ class SqliteSignalRepository : SignalRepository {
         decimals: Int,
         minValue: Double?,
         maxValue: Double?,
+        nature: String,
         historised: Boolean,
+        replayOnConnect: Boolean,
         direction: String,
         nowMs: Long
     ): Boolean {
@@ -96,7 +98,9 @@ class SqliteSignalRepository : SignalRepository {
                 it[SignalTable.decimals]   = decimals
                 it[SignalTable.minValue]   = minValue
                 it[SignalTable.maxValue]   = maxValue
+                it[SignalTable.nature] = nature
                 it[SignalTable.historised] = historised
+                it[SignalTable.replayOnConnect] = replayOnConnect
                 it[SignalTable.direction]  = direction
                 it[SignalTable.createdAt]  = nowMs
                 it[SignalTable.updatedAt]  = nowMs
@@ -127,6 +131,7 @@ class SqliteSignalRepository : SignalRepository {
         minValue: Double?,
         maxValue: Double?,
         historised: Boolean?,
+        replayOnConnect: Boolean?,
         direction: String?,
         type: String?,
         nowMs: Long
@@ -155,6 +160,7 @@ class SqliteSignalRepository : SignalRepository {
             if (minValue != null)   row[SignalTable.minValue] = minValue
             if (maxValue != null)   row[SignalTable.maxValue] = maxValue
             if (historised != null) row[SignalTable.historised] = historised
+            if (replayOnConnect != null) row[SignalTable.replayOnConnect] = replayOnConnect
             if (direction != null)  row[SignalTable.direction] = direction
             if (typeChanged) {
                 row[SignalTable.type] = type!!
@@ -213,7 +219,9 @@ class SqliteSignalRepository : SignalRepository {
         decimals    = this[SignalTable.decimals],
         minValue    = this[SignalTable.minValue],
         maxValue    = this[SignalTable.maxValue],
+        nature      = this[SignalTable.nature],
         historised  = this[SignalTable.historised],
+        replayOnConnect = this[SignalTable.replayOnConnect],
         direction   = this[SignalTable.direction],
         lastPayload = this[SignalTable.lastPayload],
         lastSeenAt  = this[SignalTable.lastSeenAt]
