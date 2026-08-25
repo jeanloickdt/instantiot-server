@@ -52,3 +52,15 @@ build/jpackage-input/
 
 # Private local doc — actor map (stays local, never pushed)
 ARCHITECTURE_ACTORS.md
+
+# Reglages locaux de l'agent — JAMAIS dans un depot public.
+#
+# Le fichier accumule les commandes autorisees, et donc tout ce qu'elles
+# contiennent : ici 101 fois l'adresse du VPS de production, 93 fois le chemin
+# de la cle SSH qui l'ouvre, et l'arborescence des depots prives.
+#
+# Il etait deja exclu — mais par l'ignore GLOBAL de la machine
+# (~/.config/git/ignore). Cette protection ne suit pas le depot : un clone
+# ailleurs, une machine neuve, et un seul `git add -A` publie tout. La regle
+# doit vivre la ou vit le risque.
+.claude/settings.local.json
