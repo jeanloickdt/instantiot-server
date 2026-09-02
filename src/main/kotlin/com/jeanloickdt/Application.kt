@@ -33,35 +33,15 @@ import com.jeanloickdt.common.StatusResponse
 import com.jeanloickdt.common.systemRoutes
 import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
-import com.jeanloickdt.device.data.SqliteDeviceRepository
+import com.jeanloickdt.device.data.ExposedDeviceRepository
 import com.jeanloickdt.device.deviceRoutes
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.project.data.SqliteProjectRepository
+import com.jeanloickdt.project.data.ExposedProjectRepository
 import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.project.projectRoutes
-import com.jeanloickdt.relay.HistoryEntry
-import com.jeanloickdt.relay.NumericHistoryEntry
 import com.jeanloickdt.relay.configureAppRelay
 import com.jeanloickdt.relay.startDeviceRelay
-import com.jeanloickdt.widget.data.HistoryAggregators
-import com.jeanloickdt.widget.data.SqliteWidgetHistoryAggregateRepository
-import com.jeanloickdt.widget.data.SqliteWidgetHistoryNumericRepository
-import com.jeanloickdt.widget.data.SqliteWidgetHistoryRepository
-import com.jeanloickdt.widget.data.SqliteWidgetRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
-import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
-import com.jeanloickdt.widget.domain.WidgetHistoryNumericRow
-import com.jeanloickdt.widget.domain.WidgetHistoryRepository
-import com.jeanloickdt.widget.domain.WidgetHistoryRow
-import com.jeanloickdt.widget.domain.WidgetRepository
-import com.jeanloickdt.widget.widgetRoutes
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -143,16 +123,29 @@ fun main(args: Array<String>) {
 // Global dependencies — instantiated once at startup
 // ============================================================
 val userRepository: UserRepository               = SqliteUserRepository()
-val projectRepository: ProjectRepository         = SqliteProjectRepository()
-val deviceRepository: DeviceRepository           = SqliteDeviceRepository()
-val widgetRepository: WidgetRepository           = SqliteWidgetRepository()
-val signalRepository: com.jeanloickdt.signal.domain.SignalRepository =
-    com.jeanloickdt.signal.data.SqliteSignalRepository()
-val widgetHistoryRepository: WidgetHistoryRepository = SqliteWidgetHistoryRepository()
-val widgetHistoryNumericRepository: WidgetHistoryNumericRepository = SqliteWidgetHistoryNumericRepository()
-val widgetHistoryMinRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryMinTable)
-val widgetHistoryHourRepository: WidgetHistoryAggregateRepository = SqliteWidgetHistoryAggregateRepository(WidgetHistoryHourTable)
-val widgetHistoryDayRepository: WidgetHistoryAggregateRepository  = SqliteWidgetHistoryAggregateRepository(WidgetHistoryDayTable)
+val projectRepository: ProjectRepository         = ExposedProjectRepository()
+
+// Une instance, deux vues. Les routes voient le depot cadre par compte ; le
+// relais ne voit que l'ecriture de presence, qui ne l'est pas — et ce
+// decoupage rend l'absence de proprietaire visible a la declaration.
+private val deviceStore = ExposedDeviceRepository()
+val deviceRepository: DeviceRepository = deviceStore
+val devicePresence: com.jeanloickdt.device.domain.DevicePresenceWriter = deviceStore
+
+/**
+ * The signal store, with the database taken off the relay's hottest line.
+ *
+ * Kept as the concrete cached type rather than the interface because the flush
+ * loop below has to reach [CachedSignalRepository.flushPendingValues] — the
+ * batch write is the whole point of the buffer, and hiding it behind the
+ * interface would only mean casting it back.
+ */
+val signalRepository: com.jeanloickdt.signal.data.CachedSignalRepository =
+    com.jeanloickdt.signal.data.CachedSignalRepository(
+        com.jeanloickdt.signal.data.ExposedSignalRepository()
+    )
+
+val signalHistoryRepository = com.jeanloickdt.signal.data.ExposedSignalHistoryRepository()
 
 // ── Rule events (socle automatisation) ──────────────────────
 // The relay produces, nobody consumes yet: the values channel keeps its
@@ -161,12 +154,13 @@ val widgetHistoryDayRepository: WidgetHistoryAggregateRepository  = SqliteWidget
 val eventSinks = com.jeanloickdt.event.EventSinks()
 
 /**
- * Which widgets a rule watches. The rule cache will own this; until it
- * exists, nobody watches and the WidgetValue producer publishes nothing —
- * one predicate call per frame, nothing else.
+ * Quels signaux une regle surveille. Le cache des regles en est
+ * proprietaire ; sans regle, personne ne surveille et le producteur
+ * `SignalValue` ne publie rien — un appel de predicat par trame, rien de
+ * plus.
  */
 @Volatile
-var watchedWidgets: (com.jeanloickdt.relay.WidgetKey) -> Boolean = { false }
+var watchedSignals: (com.jeanloickdt.relay.SignalRef) -> Boolean = { false }
 
 // Message ledger — RAM on the hot path, drained by the 5 s flush. A plain
 // usage statistic here; the cloud edition reads it for its monthly quota.
@@ -243,13 +237,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         UserTable,
         ProjectTable,
         DeviceTable,
-        WidgetTable,
-        WidgetHistoryTable,
-        WidgetHistoryNumericTable,
-        WidgetHistoryMinTable,
-        WidgetHistoryHourTable,
-        WidgetHistoryDayTable,
-        com.jeanloickdt.signal.data.SignalTable,
+        *com.jeanloickdt.signal.data.SignalTables.ALL,
         *com.jeanloickdt.automation.data.AutomationTables.ALL,
         dbFile = dbFile
     )
@@ -260,7 +248,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // TCP session. At startup, no session exists → everything must
     // be offline, devices will go online as soon as they
     // reconnect and send their handshake.
-    deviceRepository.markAllOffline()
+    devicePresence.markAllOffline()
 
     // ============================================================
     // Relay state (DI) — the node-local seams, injected by parameter
@@ -274,23 +262,16 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     val connections = com.jeanloickdt.relay.ConnectionRegistry()
     val buffers = com.jeanloickdt.relay.HistoryBuffers()
     val lastValues: com.jeanloickdt.relay.LastValueCache = com.jeanloickdt.relay.InMemoryLastValueCache()
-    val presence: com.jeanloickdt.relay.PresenceStore = com.jeanloickdt.relay.DbBackedPresenceStore(deviceRepository)
+    val presence: com.jeanloickdt.relay.PresenceStore = com.jeanloickdt.relay.DbBackedPresenceStore(devicePresence)
     val controlEvents = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
 
-    // Cache-aware widget repository (composition root): wraps the pure SQLite
-    // repo so every widgets-table write keeps knownWidgetIds + lastValues in
-    // sync — including the project cascade, which used to bypass cache sync. All
-    // widget-mutating callers (routes, relay, cascade) go through this.
-    val cacheAwareWidgets: WidgetRepository =
-        com.jeanloickdt.relay.CacheAwareWidgetRepository(widgetRepository, buffers.knownWidgetIds, lastValues)
-
-    // Seed the declared-widgets cache from the table at boot, so it reflects
-    // what is persisted (today auto-register would re-fill it lazily; this is
-    // the prerequisite for the strict model, where an unseeded cache would drop
-    // the first frame of every already-declared widget).
-    val seededWidgets = widgetRepository.findAll()
-    seededWidgets.forEach { buffers.knownWidgetIds.add(com.jeanloickdt.relay.WidgetKey(it.ownerId, it.id)) }
-    logger.info("Seeded ${seededWidgets.size} declared widget(s) into the cache")
+    // Il y avait ici un depot de widgets « conscient du cache » et un
+    // amorcage de `knownWidgetIds` depuis la table : le modele strict
+    // exigeait de connaitre les widgets declares avant la premiere trame.
+    //
+    // Une adresse se declare desormais dans la table des signaux, et
+    // l'ingestion l'y lit — il n'y a plus de cache a tenir en phase, donc
+    // plus d'occasion de le laisser deriver.
 
     // final flush at shutdown — no buffer data lost
     // iWidgets rework: we ALSO flush all RAM buckets (including
@@ -308,27 +289,17 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // a path where both fire is harmless — the second pass finds nothing.
     val finalFlush: () -> Unit = {
         kotlinx.coroutines.runBlocking {
-            flushHistoryBuffer(buffers, widgetHistoryRepository)
-            flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
-            flushLastValues(lastValues, cacheAwareWidgets)
-            flushAllAggregatorBuckets(
-                minRepo  = widgetHistoryMinRepository,
-                hourRepo = widgetHistoryHourRepository,
-                dayRepo  = widgetHistoryDayRepository,
-                events   = controlEvents
+            // Meme promesse que les tampons ci-dessus : zero perte sur un
+            // arret maitrise. Un arret brutal coute au pire une periode de
+            // vidage de dernieres valeurs — jamais une consigne, qui
+            // n'attend jamais ici.
+            signalRepository.flushPendingValues()
+            (presence as? com.jeanloickdt.relay.DbBackedPresenceStore)?.flushPending()
+            signalHistoryRepository.insertMinuteBatch(
+                com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets()
             )
+            signalHistoryRepository.insertRawBatch(buffers.signalRawBuffer.drain())
         }
-    }
-    monitor.subscribe(ApplicationStopping) { finalFlush() }
-    Runtime.getRuntime().addShutdownHook(Thread {
-        runCatching { finalFlush() }
-            .onFailure { LoggerFactory.getLogger("InstantIoT").error("Shutdown-hook flush failed", it) }
-    })
-
-    // mDNS / Bonjour — unregisters the service before the sockets close
-    // so that apps see the server disappear cleanly.
-    monitor.subscribe(ApplicationStopping) {
-        com.jeanloickdt.discovery.MdnsPublisher.stop()
     }
 
     // ============================================================
@@ -402,7 +373,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         presence    = presence,
         events      = controlEvents,
         sinks       = eventSinks,
-        watchedWidgets = { key -> watchedWidgets(key) },
+        watchedSignals = { ref -> watchedSignals(ref) },
         usage       = messageUsage,
         signals     = signalRepository,
         tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort
@@ -425,35 +396,40 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     com.jeanloickdt.discovery.MdnsPublisher.start(displayName = displayName)
 
     // ============================================================
-    // Flush history buffer → SQLite WAL batch every 5s
+    // Flush history buffer → un lot ecrit toutes les 5 s
     //
-    // iWidgets rework (tiered-aggregation architecture): a single 5s job
-    // drains the 5 sources and persists in batch:
-    //   - historyBuffer        → widget_history (opaque events)
-    //   - numericHistoryBuffer → widget_history_numeric (raw, opt-in)
-    //   - HistoryAggregators.minute closed → widget_history_min
-    //   - HistoryAggregators.hour  closed → widget_history_hour
-    //   - HistoryAggregators.day   closed → widget_history_day
+    // Un seul travail de 5 s vide les deux sources du modèle signal :
+    //   - signalRawBuffer                 → signal_raw (brut, sur option)
+    //   - SignalAggregators.minute fermée → signal_min
+    //
+    // L'heure et le jour ne sont plus accumulés en RAM : ils se dérivent de la
+    // minute, ce qui évite qu'un redémarrage perde trois paliers au lieu d'un.
     //
     // The DB is NEVER on the critical path of the device relay.
     // ============================================================
     // Shared logger for the background maintenance loops below. Each loop
-    // body is wrapped in try/catch so a transient failure (e.g. a SQLITE_BUSY
-    // that slipped past the busy timeout) logs and retries on the next tick
+    // body is wrapped in try/catch so a transient failure (a lost connection,
+    // a lock timeout) logs and retries on the next tick
     // instead of killing the coroutine permanently — a dead flush loop would
     // silently stop persisting and let the RAM buffers grow until OOM.
     val bgLog = LoggerFactory.getLogger("InstantIoT.maintenance")
 
-    // Flush cadence and its alert thresholds — see the loop below.
-    val FLUSH_PERIOD_MS = 5_000L
-    // A round costing a fifth of its period already deserves attention: it
-    // leaves little headroom before the loop starts stretching.
-    val FLUSH_SLOW_MS = 1_000L
-    // ~5 min at a 5 s period. A healthy server must still say so periodically,
-    // otherwise there is no baseline to compare a bad day against.
-    val FLUSH_HEARTBEAT_ROUNDS = 60L
+    // La cadence vient de la configuration — voir [ServerConfig.historyFlushPeriodMs]
+    // pour ce que le nombre achete dans les deux sens. Lue UNE FOIS ici : la
+    // changer a chaud ferait varier le seuil d'alerte au milieu d'une mesure,
+    // et un redemarrage est le prix normal d'un reglage de cadence.
+    val FLUSH_PERIOD_MS = com.jeanloickdt.common.ServerConfig.historyFlushPeriodMs
+    // Un tour qui coute le cinquieme de sa periode merite deja l'attention :
+    // il reste peu de marge avant que la boucle commence a s'etirer. Derive
+    // de la periode plutot que fixe a 1 000 ms — sinon un operateur qui
+    // allonge la cadence a trente secondes ne verrait plus jamais l'alerte.
+    val FLUSH_SLOW_MS = FLUSH_PERIOD_MS / 5
+    // ~5 min, quelle que soit la cadence. Un serveur en bonne sante doit le
+    // dire periodiquement : sans ligne de reference, un mauvais jour ne se
+    // compare a rien.
+    val FLUSH_HEARTBEAT_ROUNDS = (5 * 60_000L / FLUSH_PERIOD_MS).coerceAtLeast(1L)
 
-    launch(Dispatchers.IO) {
+    launch(com.jeanloickdt.common.ServerDispatchers.storage) {
         // Timing the flush round is the leading indicator of saturation.
         //
         // This loop is `delay(period)` THEN work, not a fixed-rate scheduler:
@@ -467,36 +443,94 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         // materialised there, whereas `.size` on a ConcurrentLinkedQueue is
         // O(n) and would cost more than the flush it measures.
         var round = 0L
+        // Only the DELTA is worth a line: a queue that refused once and
+        // recovered must not warn on every round for the rest of the day.
+        var lastRefusedTotal = 0L
         while (true) {
             delay(FLUSH_PERIOD_MS)
             val startedAt = System.nanoTime()
-            var opaqueRows = 0
-            var numericRows = 0
+            var signalRows = 0
+            var rawRows = 0
             try {
-                opaqueRows  = flushHistoryBuffer(buffers, widgetHistoryRepository)
 
-                // message ledger — a handful of rows per cycle, one per owner
-                // that emitted since the last flush.
+                // messages.perMonth ledger — a handful of rows per cycle, one
+                // per owner that emitted since the last flush.
                 run {
-                    val period = com.jeanloickdt.automation.MessageUsageRepository.periodOf(System.currentTimeMillis())
+                    val now = System.currentTimeMillis()
+                    val period = com.jeanloickdt.automation.MessageUsageRepository.periodOf(now)
                     messageUsage.drain().forEach { (owner, delta) ->
                         messageUsageRepo.add(owner, period, delta)
                     }
                 }
-                numericRows = flushNumericHistoryBuffer(buffers, widgetHistoryNumericRepository)
-                flushLastValues(lastValues, cacheAwareWidgets)
-                flushClosedAggregatorBuckets(
-                    minRepo  = widgetHistoryMinRepository,
-                    hourRepo = widgetHistoryHourRepository,
-                    dayRepo  = widgetHistoryDayRepository,
-                    events   = controlEvents
+
+                // The signals' last values — one transaction for the whole
+                // round instead of one per frame. This is what takes the write
+                // lock off the relay's hot path; a setpoint does NOT come
+                // through here, it is written through at the moment it is set.
+                signalRows = signalRepository.flushPendingValues()
+
+                // Presence, batched for the same reason as everything else in
+                // this loop: a carrier hiccup that reconnects three thousand
+                // boards must cost one round of writes, not six thousand.
+                (presence as? com.jeanloickdt.relay.DbBackedPresenceStore)?.flushPending()
+
+
+                // Le modèle signal — en parallèle, pas à la place. Seul le
+                // palier minute s'écrit ici ; heure et jour sont dérivées
+                // séparément, sur leur propre boucle plus lente — voir plus
+                // bas.
+                //
+                // Pas de diffusion `bucket_updated` ici : l'app s'y abonne
+                // toujours (`subscribe_history`), mais l'émission est partie
+                // avec les agrégateurs widget. La remettre demande de la
+                // reformuler sur les signaux — une décision, pas un oubli.
+                signalHistoryRepository.insertMinuteBatch(
+                    com.jeanloickdt.signal.data.SignalAggregators.minute
+                        .extractClosedBuckets(System.currentTimeMillis())
                 )
+                rawRows = buffers.signalRawBuffer.drain()
+                    .also { signalHistoryRepository.insertRawBatch(it) }.size
             } catch (e: Exception) {
                 bgLog.error("History flush round failed — retrying in 5s", e)
             }
             val tookMs = (System.nanoTime() - startedAt) / 1_000_000
             round++
-            val summary = "flush took ${tookMs}ms — opaque=$opaqueRows numeric=$numericRows"
+            val summary = "flush took ${tookMs}ms — signals=$signalRows raw=$rawRows"
+
+            // A saturation nobody reports is worse than a low ceiling. The
+            // queues refuse silently by design — this is the one place that
+            // says it out loud, and it says it once per round rather than once
+            // per refused frame.
+            val refused = buffers.refusedTotal()
+            if (refused > lastRefusedTotal) {
+                bgLog.warn(
+                    "Ingest queues FULL — ${refused - lastRefusedTotal} frame(s) refused this round " +
+                        "(${refused} since boot) · ${buffers.pressure()}. The writer cannot keep up: " +
+                        "check the flush duration above, the disk, and the frame rate of the boards."
+                )
+                lastRefusedTotal = refused
+            }
+
+            // La contre-pression se decide ICI, sur la duree du tour, et pas
+            // sur une file pleine : quand le brut deborde, le mal est deja
+            // fait — le meme tour peinait deja a ecrire les seaux minute.
+            // Voir [IngestBackPressure] pour l'hysteresis.
+            if (buffers.backPressure.record(tookMs, FLUSH_PERIOD_MS)) {
+                if (buffers.backPressure.isRawSuspended) {
+                    bgLog.warn(
+                        "Contre-pression ENGAGEE — le palier brut est lache pour laisser " +
+                            "passer les agregats. Les courbes restent completes ; le zoom fin " +
+                            "des prochaines minutes sera vide. Cause : plusieurs tours de vidage " +
+                            "d'affilee au-dela de leur periode de ${FLUSH_PERIOD_MS}ms."
+                    )
+                } else {
+                    bgLog.info(
+                        "Contre-pression relachee — le brut reprend " +
+                            "(${buffers.backPressure.droppedRaw} echantillons ecartes depuis le boot)."
+                    )
+                }
+            }
+
             when {
                 // The round now costs more than its own period: the loop is
                 // behind and the buffers are growing between rounds.
@@ -513,6 +547,47 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     }
 
     // ============================================================
+    // Le modèle signal — heure et jour, dérivées périodiquement
+    //
+    // Étape 3 du passage au modèle signal. Un seul job, identique sur les
+    // deux moteurs : relit `signal_min`, regroupe par heure, réécrit
+    // `signal_hour` — puis relit `signal_hour`, regroupe par jour, réécrit
+    // `signal_day`. En CASCADE (heure → jour, jamais minute → jour
+    // directement) : le jour n'a que 24 lignes à lire au lieu de 1440, et
+    // c'est sûr parce que l'heure survit plus longtemps que la minute — elle
+    // est encore là quand le jour se calcule.
+    //
+    // ⚠️ Pour qui câble la purge du palier minute (étape 6) : ce job doit
+    // tourner AVANT elle. Une ligne minute supprimée avant d'avoir été
+    // dérivée fait un trou définitif dans `signal_hour` — et comme la
+    // minute sera plafonnée bien plus court que l'heure, le cas se
+    // présenterait chaque jour, pas en cas rare. Le plus simple, quand la
+    // purge signal existera : l'appeler juste après ce bloc, dans la même
+    // boucle.
+    //
+    // Cinq minutes : correct à relancer (voir ExposedSignalHistoryRepository
+    // .deriveTier — remplacement, pas fusion, donc une relance ne double
+    // jamais un échantillon), pas encore réglé sur un vrai volume. Le
+    // chiffre est une question ouverte du brief (§8), au même titre que
+    // l'intervalle du flush d'ingestion.
+    // ============================================================
+    val SIGNAL_ROLLUP_PERIOD_MS = com.jeanloickdt.common.ServerConfig.historyRollupPeriodMs
+    launch(com.jeanloickdt.common.ServerDispatchers.storage) {
+        while (true) {
+            delay(SIGNAL_ROLLUP_PERIOD_MS)
+            try {
+                val hourRows = signalHistoryRepository.deriveHour()
+                val dayRows  = signalHistoryRepository.deriveDay()
+                if (hourRows > 0 || dayRows > 0) {
+                    bgLog.info("signal rollup — hour=$hourRows day=$dayRows bucket(s) written")
+                }
+            } catch (e: Exception) {
+                bgLog.error("Signal rollup round failed — retrying in ${SIGNAL_ROLLUP_PERIOD_MS}ms", e)
+            }
+        }
+    }
+
+    // ============================================================
     // Periodic cleanup per tier (configurable retention)
     //
     // No more deferred SQL downsampling — the RAM aggregators
@@ -522,34 +597,36 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // Runs once per hour (retention is in days, no need for
     // minute-by-minute precision to purge).
     // ============================================================
-    launch(Dispatchers.IO) {
+    launch(com.jeanloickdt.common.ServerDispatchers.storage) {
         while (true) {
             delay(60.minutes)
             try {
+                // La derivation ne reprend qu'une fenetre de seaux clos. Apres
+                // une interruption plus longue que la fenetre, les minutes
+                // d'avant ne seraient jamais derivees — et seraient supprimees
+                // quelques lignes plus bas, laissant un trou definitif dans la
+                // courbe heure. Vingt-quatre heures couvrent une nuit
+                // d'astreinte.
+                signalHistoryRepository.deriveHour(windowBuckets = 24)
+                signalHistoryRepository.deriveDay(windowBuckets = 7)
+
+                // La retention se lit dans `server.properties`, et nulle part
+                // ailleurs : ce serveur ne vend pas de profondeur, il a un
+                // disque. Le nuage passe ici un plan par compte ; le balayage
+                // accepte la meme forme, avec zero exception.
                 val now = System.currentTimeMillis()
-                val dayMs = 24L * 3600_000L
+                val jour = 24L * 60 * 60 * 1000
+                fun coupe(jours: Int) = com.jeanloickdt.retention.RetentionSweep(
+                    defaultCutoffMs = now - jours.toLong() * jour,
+                    overrides = emptyList()
+                )
 
-                // opaque (widget_history) — non-numeric events
-                val opaqueCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionOpaqueDays.toLong() * dayMs
-                widgetHistoryRepository.deleteOlderThan(opaqueCutoff)
-
-                // raw numeric (widget_history_numeric) — opt-in
-                val rawCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionRawDays.toLong() * dayMs
-                widgetHistoryNumericRepository.deleteOlderThan(rawCutoff)
-
-                // 1 min buckets
-                val minCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionMinDays.toLong() * dayMs
-                widgetHistoryMinRepository.deleteOlderThan(minCutoff)
-
-                // 1 h buckets
-                val hourCutoff = now - com.jeanloickdt.common.ServerConfig.historyRetentionHourDays.toLong() * dayMs
-                widgetHistoryHourRepository.deleteOlderThan(hourCutoff)
-
-                // 1 day buckets — purge IF retention > 0, otherwise keep indefinitely
-                val dayRetention = com.jeanloickdt.common.ServerConfig.historyRetentionDayDays
-                if (dayRetention > 0) {
-                    val dayCutoff = now - dayRetention.toLong() * dayMs
-                    widgetHistoryDayRepository.deleteOlderThan(dayCutoff)
+                signalHistoryRepository.sweepRaw(coupe(com.jeanloickdt.common.ServerConfig.historyRetentionRawDays))
+                signalHistoryRepository.sweepMinute(coupe(com.jeanloickdt.common.ServerConfig.historyRetentionMinDays))
+                signalHistoryRepository.sweepHour(coupe(com.jeanloickdt.common.ServerConfig.historyRetentionHourDays))
+                // `-1` vaut « illimite » : on ne balaie pas.
+                if (com.jeanloickdt.common.ServerConfig.historyRetentionDayDays > 0) {
+                    signalHistoryRepository.sweepDay(coupe(com.jeanloickdt.common.ServerConfig.historyRetentionDayDays))
                 }
             } catch (e: Exception) {
                 bgLog.error("History retention cleanup round failed — retrying next hour", e)
@@ -563,10 +640,10 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // empty, watches() is false everywhere, and NOTHING changes.
     // ============================================================
     ruleCache.reload()
-    watchedWidgets = { key -> ruleCache.watches(key) }
+    watchedSignals = { ref -> ruleCache.watches(ref) }
     val automationEngine = com.jeanloickdt.automation.AutomationEngine(
         eventSinks, ruleCache, pendingActions,
-        com.jeanloickdt.automation.SqliteAutomationStateStore(), deviceRepository
+        com.jeanloickdt.automation.ExposedAutomationStateStore(), deviceRepository
     )
     launch(Dispatchers.Default) { automationEngine.run() }
 
@@ -590,7 +667,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // The tick: offline confirmations every 10 s (the "afterS" debounce runs
     // HERE, never as a delay in the engine — one offline rule must not freeze
     // every rule for thirty seconds), stale sweep every 60 s.
-    val staleSweeper = com.jeanloickdt.event.WidgetStaleSweeper(lastValues, eventSinks)
+    val staleSweeper = com.jeanloickdt.event.SignalStaleSweeper(lastValues, eventSinks)
     val schedulerWorker = com.jeanloickdt.automation.SchedulerWorker(eventSinks)
     launch(Dispatchers.Default) {
         var i = 0
@@ -636,7 +713,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         }
     )
     val commandSender = com.jeanloickdt.automation.CommandActionSender(
-        deviceOwner = { deviceId -> deviceRepository.findById(deviceId)?.ownerId },
+        ownsDevice = { ownerId, deviceId -> deviceRepository.findById(ownerId, deviceId) != null },
         sendToDevice = { deviceId, frame ->
             // discret, jamais streaming : une commande de règle ne se jette pas
             connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
@@ -739,16 +816,14 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         }
 
         val accountPurge = com.jeanloickdt.auth.AccountPurge(
-            userRepository, projectRepository, deviceRepository, cacheAwareWidgets,
-            widgetHistoryRepository, widgetHistoryNumericRepository,
-            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+            userRepository, projectRepository, deviceRepository,
+            signalRepository, signalHistoryRepository,
             connections, controlEvents
         )
         authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, accountPurge)
         projectRoutes(
-            projectRepository, deviceRepository, cacheAwareWidgets,
-            widgetHistoryRepository, widgetHistoryNumericRepository,
-            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+            projectRepository, deviceRepository,
+            signalRepository, signalHistoryRepository,
             connections, controlEvents
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
@@ -764,11 +839,17 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             },
             broadcastToApps = { projectId, frame ->
                 com.jeanloickdt.relay.broadcastToApps(connections, projectId, frame)
+            },
+            // Les fenetres : tout est servi, rien n'est borne. Ce serveur ne
+            // vend pas de profondeur — voir [HistoryWindows.unlimited].
+            historyWindows = { _, _ -> com.jeanloickdt.signal.HistoryWindows.unlimited() },
+            readHistory = { signalId, ownerId, fromMs, toMs, resolution ->
+                signalHistoryRepository.readForApi(signalId, ownerId, fromMs, toMs, resolution)
             }
         )
         automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
         ruleRoutes(
-            ruleCache, cacheAwareWidgets, deviceRepository,
+            ruleCache, signalRepository, deviceRepository,
             com.jeanloickdt.automation.RulePolicies(
                 // The OFFRE boundary: no Firebase credentials can ship in a
                 // public repo, so PUSH rules are refused at creation with a
@@ -779,177 +860,22 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 )
             )
         )
-        widgetRoutes(
-            cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
-            widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-            lastValues, signalRepository, deviceRepository
-        )
+        // Les routes des widgets sont parties avec la table. Une adresse se
+        // declare desormais dans `signalRoutes`, cable plus haut.
 
         // TODO: add the routes of new modules here
     }
 }
 
 // ============================================================
-// Flush history buffer → SQLite WAL batch insert
-// Called every 5s + at shutdown
-// ============================================================
-private suspend fun flushHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, widgetHistoryRepository: WidgetHistoryRepository): Int {
-    val batch = mutableListOf<HistoryEntry>()
-    while (buffers.historyBuffer.isNotEmpty()) {
-        batch.add(buffers.historyBuffer.poll() ?: break)
-    }
-
-    if (batch.isEmpty()) return 0
-
-    val historyRows = batch.map { entry ->
-        WidgetHistoryRow(
-            id         = 0,              // auto-increment — ignored on insert
-            widgetId   = entry.widgetId,
-            projectId  = entry.projectId,
-            ownerId    = entry.ownerId,
-            payload    = entry.payload,
-            recordedAt = entry.recordedAt
-        )
-    }
-
-    widgetHistoryRepository.insertBatch(historyRows)
-    return historyRows.size
-}
-
-// ============================================================
-// Flush numeric history buffer → SQLite WAL batch insert
-// ============================================================
-private suspend fun flushNumericHistoryBuffer(buffers: com.jeanloickdt.relay.HistoryBuffers, repo: WidgetHistoryNumericRepository): Int {
-    val batch = mutableListOf<NumericHistoryEntry>()
-    while (buffers.numericHistoryBuffer.isNotEmpty()) {
-        batch.add(buffers.numericHistoryBuffer.poll() ?: break)
-    }
-
-    if (batch.isEmpty()) return 0
-
-    val rows = batch.map { entry ->
-        WidgetHistoryNumericRow(
-            id         = 0,
-            widgetId   = entry.widgetId,
-            projectId  = entry.projectId,
-            ownerId    = entry.ownerId,
-            seriesId   = entry.seriesId,
-            value      = entry.value,
-            recordedAt = entry.recordedAt
-        )
-    }
-
-    repo.insertBatch(rows)
-    return rows.size
-}
-
-// ============================================================
-// Coalesced last_payload persistence (5s job + shutdown)
+// Ce qui vivait ici
 //
-// The device read-loop only writes the LastValueCache in RAM. Here we drain
-// the entries changed since the last cycle and upsert them in ONE transaction
-// — at most one DB write per changed widget per 5s, never per frame. The DB
-// column is a cold-start fallback (live value is the cache); a ≤5s lag (≤10s
-// in the documented drain race) is acceptable by design.
-// ============================================================
-private suspend fun flushLastValues(
-    lastValues: com.jeanloickdt.relay.LastValueCache,
-    widgetRepository: WidgetRepository
-) {
-    val dirty = lastValues.drainDirty()
-    if (dirty.isEmpty()) return
-    widgetRepository.updateLastPayloadBatch(
-        dirty.map { (key, v) ->
-            com.jeanloickdt.widget.domain.LastPayloadUpdate(key.ownerId, key.widgetId, v.payload, v.at)
-        }
-    )
-}
-
-// ============================================================
-// Flush the CLOSED buckets of the RAM aggregators (5s job)
+// Six fonctions de vidage : le tampon opaque, le tampon numerique, les
+// dernieres valeurs, et les trois paliers d'agregats widget. Elles
+// ecrivaient dans `widget_history` et ses quatre tables derivees.
 //
-// A bucket is "closed" when its window (bucketAt + bucketSizeMs)
-// is ≤ now. The current bucket stays in RAM to keep
-// accumulating the samples that arrive during its window.
+// Le modele signal fait le meme travail depuis `signal/data` : le tampon
+// brut, l'agregateur minute, et la derivation heure et jour. Les boucles
+// de fond appellent directement le depot d'historique des signaux, sans
+// intermediaire a maintenir ici.
 // ============================================================
-private suspend fun flushClosedAggregatorBuckets(
-    minRepo: WidgetHistoryAggregateRepository,
-    hourRepo: WidgetHistoryAggregateRepository,
-    dayRepo: WidgetHistoryAggregateRepository,
-    events: com.jeanloickdt.relay.ControlEventBroadcaster
-) {
-    val now = System.currentTimeMillis()
-    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractClosedBuckets(now), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = true, events = events)
-    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractClosedBuckets(now),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = true, events = events)
-    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractClosedBuckets(now),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = true, events = events)
-}
-
-// ============================================================
-// Flush ALL the aggregator buckets (including in-progress ones)
-//
-// Called ONLY on a clean shutdown via ApplicationStopping
-// so nothing is lost on a controlled restart. Once flushed,
-// the aggregators are empty — samples arriving after
-// this point are no longer collected (the server is stopping).
-//
-// No WS broadcast at shutdown: the apps are losing their
-// connection anyway (and will re-fetch their full history
-// on the next open).
-// ============================================================
-private suspend fun flushAllAggregatorBuckets(
-    minRepo: WidgetHistoryAggregateRepository,
-    hourRepo: WidgetHistoryAggregateRepository,
-    dayRepo: WidgetHistoryAggregateRepository,
-    events: com.jeanloickdt.relay.ControlEventBroadcaster
-) {
-    flushAggregatorTier(minRepo,  HistoryAggregators.minute.extractAllBuckets(), com.jeanloickdt.relay.BucketGranularity.MINUTE, broadcast = false, events = events)
-    flushAggregatorTier(hourRepo, HistoryAggregators.hour.extractAllBuckets(),   com.jeanloickdt.relay.BucketGranularity.HOUR,   broadcast = false, events = events)
-    flushAggregatorTier(dayRepo,  HistoryAggregators.day.extractAllBuckets(),    com.jeanloickdt.relay.BucketGranularity.DAY,    broadcast = false, events = events)
-}
-
-/**
- * Converts the snapshots into `AggregateInsertRow` + insertBatch.
- * If [broadcast] = true, emits a "bucket_updated" control event for
- * each snapshot after the successful DB insert. Lets app-side charts
- * in historical preset mode update their window without
- * re-fetching over HTTP.
- */
-private suspend fun flushAggregatorTier(
-    repo: WidgetHistoryAggregateRepository,
-    snapshots: List<com.jeanloickdt.widget.data.BucketAccumulator.Snapshot>,
-    granularity: String,
-    broadcast: Boolean,
-    events: com.jeanloickdt.relay.ControlEventBroadcaster
-) {
-    if (snapshots.isEmpty()) return
-    val rows = snapshots.map { snap ->
-        WidgetHistoryAggregateRepository.AggregateInsertRow(
-            widgetId    = snap.widgetId,
-            projectId   = snap.projectId,
-            ownerId     = snap.ownerId,
-            seriesId    = snap.seriesId,
-            avgValue    = snap.avgValue,
-            minValue    = snap.minValue,
-            maxValue    = snap.maxValue,
-            sampleCount = snap.sampleCount,
-            bucketAt    = snap.bucketAt
-        )
-    }
-    repo.insertBatch(rows)
-
-    if (broadcast) {
-        snapshots.forEach { snap ->
-            events.bucketClosed(
-                projectId   = snap.projectId,
-                widgetId    = snap.widgetId,
-                seriesId    = snap.seriesId,
-                bucketAt    = snap.bucketAt,
-                avg         = snap.avgValue,
-                min         = snap.minValue,
-                max         = snap.maxValue,
-                count       = snap.sampleCount,
-                granularity = granularity
-            )
-        }
-    }
-}

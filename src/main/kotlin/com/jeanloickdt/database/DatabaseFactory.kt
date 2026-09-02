@@ -106,51 +106,6 @@ object DatabaseFactory {
             @Suppress("DEPRECATION")
             SchemaUtils.createMissingTablesAndColumns(*tables)
 
-            // ─── widgets PK migration: id → (owner_id, id) ─────
-            // Non-additive (a PK change), so createMissingTablesAndColumns can
-            // NOT do it — it only adds tables/columns. widgetId is a global
-            // identifier but protocolIds (gauge1, temp…) collide across users; a
-            // single-column PK silently no-ops the 2nd owner's registerIfAbsent
-            // (INSERT OR IGNORE), locking them out of their own widget. Detect
-            // the legacy single-column PK and rebuild the table with the
-            // composite PK, copying EVERY row. Idempotent: skipped once the PK is
-            // already composite (every boot after the first; and fresh DBs are
-            // born composite from WidgetTable, so this never runs for them).
-            val widgetPkCols = mutableListOf<String>()
-            runCatching {
-                exec("PRAGMA table_info(widgets)") { rs ->
-                    while (rs.next()) {
-                        if (rs.getInt("pk") > 0) widgetPkCols.add(rs.getString("name"))
-                    }
-                }
-            }
-            if (widgetPkCols == listOf("id")) {
-                log.info("Migrating widgets table to composite PK (owner_id, id)…")
-                // Column types mirror Exposed's own DDL (BIGINT for last_seen_at,
-                // quoted "type") so the next boot's createMissingTablesAndColumns
-                // sees a matching table and leaves it alone.
-                exec(
-                    """
-                    CREATE TABLE widgets_new (
-                        id TEXT NOT NULL,
-                        project_id TEXT NOT NULL,
-                        owner_id TEXT NOT NULL,
-                        "type" TEXT NOT NULL,
-                        last_payload TEXT NULL,
-                        last_seen_at BIGINT NULL,
-                        PRIMARY KEY (owner_id, id)
-                    )
-                    """.trimIndent()
-                )
-                exec(
-                    "INSERT INTO widgets_new (id, project_id, owner_id, \"type\", last_payload, last_seen_at) " +
-                        "SELECT id, project_id, owner_id, \"type\", last_payload, last_seen_at FROM widgets"
-                )
-                exec("DROP TABLE widgets")
-                exec("ALTER TABLE widgets_new RENAME TO widgets")
-                log.info("widgets table migrated to composite PK (owner_id, id)")
-            }
-
             // ─── Legacy migrations (devices) ──────────────────
             // Kept for DBs that were migrated manually back when
             // `SchemaUtils.create()` was used. No-op on new installs
@@ -160,43 +115,15 @@ object DatabaseFactory {
             runCatching { exec("ALTER TABLE devices ADD COLUMN device_type TEXT") }
             runCatching { exec("ALTER TABLE devices ADD COLUMN connectivity TEXT") }
 
-            // index for widget_history — fast time-range queries
-            exec("CREATE INDEX IF NOT EXISTS idx_history_widget  ON widget_history (widget_id, recorded_at)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_project ON widget_history (project_id, recorded_at)")
-
-            // index for widget_history_numeric — chart time-range reads
-            exec("CREATE INDEX IF NOT EXISTS idx_history_numeric_widget ON widget_history_numeric (widget_id, recorded_at)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_numeric_widget_series ON widget_history_numeric (widget_id, series_id, recorded_at)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_numeric_project ON widget_history_numeric (project_id, recorded_at)")
-
-            // UNIQUE INDEX for the aggregation tables — idempotence via
-            // INSERT OR IGNORE in SqliteWidgetHistoryAggregateRepository.
-            // COALESCE series → '' to match nulls (series absent on the
-            // gauge/metric/etc side).
-            //
-            // owner_id is part of the key: widgetId is global but protocolIds
-            // collide across users, so two owners legitimately own a bucket at
-            // the same (widget_id, series, bucket_at). An owner-blind unique
-            // index would make INSERT OR IGNORE silently DROP the second owner's
-            // bucket. The legacy owner-blind indexes are dropped (no-op after the
-            // first boot); the new owner-aware ones use a distinct name so the
-            // CREATE stays idempotent without rebuilding every boot.
-            exec("DROP INDEX IF EXISTS uniq_history_min")
-            exec("DROP INDEX IF EXISTS uniq_history_hour")
-            exec("DROP INDEX IF EXISTS uniq_history_day")
-            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_min_owner  ON widget_history_min  (widget_id, owner_id, COALESCE(series_id, ''), bucket_at)")
-            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_hour_owner ON widget_history_hour (widget_id, owner_id, COALESCE(series_id, ''), bucket_at)")
-            exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_history_day_owner  ON widget_history_day  (widget_id, owner_id, COALESCE(series_id, ''), bucket_at)")
-
-            // Time-range read index — same strategy as raw
-            exec("CREATE INDEX IF NOT EXISTS idx_history_min_widget_series  ON widget_history_min  (widget_id, series_id, bucket_at)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_hour_widget_series ON widget_history_hour (widget_id, series_id, bucket_at)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_day_widget_series  ON widget_history_day  (widget_id, series_id, bucket_at)")
-
-            // Cleanup per project (cascade DELETE)
-            exec("CREATE INDEX IF NOT EXISTS idx_history_min_project  ON widget_history_min  (project_id)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_hour_project ON widget_history_hour (project_id)")
-            exec("CREATE INDEX IF NOT EXISTS idx_history_day_project  ON widget_history_day  (project_id)")
+            // ── Le modele signal ──
+            // L'adresse et l'instant : c'est la lecture de toute courbe.
+            exec("CREATE INDEX IF NOT EXISTS idx_signal_raw_signal  ON signal_raw  (signal_id, ts)")
+            exec("CREATE INDEX IF NOT EXISTS idx_signal_min_signal  ON signal_min  (signal_id, bucket_at)")
+            exec("CREATE INDEX IF NOT EXISTS idx_signal_hour_signal ON signal_hour (signal_id, bucket_at)")
+            exec("CREATE INDEX IF NOT EXISTS idx_signal_day_signal  ON signal_day  (signal_id, bucket_at)")
+            // Le balayage de retention, par compte
+            exec("CREATE INDEX IF NOT EXISTS idx_signal_raw_owner  ON signal_raw  (owner_id, ts)")
+            exec("CREATE INDEX IF NOT EXISTS idx_signal_min_owner  ON signal_min  (owner_id, bucket_at)")
 
             // ── Automations & notifications ──
             // The UNIQUE on idempotency_key is THE GUARANTEE, not an
@@ -206,8 +133,8 @@ object DatabaseFactory {
             exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_pending_idempotency ON pending_actions (idempotency_key)")
             // The DeliveryWorker's every-second sweep: "what is due?"
             exec("CREATE INDEX IF NOT EXISTS idx_pending_due ON pending_actions (status, next_attempt_at)")
-            // The rule cache load, same shape as knownWidgetIds seeding
-            exec("CREATE INDEX IF NOT EXISTS idx_rules_owner_widget ON automation_rules (owner_id, trigger_widget_id)")
+            // Le chargement du cache des regles
+            exec("CREATE INDEX IF NOT EXISTS idx_rules_owner_signal ON automation_rules (owner_id, trigger_signal_key)")
             // The scheduler's poll — an indexed range scan, not a table scan
             exec("CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_jobs (next_run_at)")
             // Delivery fans out per owner: all their tokens in one read

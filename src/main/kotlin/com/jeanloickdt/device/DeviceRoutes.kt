@@ -30,6 +30,7 @@ import com.jeanloickdt.device.domain.isValidDeviceCombination
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceResponse
 import com.jeanloickdt.device.domain.UpdateDeviceNameRequest
+import com.jeanloickdt.device.domain.UpdateDeviceRequest
 import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
@@ -47,8 +48,33 @@ fun Route.deviceRoutes(
     deviceRepository: DeviceRepository,
     projectRepository: ProjectRepository,
     connections: ConnectionRegistry,
-    events: ControlEventBroadcaster
+    events: ControlEventBroadcaster,
+    /**
+     * Le quota de cartes du compte. Ce serveur n'en vend pas : le defaut
+     * laisse passer, et le nuage cable ici son `enforceStock`.
+     *
+     * Injecte plutot que code en dur — meme forme que `RulePolicies` et
+     * `SignalPolicies` : la decision se cable, la route ne la connait pas.
+     */
+    quotaGate: suspend (call: io.ktor.server.application.ApplicationCall, ownerId: String, current: () -> Int) -> Boolean =
+        { _, _, _ -> true },
+    sinks: com.jeanloickdt.event.EventSinks? = null,
+    /**
+     * The live truth about who is connected.
+     *
+     * Presence stopped being written to the table on every transition — a
+     * carrier hiccup used to turn three thousand reconnections into six
+     * thousand synchronous writes. The RAM store is now authoritative and the
+     * column is its durable mirror, so reading the column alone would show a
+     * board offline for up to one flush period after it connected.
+     *
+     * Default `null` keeps every existing caller and test working: without a
+     * store, the column is all there is, which is exactly the old behaviour.
+     */
+    presence: com.jeanloickdt.relay.PresenceStore? = null
 ) {
+    // The column is the fallback, never the contradiction: RAM knows first.
+    fun liveOnline(id: String, stored: Boolean) = presence?.isOnline(id) ?: stored
 
     authenticate("jwt") {
 
@@ -65,7 +91,7 @@ fun Route.deviceRoutes(
                         id           = it.id,
                         name         = it.name,
                         projectId    = it.projectId,
-                        isOnline     = it.isOnline,
+                        isOnline     = liveOnline(it.id, it.isOnline),
                         lastSeen     = it.lastSeen,
                         deviceType   = it.deviceType?.name,
                         connectivity = it.connectivity?.name
@@ -90,12 +116,10 @@ fun Route.deviceRoutes(
             // relied on the per-device filter below, which is safe but an
             // exception to the pattern; making every handler gate the same way is
             // exactly what keeps a gap like the creation one from reappearing.
-            val project = projectRepository.findById(projectId)
-            if (project == null || project.ownerId != ownerId) {
-                return@get call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
-            }
+            projectRepository.findById(ownerId, projectId)
+                ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
 
-            val devices = deviceRepository.findAllByProject(projectId)
+            val devices = deviceRepository.findAllByProject(ownerId, projectId)
                 // Defence in depth behind the project gate: device.ownerId equals
                 // project.ownerId by construction (a device can only be created in
                 // a project you own), so this is a no-op today — kept so a future
@@ -106,7 +130,7 @@ fun Route.deviceRoutes(
                         id           = it.id,
                         name         = it.name,
                         projectId    = it.projectId,
-                        isOnline     = it.isOnline,
+                        isOnline     = liveOnline(it.id, it.isOnline),
                         lastSeen     = it.lastSeen,
                         deviceType   = it.deviceType?.name,
                         connectivity = it.connectivity?.name
@@ -143,10 +167,8 @@ fun Route.deviceRoutes(
             // user's project would leak/cross its data. Every other handler gates
             // on ownership (findById → ownerId != → 404); the creation path must
             // too. 404 (not 403) so we never reveal someone else's project exists.
-            val project = projectRepository.findById(body.projectId)
-            if (project == null || project.ownerId != ownerId) {
-                return@post call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
-            }
+            projectRepository.findById(ownerId, body.projectId)
+                ?: return@post call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
 
             // ── Enum validation ───────────────────────────────────
             val deviceType = DeviceType.fromString(body.deviceType)
@@ -171,14 +193,23 @@ fun Route.deviceRoutes(
                 ))
             }
 
+            // ── Plan quota ────────────────────────────────────────
+            // Last of the checks, on purpose: a malformed request must read as
+            // malformed, not as "upgrade your plan". Answers 402 itself when
+            // it refuses. No plan file → unlimited → no COUNT(*) is run.
+            val allowed = quotaGate(call, ownerId) {
+                deviceRepository.countByOwner(ownerId).toInt()
+            }
+            if (!allowed) return@post
+
             // generate the plaintext token — shown only once
             val token     = UUID.randomUUID().toString()
             val tokenHash = sha256(token)
 
-            val id = deviceRepository.create(
+            val created = deviceRepository.create(
+                ownerId      = ownerId,
                 name         = name,
                 projectId    = body.projectId,
-                ownerId      = ownerId,
                 tokenHash    = tokenHash,
                 deviceType   = deviceType,
                 connectivity = connectivity
@@ -186,12 +217,86 @@ fun Route.deviceRoutes(
 
             // returns the plaintext token — only once
             call.respond(HttpStatusCode.Created, CreateDeviceResponse(
-                id           = id,
+                id           = created.id,
                 name         = name,
                 projectId    = body.projectId,
                 token        = token,
                 deviceType   = deviceType.name,
                 connectivity = connectivity.name
+            ))
+        }
+
+        // ============================================================
+        // PATCH /api/devices/{id} — nom, type, connectivite
+        //
+        // La route `/name` reste : une app plus ancienne l'appelle encore, et
+        // un relais qui la retirerait casserait le renommage sans rien dire.
+        // ============================================================
+        patch("/api/devices/{id}") {
+            val ownerId = call.principal<JWTPrincipal>()?.subject
+                ?: return@patch call.respond(HttpStatusCode.Unauthorized)
+            val deviceId = call.parameters["id"]
+                ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
+            val device = deviceRepository.findById(ownerId, deviceId)
+                ?: return@patch call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
+
+            val body = call.receive<UpdateDeviceRequest>()
+
+            val nom = body.name?.trim()
+            if (nom != null && (nom.length < 2 || nom.length > 64)) {
+                return@patch call.respond(
+                    HttpStatusCode.BadRequest, ApiError("Name must be 2-64 characters")
+                )
+            }
+
+            val type = body.deviceType?.let {
+                DeviceType.fromString(it) ?: return@patch call.respond(
+                    HttpStatusCode.BadRequest, mapOf(
+                        "error" to "Unknown deviceType", "value" to it,
+                        "allowed" to DeviceType.entries.map { e -> e.name }
+                    )
+                )
+            }
+            val lien = body.connectivity?.let {
+                DeviceConnectivity.fromString(it) ?: return@patch call.respond(
+                    HttpStatusCode.BadRequest, mapOf(
+                        "error" to "Unknown connectivity", "value" to it,
+                        "allowed" to DeviceConnectivity.entries.map { e -> e.name }
+                    )
+                )
+            }
+
+            // La combinaison se valide sur la paire RESULTANTE.
+            //
+            // Un PATCH qui ne change que la connectivite doit etre confronte
+            // au type deja en base : valider le seul champ envoye laisserait
+            // poser du WiFi sur une carte qui n'en a pas, simplement parce
+            // que la requete ne parlait pas du type.
+            val typeFinal = type ?: device.deviceType?.let { DeviceType.fromString(it.name) }
+            val lienFinal = lien ?: device.connectivity?.let { DeviceConnectivity.fromString(it.name) }
+            if (typeFinal != null && lienFinal != null &&
+                !isValidDeviceCombination(typeFinal, lienFinal)
+            ) {
+                return@patch call.respond(HttpStatusCode.BadRequest, mapOf(
+                    "error" to "Invalid combination (deviceType, connectivity)",
+                    "deviceType" to typeFinal.name,
+                    "connectivity" to lienFinal.name
+                ))
+            }
+
+            if (nom != null) deviceRepository.updateName(ownerId, deviceId, nom)
+            val apres = deviceRepository.updateHardware(
+                ownerId, deviceId, type?.name, lien?.name
+            ) ?: device
+
+            call.respond(HttpStatusCode.OK, DeviceResponse(
+                id           = apres.id,
+                name         = nom ?: apres.name,
+                projectId    = apres.projectId,
+                isOnline     = liveOnline(apres.id, apres.isOnline),
+                lastSeen     = apres.lastSeen,
+                deviceType   = apres.deviceType?.name,
+                connectivity = apres.connectivity?.name
             ))
         }
 
@@ -207,9 +312,9 @@ fun Route.deviceRoutes(
             val deviceId = call.parameters["id"]
                 ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val device = deviceRepository.findById(deviceId)
+            val device = deviceRepository.findById(ownerId, deviceId)
 
-            if (device == null || device.ownerId != ownerId) {
+            if (device == null) {
                 call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
                 return@patch
             }
@@ -224,13 +329,13 @@ fun Route.deviceRoutes(
                 return@patch
             }
 
-            deviceRepository.updateName(deviceId, trimmed)
+            deviceRepository.updateName(ownerId, deviceId, trimmed)
 
             call.respond(HttpStatusCode.OK, DeviceResponse(
                 id           = device.id,
                 name         = trimmed,
                 projectId    = device.projectId,
-                isOnline     = device.isOnline,
+                isOnline     = liveOnline(device.id, device.isOnline),
                 lastSeen     = device.lastSeen,
                 deviceType   = device.deviceType?.name,
                 connectivity = device.connectivity?.name
@@ -248,9 +353,9 @@ fun Route.deviceRoutes(
             val deviceId = call.parameters["id"]
                 ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val device = deviceRepository.findById(deviceId)
+            val device = deviceRepository.findById(ownerId, deviceId)
 
-            if (device == null || device.ownerId != ownerId) {
+            if (device == null) {
                 call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
                 return@delete
             }
@@ -274,7 +379,7 @@ fun Route.deviceRoutes(
                 // and broadcast a device_offline reason=disconnected (accepted)
             }
 
-            deviceRepository.delete(deviceId)
+            deviceRepository.delete(ownerId, deviceId)
             call.respond(HttpStatusCode.OK, mapOf(
                 "message" to "Device deleted",
                 "id"      to deviceId
@@ -294,9 +399,9 @@ fun Route.deviceRoutes(
             val deviceId = call.parameters["id"]
                 ?: return@post call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val device = deviceRepository.findById(deviceId)
+            val device = deviceRepository.findById(ownerId, deviceId)
 
-            if (device == null || device.ownerId != ownerId) {
+            if (device == null) {
                 call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
                 return@post
             }
@@ -304,7 +409,7 @@ fun Route.deviceRoutes(
             val newToken     = UUID.randomUUID().toString()
             val newTokenHash = sha256(newToken)
 
-            deviceRepository.renewToken(deviceId, newTokenHash)
+            deviceRepository.renewToken(ownerId, deviceId, newTokenHash)
 
             // broadcast device_offline (reason=token_renewed) BEFORE closing the session
             // so the apps know it's not a crash but a renewal

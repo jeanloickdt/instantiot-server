@@ -42,7 +42,7 @@ data class EmailConfig(
     val apiKey: String,
     val fromEmail: String,
     val fromName: String,
-    /** The self-host fallback recipient — "your server, your alert address". */
+    /** Le destinataire de repli, regle dans le panneau. */
     val defaultTo: String
 ) {
     val configured: Boolean get() = apiKey.isNotBlank() && fromEmail.isNotBlank()
@@ -56,10 +56,9 @@ data class EmailConfig(
  * ## Recipient resolution, in order
  *
  *  1. `to` in the action params — the rule says where
- *  2. the account's email ([accountEmail]) — in cloud mode the JIT username
- *     IS the iia email; in self-host usernames are not emails and this yields
- *     null
- *  3. the configured default ([EmailConfig.defaultTo]) — the self-host path
+ *  2. the account's email ([accountEmail]) — the JIT username IS the iia
+ *     email, so this is nearly always the answer
+ *  3. the configured default ([EmailConfig.defaultTo])
  *
  * No recipient at the end → [SendResult.Fatal]: retrying an email that has
  * nowhere to go is noise, and the DEAD row says exactly why.
@@ -149,7 +148,15 @@ class EmailActionSender(
  * outcome the contract chose.
  */
 class CommandActionSender(
-    private val deviceOwner: (deviceId: String) -> String?,
+    /**
+     * « Cette carte appartient-elle a ce compte ? »
+     *
+     * La couture posait la question a l'envers — « a qui est cette carte ? » —
+     * et resolvait donc une ligne par identifiant seul, sans proprietaire.
+     * Formulee ainsi, elle passe par `findById(ownerId, id)` et ne peut rien
+     * apprendre sur la carte d'un autre, meme si l'appelant se trompe.
+     */
+    private val ownsDevice: (ownerId: String, deviceId: String) -> Boolean,
     private val sendToDevice: suspend (deviceId: String, frame: ByteArray) -> Boolean
 ) : ActionSender {
 
@@ -163,8 +170,7 @@ class CommandActionSender(
         }.getOrElse { return SendResult.Fatal("payloadB64 is not base64") }
         if (frame.isEmpty()) return SendResult.Fatal("empty command frame")
 
-        val owner = deviceOwner(deviceId)
-        if (owner == null || owner != action.ownerId) {
+        if (!ownsDevice(action.ownerId, deviceId)) {
             logger.error(
                 "COMMAND ${action.id} targets device $deviceId not owned by ${action.ownerId} — REFUSED"
             )
