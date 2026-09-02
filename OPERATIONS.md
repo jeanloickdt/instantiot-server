@@ -72,7 +72,7 @@ server — for the Linux service, the `instantiot` user's home):
 
 | Path | What |
 |------|------|
-| `instantiot.db` (+ `-wal`, `-shm`) | the SQLite database (users, projects, devices, widgets, history) |
+| `instantiot.db` (+ `-wal`, `-shm`) | the SQLite database (users, projects, devices, signals, history) |
 | `server.properties` | configuration (ports, retention, backup, display name) |
 | `secret.key` | JWT signing secret (auto-generated, `rw-------`) — **back this up too** |
 | `backups/` | automatic DB snapshots |
@@ -97,7 +97,6 @@ Most settings are changed from the **admin panel** (Settings), or by editing
 | Public registration | `registration.open` | `false` | hot-reload |
 | Keep raw measurements | `history.raw.enabled` | `true` | hot-reload |
 | Raw retention (days) | `history.retention.raw.days` | 1 | hot-reload |
-| Text-event retention | `history.retention.opaque.days` | 1 | hot-reload |
 | Minute-summary retention | `history.retention.min.days` | 90 | hot-reload |
 | Hour-summary retention | `history.retention.hour.days` | 365 | hot-reload |
 | Day-summary retention | `history.retention.day.days` | -1 (forever) | hot-reload |

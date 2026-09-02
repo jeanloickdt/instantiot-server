@@ -19,8 +19,10 @@ never leaves your machine.
 
 ## Features
 
-- **Real-time relay** between TCP (boards) and WebSocket (apps) via the
-  `iWidgets v1` binary protocol
+- **Real-time relay** between TCP (boards) and WebSocket (apps) over a compact
+  binary protocol — ~10 bytes for a float
+- **The signal model**: a board writes a value at an address `I0..I255`, and the
+  app decides what it looks like. No widgets on the board, no drawing code.
 - **Multi-user**: admin/user accounts, JWT auth, per-user data isolation
 - **Time-series history** with 3 aggregated tiers (minute / hour / day) plus an
   optional raw tier
@@ -40,7 +42,7 @@ Detailed architecture: [`ARCHITECTURE.md`](ARCHITECTURE.md).
   Login is constant-time (no user-enumeration via timing).
 - **Device tokens** — generated as a UUID v4; only the **SHA-256** is stored, the
   plaintext is shown **once**. The DB never holds a usable device credential.
-- **Per-user isolation** — every project / device / widget / history read and
+- **Per-user isolation** — every project / device / signal / history read and
   write is scoped to its owner; a request for someone else's resource gets a
   `404` (existence is never leaked).
 - **Backups you can trust** — snapshots are WAL-complete (`VACUUM INTO`).
@@ -121,7 +123,7 @@ Runtime data, all under `~/.instantiot/`:
 
 | File | Purpose |
 |---|---|
-| `instantiot.db` | SQLite database (users, projects, devices, widgets, history) |
+| `instantiot.db` | SQLite database (users, projects, devices, signals, history) |
 | `server.properties` | Configuration |
 | `secret.key` | JWT secret (generated once) — **do not share** |
 | `reset-admin` | Reset marker (see above) |
@@ -142,7 +144,7 @@ Runtime data, all under `~/.instantiot/`:
 
 ### Heartbeat frame
 
-An `iWidgets v1` frame with `TYPE = 0xFE`, `WID_LEN = 0`, empty payload.
+A frame with `TYPE = 0xFE` and an empty payload.
 Emitted by the Arduino library every `heartbeatMs`. The server does not
 dispatch it, but receiving the byte resets the socket read timeout.
 

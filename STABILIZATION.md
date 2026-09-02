@@ -100,7 +100,7 @@ blocage de toutes les routes sauf le changement tant que le défaut n'a pas ét�
 ### P1-1 — Tests : <2 % de couverture *(le plus gros déficit de crédibilité)*
 **État** : 1 seul test (`src/test/kotlin/ApplicationTest.kt`, smoke `GET /` → 200).
 **Plan** (par ordre de ROI) :
-1. **`FrameParser`** — fonctions pures (CRC8, offsets, `extractWidgetId/Payload`, trames malformées).
+1. **`FrameParser`** — fonctions pures (CRC8, offsets, extraction de la charge, trames malformées).
    Code le plus risqué, le plus trivial à tester. **Commencer ici.**
 2. **Auth/JWT/ownership** — login bcrypt, génération/validation JWT, isolation device/projet.
 3. **Intégration Ktor `testApplication`** — login, gating register, guards admin, CRUD device + propriété.
