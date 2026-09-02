@@ -135,7 +135,11 @@ object SignalSetpoint {
         for (signal in toRestore) {
             val payload = runCatching { Base64.getDecoder().decode(signal.lastPayload) }.getOrNull()
                 ?: continue
-            if (send(deviceId, SignalFrame.build(signal.address, tagOf(signal.type), payload))) sent++
+            // Le drapeau du rappel, posé ICI et nulle part ailleurs : c'est le
+            // seul endroit du relais qui renvoie une valeur que personne ne
+            // vient d'écrire.
+            val tag = tagOf(signal.type) or SignalFrame.TAG_RESTORE
+            if (send(deviceId, SignalFrame.build(signal.address, tag, payload))) sent++
         }
         if (sent > 0) logger.info("Restored $sent setpoint(s) to device $deviceId on connect")
         return sent

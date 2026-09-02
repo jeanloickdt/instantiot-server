@@ -151,6 +151,45 @@ class SignalSetpointTest {
     }
 
     @Test
+    fun `un rappel se signale, une ecriture vive non`(): Unit = runBlocking {
+        // La carte ne peut pas distinguer les deux : la trame rejouee est
+        // rigoureusement identique a une ecriture. Elle la livrerait donc au
+        // bloc d'un geste — `ISimpleButton(I5)` se declencherait au
+        // redemarrage, sans que personne n'ait appuye.
+        //
+        // Un geste ne se rejoue pas. Le drapeau le dit DANS la trame, pour que
+        // la garantie soit une propriete du systeme et non une case cochee.
+        declare(5)
+        write(5, 19.0)
+
+        assertTrue(!SignalFrame.isRestore(sent.single()),
+            "une ecriture vive ne porte pas le drapeau")
+
+        sent.clear()
+        SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send)
+
+        assertTrue(SignalFrame.isRestore(sent.single()), "un rappel le porte")
+        assertEquals(SignalFrame.TAG_FLOAT, SignalFrame.tag(sent.single()),
+            "et le type de valeur se lit comme avant, sans savoir que le drapeau existe")
+    }
+
+    @Test
+    fun `l app ne voit jamais le drapeau`(): Unit = runBlocking {
+        // Il ne regarde que la carte : c'est elle qui doit distinguer un rappel
+        // d'un geste. Une jauge, elle, affiche une valeur — d'ou qu'elle
+        // vienne. `forApps` reconstruit donc sans lui, et ce test le fixe parce
+        // que c'est une reconstruction, pas une copie.
+        val rappel = SignalFrame.build(
+            5, SignalFrame.TAG_FLOAT or SignalFrame.TAG_RESTORE, SignalFrame.floatBytes(21.5f)
+        )
+        assertTrue(SignalFrame.isRestore(rappel))
+
+        val versLApp = SignalFrame.forApps(rappel, TT)!!
+        assertTrue(!SignalFrame.isRestore(versLApp))
+        assertEquals(21.5, SignalFrame.numericValue(versLApp)!!, 0.001)
+    }
+
+    @Test
     fun `nothing to restore is not an error`(): Unit = runBlocking {
         declare(5)   // declared, never written
         assertEquals(0, SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send))
