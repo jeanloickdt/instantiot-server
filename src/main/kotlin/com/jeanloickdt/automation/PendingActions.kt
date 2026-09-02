@@ -98,7 +98,7 @@ interface PendingActionRepository {
     fun pendingCount(): Long
 }
 
-class SqlitePendingActionRepository : PendingActionRepository {
+class ExposedPendingActionRepository : PendingActionRepository {
 
     override fun enqueue(
         idempotencyKey: String, ownerId: String, ruleId: String?,
@@ -124,9 +124,24 @@ class SqlitePendingActionRepository : PendingActionRepository {
         if (e.message?.contains("UNIQUE", ignoreCase = true) == true) false else throw e
     }
 
+    /**
+     * Prend un lot, et le prend POUR SOI.
+     *
+     * `SELECT` puis `UPDATE` dans UNE transaction — et ici, c'est atomique.
+     *
+     * SQLite serialise ses ecrivains : une seule transaction ecrit a la fois,
+     * donc deux livreurs ne peuvent pas lire le meme lot puis se le disputer.
+     * `UPDATE … LIMIT` n'etant pas portable, la paire est la forme la plus
+     * simple qui tienne.
+     *
+     * **Le nuage ne peut PAS faire ca.** PostgreSQL en READ COMMITTED ne
+     * serialise rien et un `SELECT` ne verrouille pas : deux livreurs y
+     * lisent les memes lignes et livrent tous deux la meme alerte. Il utilise
+     * donc `FOR UPDATE SKIP LOCKED`, que SQLite ne connait pas. C'est le seul
+     * endroit du modele signal ou les deux editions divergent vraiment, et la
+     * divergence tient au moteur, pas a l'offre.
+     */
     override fun lease(nowMs: Long, leaseMs: Long, limit: Int): List<PendingAction> = transaction {
-        // SELECT then UPDATE inside one transaction: SQLite's single writer
-        // makes the pair atomic, and UPDATE…LIMIT is not portable.
         val due = PendingActionTable.selectAll()
             .where {
                 (PendingActionTable.status eq PendingAction.PENDING) and

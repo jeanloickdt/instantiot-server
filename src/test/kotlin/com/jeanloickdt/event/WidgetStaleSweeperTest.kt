@@ -20,7 +20,7 @@
 package com.jeanloickdt.event
 
 import com.jeanloickdt.relay.InMemoryLastValueCache
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -37,12 +37,12 @@ class WidgetStaleSweeperTest {
     private val T0 = 10_000_000L
     private val cache = InMemoryLastValueCache()
     private val sinks = EventSinks()
-    private val sweeper = WidgetStaleSweeper(cache, sinks, silenceMs = 15 * MIN)
+    private val sweeper = SignalStaleSweeper(cache, sinks, silenceMs = 15 * MIN)
 
-    private val w1 = WidgetKey("u1", "w1")
+    private val w1 = SignalRef("u1", "w1")
 
-    private fun drained(): List<RelayEvent.WidgetStale> = buildList {
-        while (true) add((sinks.discrete.tryReceive().getOrNull() ?: break) as RelayEvent.WidgetStale)
+    private fun drained(): List<RelayEvent.SignalStale> = buildList {
+        while (true) add((sinks.discrete.tryReceive().getOrNull() ?: break) as RelayEvent.SignalStale)
     }
 
     @Test
@@ -103,7 +103,7 @@ class WidgetStaleSweeperTest {
 
     @Test
     fun `two tenants, same widget id, separate silences`() {
-        val w1b = WidgetKey("u2", "w1")
+        val w1b = SignalRef("u2", "w1")
         cache.put("u1", "w1", "AA==", T0)
         cache.put("u2", "w1", "AA==", T0 + 14 * MIN)     // still fresh at first sweep
 

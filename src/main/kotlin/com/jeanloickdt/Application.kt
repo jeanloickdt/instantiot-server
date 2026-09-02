@@ -166,14 +166,14 @@ var watchedSignals: (com.jeanloickdt.relay.SignalRef) -> Boolean = { false }
 // usage statistic here; the cloud edition reads it for its monthly quota.
 val messageUsage     = com.jeanloickdt.automation.MessageUsageCounter()
 val messageUsageRepo: com.jeanloickdt.automation.MessageUsageRepository =
-    com.jeanloickdt.automation.SqliteMessageUsageRepository()
+    com.jeanloickdt.automation.ExposedMessageUsageRepository()
 
 // The durability frontier. The sender registry is EMPTY until the delivery
 // channels exist (EMAIL via the operator's SMTP key, COMMAND via the
 // DeviceOutbox) — the worker leases nothing from an empty table and costs
 // one indexed SELECT per second.
 val pendingActions: com.jeanloickdt.automation.PendingActionRepository =
-    com.jeanloickdt.automation.SqlitePendingActionRepository()
+    com.jeanloickdt.automation.ExposedPendingActionRepository()
 
 // The rules, in RAM — reloaded in module() once the DB is up, and after every
 // rule mutation (the CRUD's single coupling point).

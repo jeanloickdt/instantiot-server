@@ -19,24 +19,16 @@
 
 package com.jeanloickdt.signal
 
-import com.jeanloickdt.auth.HmacTokenService
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.projectRepository
 import com.jeanloickdt.signal.data.SignalTable
-import com.jeanloickdt.signal.data.SqliteSignalRepository
+import com.jeanloickdt.signal.data.ExposedSignalRepository
 import com.jeanloickdt.userRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -57,7 +49,6 @@ import io.ktor.server.response.respond
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
-import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -77,20 +68,12 @@ import kotlin.test.assertTrue
  */
 class SignalRoutesTest {
 
-    private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
-    private lateinit var signals: SqliteSignalRepository
+    private lateinit var signals: ExposedSignalRepository
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-sigroutes-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            SignalTable, *AutomationTables.ALL,
-            dbFile = db
-        )
-        signals = SqliteSignalRepository()
+        com.jeanloickdt.database.TestDatabase.fresh()
+        signals = ExposedSignalRepository()
     }
 
     private fun ApplicationTestBuilder.installTestApp(
@@ -99,8 +82,8 @@ class SignalRoutesTest {
         sendToDevice: suspend (String, ByteArray) -> Boolean = { _, _ -> false }
     ) {
         application {
-            install(ContentNegotiation) { json() }
-            configureAuth(userRepository, tokenService)
+            install(ContentNegotiation) { json(com.jeanloickdt.common.apiJson) }
+            configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
             routing {
                 signalRoutes(signals, deviceRepository, policies, sendToDevice = sendToDevice)
             }
@@ -110,13 +93,13 @@ class SignalRoutesTest {
     /** @return (token, deviceId) */
     private fun account(username: String): Pair<String, String> {
         val id = userRepository.create(username, BCrypt.hashpw("secret123", BCrypt.gensalt()), "user", true)
-        val projectId = projectRepository.create("p-$username", id)
+        val projectId = projectRepository.create(id, "p-$username").id
         val deviceId = deviceRepository.create(
-            name = "board-$username", projectId = projectId, ownerId = id, tokenHash = "h-$username",
+            name         = "board-$username", projectId = projectId, ownerId = id, tokenHash = "h-$username",
             deviceType = com.jeanloickdt.device.domain.DeviceType.ESP32,
             connectivity = com.jeanloickdt.device.domain.DeviceConnectivity.WIFI
-        )
-        return tokenService.issue(id, 0) to deviceId
+        ).id
+        return com.jeanloickdt.auth.LocalTestAuth.token(id, tokenVersion = 0) to deviceId
     }
 
     private suspend fun io.ktor.client.HttpClient.createSignal(
@@ -287,11 +270,11 @@ class SignalRoutesTest {
         val r = client.patch("/api/devices/$dev/signals/I0") {
             header(HttpHeaders.Authorization, "Bearer $token")
             contentType(ContentType.Application.Json)
-            setBody("""{"type":"bool"}""")
+            setBody("""{"type":"int"}""")
         }
 
         assertEquals(HttpStatusCode.OK, r.status, r.bodyAsText())
-        assertEquals("bool", json(r.bodyAsText())["type"]!!.jsonPrimitive.content)
+        assertEquals("int", json(r.bodyAsText())["type"]!!.jsonPrimitive.content)
     }
 
     @Test
@@ -299,7 +282,7 @@ class SignalRoutesTest {
         var sent: ByteArray? = null
         installTestApp(sendToDevice = { _, frame -> sent = frame; true })
         val (token, dev) = account("hana")
-        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float"}""")
         client.writeValue(token, dev, 0, """{"value":23.4}""")
         val owner = userRepository.findByUsername("hana")!!.id
         assertNotNull(signals.find(owner, dev, 0)!!.lastPayload, "précondition : une valeur est stockée")
@@ -322,7 +305,7 @@ class SignalRoutesTest {
     fun `a patch that repeats the current type keeps the stored value`() = testApplication {
         installTestApp(sendToDevice = { _, _ -> true })
         val (token, dev) = account("ilan")
-        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float"}""")
         client.writeValue(token, dev, 0, """{"value":23.4}""")
         val owner = userRepository.findByUsername("ilan")!!.id
 
@@ -388,7 +371,7 @@ class SignalRoutesTest {
     fun `an offline board answers 202, with a body the client can actually read`() = testApplication {
         installTestApp()   // sendToDevice returns false: the board is away
         val (token, dev) = account("iris")
-        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float"}""")
 
         val r = client.writeValue(token, dev, 0, """{"value":21.5}""")
 
@@ -405,7 +388,7 @@ class SignalRoutesTest {
     fun `a delivered setpoint answers 200 and says so`() = testApplication {
         installTestApp(sendToDevice = { _, _ -> true })
         val (token, dev) = account("jules")
-        client.createSignal(token, dev, """{"label":"Consigne","type":"float","direction":"setpoint"}""")
+        client.createSignal(token, dev, """{"label":"Consigne","type":"float"}""")
 
         val r = client.writeValue(token, dev, 0, """{"value":21.5}""")
 
@@ -419,7 +402,7 @@ class SignalRoutesTest {
         installTestApp(sendToDevice = { _, frame -> sent = frame; true })
         val (token, dev) = account("kenza")
         client.createSignal(token, dev,
-            """{"label":"Consigne","type":"float","address":5,"direction":"setpoint"}""")
+            """{"label":"Consigne","type":"float","address":5}""")
 
         client.writeValue(token, dev, 5, """{"value":21.5}""")
 
@@ -428,15 +411,17 @@ class SignalRoutesTest {
     }
 
     @Test
-    fun `writing a measure is refused, and the answer says why`() = testApplication {
+    fun `the app writes any declared signal, whatever its direction`() = testApplication {
+        // L'inverse etait affirme ici : ecrire une « mesure » rendait 400.
+        // La direction ne decide plus de qui a le droit d'ecrire — un signal
+        // est un signal, et ce qu'on en fait appartient a l'utilisateur.
         installTestApp()
         val (token, dev) = account("lina")
-        client.createSignal(token, dev, """{"label":"Température","type":"float"}""")   // measure
+        client.createSignal(token, dev, """{"label":"Température","type":"float"}""")
 
         val r = client.writeValue(token, dev, 0, """{"value":42}""")
 
-        assertEquals(HttpStatusCode.BadRequest, r.status)
-        assertTrue("measure" in json(r.bodyAsText())["error"]!!.jsonPrimitive.content)
+        assertTrue(r.status != HttpStatusCode.BadRequest, r.bodyAsText())
     }
 
     @Test
@@ -469,23 +454,57 @@ class SignalRoutesTest {
     // action incoherente, pas seulement decourage.
 
     @Test
-    fun `an action comes out written by the app, with no history and no replay`() = testApplication {
+    fun `les deux interrupteurs sont la verite et rien ne les ecrase`() = testApplication {
         installTestApp()
         val (token, dev) = account("nora")
 
+        // « nature » etait un raccourci qui en ecrasait deux : declaree
+        // action, une adresse ressortait sans historique et sans rejeu, quoi
+        // qu'on ait demande. Et le PATCH, lui, ne la regardait pas.
+        //
+        // Consequence visible : on cochait « conserver l'historique », le
+        // relais rangeait `false` sans le dire ; on rouvrait le meme signal,
+        // on enregistrait sans rien changer, et cette fois `true` passait.
+        // Memes valeurs a l'ecran, deux resultats.
+        //
+        // Une vieille app envoie encore le champ — elle le derive de
+        // l'interrupteur de rejeu. Il doit etre ignore, pas obei.
         val r = client.createSignal(token, dev,
-            """{"label":"Portail","type":"bool","nature":"action",
-                "historised":true,"replayOnConnect":true,"direction":"measure"}""")
+            """{"label":"Portail","type":"int","nature":"action",
+                "historised":true,"replayOnConnect":true}""")
 
         assertEquals(HttpStatusCode.Created, r.status, r.bodyAsText())
         val dto = json(r.bodyAsText())
-        assertEquals("action", dto.getValue("nature").jsonPrimitive.content)
-        assertEquals("setpoint", dto.getValue("direction").jsonPrimitive.content,
-            "une action va toujours de l'app vers la carte")
-        assertEquals(false, dto.getValue("historised").jsonPrimitive.content.toBoolean(),
-            "un fait n'a pas de courbe")
-        assertEquals(false, dto.getValue("replayOnConnect").jsonPrimitive.content.toBoolean(),
-            "et surtout : un portail ne se rouvre pas tout seul apres une coupure")
+        assertEquals(true, dto.getValue("historised").jsonPrimitive.content.toBoolean(),
+            "l'historique est demande : il est accorde")
+        assertEquals(true, dto.getValue("replayOnConnect").jsonPrimitive.content.toBoolean(),
+            "le rejeu est demande : il est accorde")
+    }
+
+    // ── Une app plus recente que son relais ───────────────────────────────
+
+    @Test
+    fun `an unknown field is ignored, not fatal to the whole request`() = testApplication {
+        installTestApp()
+        val (token, dev) = account("pia")
+        client.createSignal(token, dev, """{"label":"x","type":"float"}""")
+
+        // Le decalage est l'etat NORMAL du systeme : un relais auto-heberge se
+        // met a jour quand son proprietaire le decide, jamais en meme temps
+        // que les telephones qui s'y connectent.
+        //
+        // Avec `Json.Default`, cette requete rendait 500 — pas « le champ
+        // inconnu est ignore », mais « le corps entier est illisible ». Le
+        // renommage parti avec, alors qu'il n'avait rien d'inconnu.
+        val r = client.patch("/api/devices/$dev/signals/I0") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"label":"Serre","champQueCeRelaisNeConnaitPas":true}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, r.status, r.bodyAsText())
+        assertEquals("Serre", json(r.bodyAsText()).getValue("label").jsonPrimitive.content,
+            "ce que le relais COMPREND doit s'appliquer, meme accompagne d'inconnu")
     }
 
     @Test
@@ -495,33 +514,26 @@ class SignalRoutesTest {
 
         val r = client.createSignal(token, dev,
             """{"label":"Consigne","type":"float","nature":"value",
-                "historised":true,"replayOnConnect":true,"direction":"setpoint"}""")
+                "historised":true,"replayOnConnect":true}""")
 
         val dto = json(r.bodyAsText())
-        assertEquals("value", dto.getValue("nature").jsonPrimitive.content)
         assertEquals(true, dto.getValue("replayOnConnect").jsonPrimitive.content.toBoolean())
         assertEquals(true, dto.getValue("historised").jsonPrimitive.content.toBoolean())
     }
 
     @Test
-    fun `the nature defaults to value, so nothing changed for what existed`() = testApplication {
-        installTestApp()
-        val (token, dev) = account("pia")
-
-        val r = client.createSignal(token, dev, """{"label":"x","type":"float"}""")
-
-        assertEquals("value", json(r.bodyAsText()).getValue("nature").jsonPrimitive.content)
-    }
-
-    @Test
-    fun `an unknown nature is refused with the list of the real ones`() = testApplication {
+    fun `un mot inconnu dans nature ne fait plus echouer la creation`() = testApplication {
         installTestApp()
         val (token, dev) = account("quentin")
 
+        // Le champ etait valide contre une liste fermee, et un mot hors liste
+        // rendait 400. Il ne designe plus rien : le refuser reviendrait a
+        // faire echouer une creation sur un mot qu'on a soi-meme cesse de
+        // lire — et une app plus ancienne que son relais est l'etat NORMAL
+        // du systeme, pas une anomalie.
         val r = client.createSignal(token, dev,
             """{"label":"x","type":"float","nature":"gesture"}""")
 
-        assertEquals(HttpStatusCode.BadRequest, r.status)
-        assertTrue("action" in json(r.bodyAsText()).getValue("error").jsonPrimitive.content)
+        assertEquals(HttpStatusCode.Created, r.status, r.bodyAsText())
     }
 }

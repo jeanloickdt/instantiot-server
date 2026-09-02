@@ -54,7 +54,12 @@ private val logger = LoggerFactory.getLogger("AppRelay")
 @Serializable
 private data class AppInboundMessage(
     val type: String,
-    val widgets: List<HistorySubscriptionDto>? = null
+    val widgets: List<HistorySubscriptionDto>? = null,
+    // ── write_signal ──────────────────────────────────────────────────
+    val deviceId: String? = null,
+    val address: Int? = null,
+    val value: Double? = null,
+    val text: String? = null
 )
 
 @Serializable
@@ -135,9 +140,9 @@ fun Application.configureAppRelay(
                     return@webSocket
                 }
 
-                // verify that the user actually owns the project
-                val project = projectRepository.findById(userId, projectId)
-                if (project == null) {
+                // L'appartenance est dans la signature : `findById` ne peut
+                // resoudre que ce qui est deja au bon compte.
+                if (projectRepository.findById(userId, projectId) == null) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Project not found"))
                     return@webSocket
                 }
@@ -175,6 +180,24 @@ fun Application.configureAppRelay(
                 connections.setActiveProject(appSession, projectId)
                 logger.info("App connected — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
 
+                // Le relais DIT ce qu'il sait faire — et repond aussi quand
+                // on le lui demande, parce que cette annonce-ci peut se
+                // perdre : elle part a l'instant de l'enregistrement, et le
+                // flux des messages entrants cote app n'a aucun replay. Un
+                // collecteur qui s'attache une milliseconde trop tard ne la
+                // verra jamais. C'est `hello` qui rattrape.
+                //
+                // Sans ca, une app plus recente enverrait `write_signal` a un
+                // relais qui l'ignore — et croirait avoir envoye, puisque les
+                // octets sont bien partis. Chaque geste disparaitrait en
+                // silence, sur les seuls relais pas encore mis a jour.
+                //
+                // Le decalage est l'etat NORMAL du systeme : l'app se met a
+                // jour quand son porteur le decide, le relais quand on le
+                // deploie. Un relais muet est donc un relais ancien, et l'app
+                // garde son chemin HTTP — la regle est lisible des deux cotes.
+                send(Frame.Text("""{"type":"capabilities","accepts":["write_signal"]}"""))
+
                 try {
                     // The dispatch is **sequential** (no `launch` per frame) :
                     // each device has its `DeviceOutbox` which serializes the
@@ -193,10 +216,13 @@ fun Application.configureAppRelay(
                                     logger.warn("Invalid frame received from app userId=$userId — ignored")
                                     continue
                                 }
-                                relayFrameToDevices(this@webSocket, userId, frameBytes, connections, events, signals)
+                                relayFrameToDevices(this@webSocket, userId, frameBytes, connections, events)
                             }
                             is Frame.Text -> {
-                                handleAppTextMessage(appSession, incomingFrame.readText())
+                                handleAppTextMessage(
+                                    appSession, incomingFrame.readText(),
+                                    userId, connections, events, signals
+                                )
                             }
                             else -> { /* ping/pong/close handled by Ktor */ }
                         }
@@ -214,11 +240,28 @@ fun Application.configureAppRelay(
 /**
  * Parse and apply an inbound text message from the app.
  *
- * Today a single type : `subscribe_history` — updates the set of
- * widgets for which the app wants to receive the bucket_updated.
- * Replaces the whole set (no delta) on each message.
+ * Two types : `subscribe_history`, et `write_signal`.
+ *
+ * ## Pourquoi l'ecriture est passee par ici
+ *
+ * Elle partait en PUT HTTPS. Avant chaque geste : une lecture en base locale
+ * cote app, une verification de jeton, puis un aller-retour complet vers le
+ * relais — vingt fois par seconde quand on fait glisser un curseur. Pendant
+ * ce temps, ce socket-ci etait deja ouvert, deja authentifie, et relayait
+ * deja des trames vers les cartes.
+ *
+ * Ce qui ne change pas : c'est le meme [SignalSetpoint.write] qui traite le
+ * message. Rangement avant envoi, diffusion aux autres app, rejeu a la
+ * reconnexion — un chemin plus court, pas des regles plus laches.
  */
-private fun handleAppTextMessage(appSession: AppSession, text: String) {
+private suspend fun handleAppTextMessage(
+    appSession: AppSession,
+    text: String,
+    userId: String,
+    connections: ConnectionRegistry,
+    events: ControlEventBroadcaster,
+    signals: com.jeanloickdt.signal.domain.SignalRepository?
+) {
     val msg = try {
         appInboundJson.decodeFromString<AppInboundMessage>(text)
     } catch (e: SerializationException) {
@@ -233,6 +276,56 @@ private fun handleAppTextMessage(appSession: AppSession, text: String) {
             appSession.historySubs.clear()
             appSession.historySubs.putAll(newSubs)
             logger.info("History subscriptions updated — userId=${appSession.userId} count=${newSubs.size}")
+        }
+        "hello" -> {
+            // L'app demande, le relais repond. C'est le seul ordre sans
+            // course : elle envoie quand elle ecoute deja.
+            appSession.session.send(
+                Frame.Text("""{"type":"capabilities","accepts":["write_signal"]}""")
+            )
+        }
+        "write_signal" -> {
+            val deviceId = msg.deviceId
+            val address = msg.address
+            if (deviceId == null || address == null || signals == null) {
+                logger.warn("write_signal incomplet — userId=$userId deviceId=$deviceId address=$address")
+                return
+            }
+
+            // La propriete est prouvee par la RECHERCHE elle-meme.
+            //
+            // `signals.find(ownerId, deviceId, address)` est cadre par le
+            // proprietaire : une adresse qui n'est pas a nous ne se trouve
+            // pas. Il n'y a donc rien a verifier en plus, et surtout rien a
+            // relire en base sur un chemin parcouru vingt fois par seconde.
+            //
+            // Et la carte n'a PAS besoin d'etre en ligne. Une premiere
+            // version repondait `device_offline` et s'arretait la — elle
+            // cassait la promesse du chemin qu'elle remplacait : range
+            // d'abord, envoye ensuite, pour qu'une carte endormie le retrouve
+            // en se reconnectant. `SignalSetpoint.write` s'en charge : si
+            // l'envoi echoue, la consigne est deja ecrite.
+            val projectId = connections.deviceSessions[deviceId]?.device?.projectId
+            val issue = com.jeanloickdt.signal.SignalSetpoint.write(
+                signals, userId, deviceId, address, msg.value, msg.text,
+                System.currentTimeMillis(),
+                send = { target, frame ->
+                    connections.deviceOutboxes[target]?.send(frame, isStreaming = true) ?: false
+                },
+                broadcast = { frame -> projectId?.let { broadcastToApps(connections, it, frame) } }
+            )
+            when (issue) {
+                is com.jeanloickdt.signal.SignalSetpoint.Outcome.Refused ->
+                    logger.info("write_signal refuse — userId=$userId device=$deviceId I$address : ${issue.reason}")
+                // Rangee, pas livree : la carte dort. Ce n'est pas un echec,
+                // et l'app doit pouvoir le dire autrement qu'en criant.
+                is com.jeanloickdt.signal.SignalSetpoint.Outcome.Stored ->
+                    events.commandFailed(
+                        session = appSession.session, deviceId = deviceId,
+                        reason = CommandFailedReason.DEVICE_OFFLINE
+                    )
+                else -> Unit
+            }
         }
         else -> logger.warn("Unknown inbound text type from app userId=${appSession.userId}: ${msg.type}")
     }
@@ -261,8 +354,7 @@ private suspend fun relayFrameToDevices(
     userId: String,
     frameBytes: ByteArray,
     connections: ConnectionRegistry,
-    events: ControlEventBroadcaster,
-    signals: com.jeanloickdt.signal.domain.SignalRepository? = null
+    events: ControlEventBroadcaster
 ) {
     val targetDeviceIds = FrameParser.extractDeviceIds(frameBytes)
     if (targetDeviceIds.isEmpty()) return
@@ -286,7 +378,18 @@ private suspend fun relayFrameToDevices(
             return@forEach
         }
 
-        // ownership check — device belongs to another user
+        // La SEULE verification d'appartenance ecrite a la main qui reste, et
+        // elle n'est pas du meme genre que les autres.
+        //
+        // Les huit qu'on a retirees comparaient une ligne RELUE par
+        // identifiant : la signature du depot pouvait les absorber, parce que
+        // c'est la lecture elle-meme qui devait etre cadree. Ici il n'y a pas
+        // de lecture — `deviceSession` vient du registre des sessions TCP
+        // vivantes, indexe par carte, et sa ligne a ete etablie a la poignee
+        // de main par `findByTokenHash`.
+        //
+        // Il n'existe donc aucune signature ou pousser ce test : c'est une
+        // comparaison entre deux identites deja etablies, pas une resolution.
         if (deviceSession.device.ownerId != userId) {
             logger.warn("Ownership violation — userId=$userId tried to relay to device=$targetDeviceId owned by ${deviceSession.device.ownerId}")
             events.commandFailed(

@@ -19,21 +19,13 @@
 
 package com.jeanloickdt.automation
 
-import com.jeanloickdt.auth.HmacTokenService
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
 import com.jeanloickdt.common.ServerConfig
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.userRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -50,7 +42,6 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
-import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -77,8 +68,6 @@ import kotlin.test.assertTrue
  */
 class EmailConfigRoutesTest {
 
-    private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
-
     /** Everything the fake Brevo saw, in order. */
     private val sentBodies = mutableListOf<String>()
     private var brevoStatus = 201
@@ -89,14 +78,7 @@ class EmailConfigRoutesTest {
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-emailcfg-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = db
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
         sentBodies.clear()
         brevoStatus = 201
         ServerConfig.emailBrevoApiKey = "xkeysib-secret-tail1234"
@@ -127,7 +109,7 @@ class EmailConfigRoutesTest {
     private fun ApplicationTestBuilder.installTestApp() {
         application {
             install(ContentNegotiation) { json() }
-            configureAuth(userRepository, tokenService)
+            configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
             routing { emailConfigRoutes(userRepository, sender()) }
         }
     }
@@ -135,12 +117,12 @@ class EmailConfigRoutesTest {
     /** @return the admin's bearer token. */
     private fun admin(username: String): String {
         val id = userRepository.create(username, BCrypt.hashpw("secret123", BCrypt.gensalt()), "admin", true)
-        return tokenService.issue(id, 0)
+        return com.jeanloickdt.auth.LocalTestAuth.token(id, tokenVersion = 0)
     }
 
     private fun plainUser(username: String): String {
         val id = userRepository.create(username, BCrypt.hashpw("secret123", BCrypt.gensalt()), "user", true)
-        return tokenService.issue(id, 0)
+        return com.jeanloickdt.auth.LocalTestAuth.token(id, tokenVersion = 0)
     }
 
     private suspend fun io.ktor.client.HttpClient.test(token: String, body: String = "{}"): HttpResponse =

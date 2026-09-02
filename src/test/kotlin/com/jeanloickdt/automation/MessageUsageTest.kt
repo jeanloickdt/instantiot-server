@@ -21,16 +21,8 @@ package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
 import java.util.concurrent.CountDownLatch
 import kotlin.concurrent.thread
 import kotlin.test.BeforeTest
@@ -46,18 +38,11 @@ import kotlin.test.assertTrue
 class MessageUsageTest {
 
     private val counter = MessageUsageCounter()
-    private val repo = SqliteMessageUsageRepository()
+    private val repo = ExposedMessageUsageRepository()
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-usage-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = db
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
     }
 
     // ── Le compteur RAM ───────────────────────────────────────────────────

@@ -136,7 +136,7 @@ class SendersTest {
     fun `a COMMAND reaches the board through the outbox seam`() = runBlocking {
         var delivered: Pair<String, ByteArray>? = null
         val sender = CommandActionSender(
-            deviceOwner = { "u1" },
+            ownsDevice = { owner, _ -> owner == "u1" },
             sendToDevice = { id, f -> delivered = id to f; true }
         )
         val r = sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"$frame"}"""))
@@ -152,7 +152,7 @@ class SendersTest {
         // reached the table without either (mutation between fire and send).
         var called = false
         val sender = CommandActionSender(
-            deviceOwner = { "somebody-else" },
+            ownsDevice = { owner, _ -> owner == "somebody-else" },
             sendToDevice = { _, _ -> called = true; true }
         )
         val r = sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"$frame"}""", owner = "u1"))
@@ -164,7 +164,7 @@ class SendersTest {
     @Test
     fun `a board offline at delivery is a LOST command, said loudly — never a retry`() = runBlocking {
         val sender = CommandActionSender(
-            deviceOwner = { "u1" },
+            ownsDevice = { owner, _ -> owner == "u1" },
             sendToDevice = { _, _ -> false }   // no outbox = offline
         )
         val r = sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"$frame"}"""))
@@ -174,7 +174,7 @@ class SendersTest {
 
     @Test
     fun `garbage payloads die cleanly`() = runBlocking {
-        val sender = CommandActionSender({ "u1" }, { _, _ -> true })
+        val sender = CommandActionSender({ _, _ -> true }, { _, _ -> true })
         assertTrue(sender.send(action("COMMAND", "not json")) is SendResult.Fatal)
         assertTrue(sender.send(action("COMMAND", """{"payloadB64":"$frame"}""")) is SendResult.Fatal)
         assertTrue(sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"!!!"}""")) is SendResult.Fatal)

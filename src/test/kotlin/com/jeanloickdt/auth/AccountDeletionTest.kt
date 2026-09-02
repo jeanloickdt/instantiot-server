@@ -19,26 +19,11 @@
 
 package com.jeanloickdt.auth
 
-import com.jeanloickdt.auth.data.UserTable
-import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
-import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
-import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.projectRepository
+import com.jeanloickdt.signalRepository
+import com.jeanloickdt.signalHistoryRepository
 import com.jeanloickdt.userRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import com.jeanloickdt.widgetHistoryDayRepository
-import com.jeanloickdt.widgetHistoryHourRepository
-import com.jeanloickdt.widgetHistoryMinRepository
-import com.jeanloickdt.widgetHistoryNumericRepository
-import com.jeanloickdt.widgetHistoryRepository
-import com.jeanloickdt.widgetRepository
 import io.ktor.client.request.delete
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
@@ -50,12 +35,12 @@ import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
-import java.io.File
-import java.sql.DriverManager
 import org.mindrot.jbcrypt.BCrypt
+import org.jetbrains.exposed.sql.transactions.transaction
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -66,27 +51,17 @@ import kotlin.test.assertTrue
  */
 class AccountDeletionTest {
 
-    private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
-    private lateinit var dbFile: File
 
     /** Every table that carries an owner_id, and the users table itself. */
     private val OWNED_TABLES = listOf(
-        "projects", "devices", "widgets",
-        "widget_history", "widget_history_numeric",
-        "widget_history_min", "widget_history_hour", "widget_history_day",
+        "projects", "devices", "signals",
+        "signal_raw", "signal_min", "signal_hour", "signal_day",
         "automation_rules", "pending_actions", "push_tokens", "message_usage"
     )
 
     @BeforeTest
     fun setup() {
-        dbFile = File.createTempFile("instantiot-deletion-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = dbFile
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
     }
 
     private fun ApplicationTestBuilder.installTestApp() {
@@ -98,22 +73,23 @@ class AccountDeletionTest {
                     requestKey { it.request.local.remoteAddress }
                 }
             }
-            configureAuth(userRepository, tokenService)
+            configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
             val connections = com.jeanloickdt.relay.ConnectionRegistry()
             val buffers     = com.jeanloickdt.relay.HistoryBuffers()
             val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
             val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
-            val cacheAware  = com.jeanloickdt.relay.CacheAwareWidgetRepository(
-                widgetRepository, buffers.knownWidgetIds, lastValues
-            )
             val purge = AccountPurge(
-                userRepository, projectRepository, deviceRepository, cacheAware,
-                widgetHistoryRepository, widgetHistoryNumericRepository,
-                widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+                userRepository, projectRepository, deviceRepository, 
+                signalRepository, signalHistoryRepository,
                 connections, events
             )
             routing {
-                authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, purge)
+                // iia est simule : ce fichier eprouve la ROUTE, pas l'appel
+                // au service d'identite — CloudAccountDeletionTest s'en charge.
+                authRoutes(
+                    userRepository, projectRepository, deviceRepository, connections,
+                    com.jeanloickdt.auth.LocalTestAuth.service, purge
+                )
             }
         }
     }
@@ -122,30 +98,29 @@ class AccountDeletionTest {
 
     private fun account(username: String, role: String = "user"): Pair<String, String> {
         val id = userRepository.create(username, BCrypt.hashpw("secret123", BCrypt.gensalt()), role, true)
-        return id to tokenService.issue(id, 0)
+        return id to com.jeanloickdt.auth.LocalTestAuth.token(id, tokenVersion = 0)
     }
 
     private fun seedFullAccount(ownerId: String) {
-        val projectId = projectRepository.create("p-$ownerId", ownerId)
+        val projectId = projectRepository.create(ownerId, "p-$ownerId").id
         deviceRepository.create(
-            name = "board", projectId = projectId, ownerId = ownerId,
+            name         = "board", projectId = projectId, ownerId = ownerId,
             tokenHash = "hash-$ownerId",
             deviceType = com.jeanloickdt.device.domain.DeviceType.ESP32,
             connectivity = com.jeanloickdt.device.domain.DeviceConnectivity.WIFI
-        )
-        widgetRepository.register("w-$ownerId", projectId, ownerId, "gauge")
-        exec("""INSERT INTO widget_history (widget_id, project_id, owner_id, payload, recorded_at)
-                VALUES ('w-$ownerId','$projectId','$ownerId','AA==',1)""")
-        exec("""INSERT INTO widget_history_numeric (widget_id, project_id, owner_id, series_id, value, recorded_at)
-                VALUES ('w-$ownerId','$projectId','$ownerId',NULL,1.0,1)""")
+        ).id
+        val deviceId = deviceRepository.findAllByProject(ownerId, projectId).first().id
+        signalRepository.create(ownerId, deviceId, 0, "s0", "float", nowMs = 1L)
+        val signalId = signalRepository.find(ownerId, deviceId, 0)!!.id
+        exec("INSERT INTO signal_raw (signal_id, owner_id, ts, value) VALUES ($signalId,'$ownerId',1,1.0)")
         for (tier in listOf("min", "hour", "day")) {
-            exec("""INSERT INTO widget_history_$tier
-                    (widget_id, project_id, owner_id, series_id, avg_value, min_value, max_value, sample_count, bucket_at)
-                    VALUES ('w-$ownerId','$projectId','$ownerId',NULL,1.0,1.0,1.0,1,1)""")
+            exec("""INSERT INTO signal_$tier
+                    (signal_id, owner_id, bucket_at, avg_value, min_value, min_at, max_value, max_at, sample_count)
+                    VALUES ($signalId,'$ownerId',1,1.0,1.0,1,1.0,1,1)""")
         }
         exec("""INSERT INTO automation_rules (id, owner_id, name, enabled, trigger_kind, definition, created_at, updated_at)
-                VALUES ('r-$ownerId','$ownerId','rule',1,'value','{}',1,1)""")
-        exec("INSERT INTO automation_state (rule_id, triggered, updated_at) VALUES ('r-$ownerId',0,1)")
+                VALUES ('r-$ownerId','$ownerId','rule',true,'value','{}',1,1)""")
+        exec("INSERT INTO automation_state (rule_id, triggered, updated_at) VALUES ('r-$ownerId',false,1)")
         exec("INSERT INTO scheduled_jobs (rule_id, next_run_at, timezone) VALUES ('r-$ownerId',1,'UTC')")
         exec("""INSERT INTO pending_actions
                 (idempotency_key, owner_id, type, payload, status, attempts, next_attempt_at, occurred_at, created_at)
@@ -154,37 +129,26 @@ class AccountDeletionTest {
         exec("INSERT INTO message_usage (owner_id, period, count) VALUES ('$ownerId','2026-08',42)")
     }
 
-    private fun exec(sql: String) =
-        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
-            c.createStatement().use { it.execute(sql) }
-        }
+    private fun exec(sql: String) = transaction {
+        exec(sql)
+    }
+
+    private fun countOf(sql: String): Int = transaction {
+        exec(sql) { rs -> rs.next(); rs.getInt(1) }!!
+    }
 
     private fun rowsOf(ownerId: String): Map<String, Int> =
-        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
-            OWNED_TABLES.associateWith { table ->
-                val col = if (table == "projects" || table == "devices" || table == "widgets"
-                    || table.startsWith("widget_history") || table == "automation_rules"
-                    || table == "pending_actions" || table == "push_tokens" || table == "message_usage"
-                ) "owner_id" else error(table)
-                c.createStatement().use { s ->
-                    s.executeQuery("SELECT count(*) FROM $table WHERE $col = '$ownerId'")
-                        .use { rs -> rs.next(); rs.getInt(1) }
-                }
-            } + mapOf(
-                "users" to c.createStatement().use { s ->
-                    s.executeQuery("SELECT count(*) FROM users WHERE id = '$ownerId'")
-                        .use { rs -> rs.next(); rs.getInt(1) }
-                },
-                "automation_state" to c.createStatement().use { s ->
-                    s.executeQuery("SELECT count(*) FROM automation_state WHERE rule_id = 'r-$ownerId'")
-                        .use { rs -> rs.next(); rs.getInt(1) }
-                },
-                "scheduled_jobs" to c.createStatement().use { s ->
-                    s.executeQuery("SELECT count(*) FROM scheduled_jobs WHERE rule_id = 'r-$ownerId'")
-                        .use { rs -> rs.next(); rs.getInt(1) }
-                }
-            )
-        }
+        OWNED_TABLES.associateWith { table ->
+            // Toutes ces tables portent `owner_id` — c'est ce qui rend la
+            // purge possible sans jointure, et ce que ce test vérifie.
+            countOf("SELECT count(*) FROM $table WHERE owner_id = '$ownerId'")
+        } + mapOf(
+            "users" to countOf("SELECT count(*) FROM users WHERE id = '$ownerId'"),
+            "automation_state" to
+                countOf("SELECT count(*) FROM automation_state WHERE rule_id = 'r-$ownerId'"),
+            "scheduled_jobs" to
+                countOf("SELECT count(*) FROM scheduled_jobs WHERE rule_id = 'r-$ownerId'"),
+        )
 
     // ── LA promesse ───────────────────────────────────────────────────────
 
@@ -206,26 +170,40 @@ class AccountDeletionTest {
         }
         assertEquals(HttpStatusCode.OK, res.status, res.bodyAsText())
 
-        // The promise, table by table — read straight from SQLite.
+        // La promesse, table par table — lue dans la base, pas via un
+        // depot qui choisirait ce qu'il renvoie.
+        // La promesse, table par table — `users` comprise.
+        //
+        // C'est ici que les deux editions divergent, et il faut le savoir : le
+        // nuage GARDE la ligne, anonymisee, parce qu'un jeton iia encore
+        // valide reprovisionnerait le compte a la volee. Ici l'autorite EST ce
+        // serveur : plus de ligne, plus de compte, et le jeton meurt avec.
         rowsOf(aliceId).forEach { (table, n) ->
             assertEquals(0, n, "$table must hold nothing of the deleted account")
         }
-        // And the second half, just as binding.
+
+        // Et l'autre moitie, tout aussi engageante.
         rowsOf(bobId).forEach { (table, n) ->
             assertTrue(n >= 1, "$table must still hold bob's rows — deletion leaked ($n)")
         }
     }
 
+    /**
+     * Le jeton du compte supprime est mort DANS L'INSTANT.
+     *
+     * La validation locale relit le compte a chaque requete : plus de ligne,
+     * plus d'entree. La revocation est donc immediate ici — le fantome de sept
+     * jours est un probleme du NUAGE, ou la ligne survit anonyme pour que la
+     * suppression d'identite puisse etre retentee.
+     */
     @Test
-    fun `the deleted account's token is dead immediately`() = testApplication {
+    fun `le jeton du compte supprime est mort dans l instant`() = testApplication {
         installTestApp()
         val (id, token) = account("carol")
         seedFullAccount(id)
 
         client.delete("/api/users/me") { header(HttpHeaders.Authorization, "Bearer $token") }
 
-        // Local validation looks the user up: no row, no entry. Revocation is
-        // instant here — the 7-day ghost is a CLOUD problem (étape C).
         val after = client.delete("/api/users/me") { header(HttpHeaders.Authorization, "Bearer $token") }
         assertEquals(HttpStatusCode.Unauthorized, after.status)
     }
@@ -267,6 +245,8 @@ class AccountDeletionTest {
             header(HttpHeaders.Authorization, "Bearer $adminToken")
         }
         assertEquals(HttpStatusCode.OK, res.status)
+        // Meme cascade que la suppression de son propre compte, `users`
+        // comprise : ici l'autorite est ce serveur, donc la ligne part.
         rowsOf(targetId).forEach { (table, n) ->
             assertEquals(0, n, "$table must hold nothing of the deleted account")
         }
