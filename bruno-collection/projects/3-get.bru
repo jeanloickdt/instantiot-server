@@ -1,0 +1,20 @@
+meta {
+  name: 3. Lire un projet
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/projects/{{projectId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Une ressource qui ne vous appartient pas rend **404**, jamais 403 :
+  l'existence ne se laisse pas deviner.
+}

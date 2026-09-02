@@ -1,0 +1,15 @@
+meta {
+  name: 2. Sante
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  Sonde de supervision. `{"status":"ok","uptimeMs":…}`.
+}

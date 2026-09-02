@@ -1,0 +1,32 @@
+meta {
+  name: Restaurer une sauvegarde
+  type: http
+  seq: 22
+}
+
+post {
+  url: {{baseUrl}}/api/admin/backup/restore
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "filename": "instantiot-2026-09-01.db"
+  }
+}
+
+docs {
+  **Ne remplace rien tout de suite.** La restauration est mise en attente
+  (`instantiot.db.pending-restore`) et l'echange se fait au DEMARRAGE
+  suivant, avant que la base ne s'ouvre — echanger sous un serveur qui
+  tourne le laisserait a moitie.
+
+  Une sauvegarde qui echoue son controle d'integrite est refusee tout de
+  suite ; une qui s'abime entre la mise en attente et le redemarrage est
+  ignoree au boot, et la base en cours est gardee.
+}

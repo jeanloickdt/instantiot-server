@@ -1,0 +1,36 @@
+meta {
+  name: 5. Creer un compte
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/register
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "username": "alice",
+    "password": "un-mot-de-passe-solide"
+  }
+}
+
+docs {
+  Refuse tant que l'inscription est fermee — et elle l'est par defaut :
+  sur un reseau local, l'app decouvre le serveur toute seule, donc
+  n'importe qui pourrait s'inscrire.
+
+  L'administrateur l'ouvre le temps d'enroler ses utilisateurs, puis la
+  referme.
+
+  **Cette route n'existe pas dans le nuage** : l'inscription y appartient
+  a iia.
+}
+
+script:post-response {
+  if (res.status === 200 || res.status === 201) {
+    bru.setVar("token", res.body.token);
+  }
+}

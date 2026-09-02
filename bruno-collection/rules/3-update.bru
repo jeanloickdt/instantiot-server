@@ -1,0 +1,21 @@
+meta {
+  name: 3. Modifier une regle
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/api/rules/{{ruleId}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "enabled": false
+  }
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Configuration e-mail
+  type: http
+  seq: 7
+}
+
+get {
+  url: {{baseUrl}}/api/admin/email-config
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  `managedByEnv` a vrai signifie que `BREVO_API_KEY` est posee dans
+  l'environnement : elle GAGNE, et le panneau passe en lecture seule. Une
+  edition ecrasee au prochain redemarrage serait pire qu'un refus clair.
+}

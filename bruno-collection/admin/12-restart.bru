@@ -1,0 +1,19 @@
+meta {
+  name: Redemarrer
+  type: http
+  seq: 12
+}
+
+post {
+  url: {{baseUrl}}/api/admin/restart
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Arret propre. Le gestionnaire de service le relance.
+}

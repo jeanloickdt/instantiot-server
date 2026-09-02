@@ -1,0 +1,21 @@
+meta {
+  name: 6. Supprimer
+  type: http
+  seq: 6
+}
+
+delete {
+  url: {{baseUrl}}/api/projects/{{projectId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Cascade : historique, signaux, cartes, puis le projet. Dans cet ordre
+  — l'inverse laisserait des lignes orphelines si l'operation s'arretait
+  au milieu.
+}

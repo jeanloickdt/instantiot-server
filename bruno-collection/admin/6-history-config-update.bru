@@ -1,5 +1,5 @@
 meta {
-  name: 6. History Config — Update
+  name: Modifier les reglages d'historique
   type: http
   seq: 6
 }
@@ -16,11 +16,12 @@ auth:bearer {
 
 body:json {
   {
-    "rawEnabled": false,
-    "retentionRawDays": 2,
-    "retentionOpaqueDays": 7,
-    "retentionMinDays": 7,
-    "retentionHourDays": 30,
-    "retentionDayDays": -1
+    "rawEnabled": true,
+    "retentionRawDays": 1,
+    "retentionMinDays": 90
   }
+}
+
+docs {
+  Applique a chaud : les boucles de fond relisent a chaque tour.
 }

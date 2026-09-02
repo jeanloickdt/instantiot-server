@@ -1,0 +1,22 @@
+meta {
+  name: 4. Modifier une declaration
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/signals/{{address}}
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "label": "Temperature exterieure",
+    "decimals": 2
+  }
+}

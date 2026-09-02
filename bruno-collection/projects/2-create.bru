@@ -1,0 +1,32 @@
+meta {
+  name: 2. Creer un projet
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/projects
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Salon"
+  }
+}
+
+docs {
+  Le nom fait 2 a 64 caracteres. Un nom d'un seul caractere est refuse
+  — c'est la premiere chose sur laquelle on se cogne en scriptant.
+}
+
+script:post-response {
+  if (res.status === 200 || res.status === 201) {
+    bru.setVar("projectId", res.body.id);
+  }
+}

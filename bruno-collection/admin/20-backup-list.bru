@@ -1,11 +1,11 @@
 meta {
-  name: Etat du serveur
+  name: Lister les sauvegardes
   type: http
-  seq: 2
+  seq: 20
 }
 
 get {
-  url: {{baseUrl}}/api/admin/server-info
+  url: {{baseUrl}}/api/admin/backup/list
   body: none
   auth: bearer
 }

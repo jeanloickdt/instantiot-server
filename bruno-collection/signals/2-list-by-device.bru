@@ -1,11 +1,11 @@
 meta {
-  name: Etat du serveur
+  name: 2. Les signaux d'une carte
   type: http
   seq: 2
 }
 
 get {
-  url: {{baseUrl}}/api/admin/server-info
+  url: {{baseUrl}}/api/devices/{{deviceId}}/signals
   body: none
   auth: bearer
 }

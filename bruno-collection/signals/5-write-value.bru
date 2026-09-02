@@ -1,0 +1,35 @@
+meta {
+  name: 5. Ecrire une consigne
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/signals/{{address}}/value
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "value": 19.5
+  }
+}
+
+docs {
+  La valeur est **stockee, envoyee, et rejouee** a la reconnexion.
+
+  Carte hors ligne : la reponse le dit — `delivered: false`, motif
+  « device offline — will be restored on connect ». Ce n'est pas une
+  erreur : la consigne est un ETAT, elle attend.
+
+  Au rejeu, la trame porte le drapeau `TAG_RESTORE` (bit haut du tag) et
+  la bibliotheque saute alors les blocs de geste. Un etat se restaure, un
+  geste ne se rejoue pas.
+
+  Pour un signal texte, envoyer `text` au lieu de `value`.
+}

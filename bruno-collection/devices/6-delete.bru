@@ -1,11 +1,11 @@
 meta {
-  name: Etat du serveur
+  name: 6. Supprimer
   type: http
-  seq: 2
+  seq: 6
 }
 
-get {
-  url: {{baseUrl}}/api/admin/server-info
+delete {
+  url: {{baseUrl}}/api/devices/{{deviceId}}
   body: none
   auth: bearer
 }

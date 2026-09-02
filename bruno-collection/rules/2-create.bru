@@ -1,0 +1,45 @@
+meta {
+  name: 2. Creer une regle
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/rules
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "Alerte seuil",
+    "triggerSignalKey": "{{deviceId}}:{{address}}",
+    "definition": {
+      "when": { "kind": "value", "above": 30.0 },
+      "cooldownS": 300,
+      "actions": [
+        { "type": "EMAIL", "subject": "Trop chaud", "body": "{{value}} C" }
+      ]
+    }
+  }
+}
+
+docs {
+  La cle de declenchement est `deviceId:adresse` — la meme chaine opaque
+  partout ailleurs.
+
+  **PUSH est refuse A LA CREATION** sur ce serveur, avec un message qui
+  dit pourquoi : aucun identifiant Firebase ne peut voyager dans un depot
+  public, donc une regle PUSH n'enfilerait que des lignes que le livreur
+  marquerait DEAD.
+}
+
+script:post-response {
+  if (res.status === 200 || res.status === 201) {
+    bru.setVar("ruleId", res.body.id);
+  }
+}

@@ -1,0 +1,19 @@
+meta {
+  name: 1. Tous les signaux du compte
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/signals
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Tout ce que le selecteur de l'app a besoin de savoir, en un appel.
+}

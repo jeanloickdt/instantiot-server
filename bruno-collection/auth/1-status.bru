@@ -1,5 +1,5 @@
 meta {
-  name: 1. Status
+  name: 1. Statut
   type: http
   seq: 1
 }
@@ -8,4 +8,9 @@ get {
   url: {{baseUrl}}/api/status
   body: none
   auth: none
+}
+
+docs {
+  L'etat du serveur. Publique : c'est ce que l'app interroge avant
+  de proposer une connexion.
 }
