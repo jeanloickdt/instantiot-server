@@ -29,3 +29,22 @@ data class ProjectRow(
     val createdAt: Long,
     val updatedAt: Long
 )
+/**
+ * Un projet SANS son layout — ce qu'une liste a besoin de savoir.
+ *
+ * Le type existe pour que l'absence du layout soit une propriété de la forme,
+ * pas une discipline d'appelant. Un `ProjectRow` dont le `layoutJson` serait
+ * vide se serait glissé partout sans que rien ne le distingue d'un projet
+ * réellement vide.
+ *
+ * `ownerId` n'y figure pas : l'appelant vient de le fournir pour filtrer, le
+ * lui renvoyer n'apprend rien et donne une seconde source à ce qui n'en a
+ * qu'une — le jeton.
+ */
+data class ProjectSummary(
+    val id: String,
+    val name: String,
+    val version: Int,
+    val createdAt: Long,
+    val updatedAt: Long
+)

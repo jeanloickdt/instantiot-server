@@ -25,7 +25,10 @@ import com.jeanloickdt.common.ApiError
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.project.domain.CreateProjectRequest
 import com.jeanloickdt.project.domain.ProjectRepository
+import com.jeanloickdt.project.domain.ProjectRow
 import com.jeanloickdt.project.domain.ProjectResponse
+import com.jeanloickdt.project.domain.ProjectSummary
+import com.jeanloickdt.project.domain.ProjectSummaryResponse
 import com.jeanloickdt.project.domain.UpdateProjectLayoutRequest
 import com.jeanloickdt.project.domain.UpdateProjectNameRequest
 import com.jeanloickdt.relay.ControlEventBroadcaster
@@ -33,8 +36,8 @@ import com.jeanloickdt.relay.DeviceOfflineReason
 import com.jeanloickdt.relay.ConnectionRegistry
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.close
-import com.jeanloickdt.widget.domain.WidgetHistoryRepository
-import com.jeanloickdt.widget.domain.WidgetRepository
+import com.jeanloickdt.signal.domain.SignalHistoryPurge
+import com.jeanloickdt.signal.domain.SignalRepository
 import io.ktor.http.*
 import io.ktor.server.auth.*
 import io.ktor.server.auth.jwt.*
@@ -45,15 +48,53 @@ import org.jetbrains.exposed.sql.transactions.transaction
 
 private val logger = org.slf4j.LoggerFactory.getLogger("ProjectRoutes")
 
+/**
+ * La réponse d'un projet.
+ *
+ * Elle était construite champ par champ à quatre endroits identiques. Une
+ * cinquième route, ou un champ ajouté à [ProjectRow], et l'une des quatre
+ * diverge sans que rien ne le signale.
+ */
+private fun ProjectRow.toResponse() = ProjectResponse(
+    id         = id,
+    name       = name,
+    layoutJson = layoutJson,
+    version    = version,
+    createdAt  = createdAt,
+    updatedAt  = updatedAt
+)
+
+private fun ProjectSummary.toResponse() = ProjectSummaryResponse(
+    id        = id,
+    name      = name,
+    version   = version,
+    createdAt = createdAt,
+    updatedAt = updatedAt
+)
+
+/**
+ * La taille maximale d'un layout, en OCTETS UTF-8.
+ *
+ * Une constante technique, pas un droit de plan : elle ne s'achète pas, elle
+ * protège — même nature que le fusible de dix messages par seconde. Elle vit
+ * donc à côté du code plutôt que dans la grille tarifaire.
+ *
+ * Pourquoi 256 Ko : un tableau de bord de cinquante widgets avec positions,
+ * tailles, styles et liaisons pèse une dizaine de kilo-octets. Vingt-cinq fois
+ * au-dessus du gros tableau réaliste — personne ne la touche par accident, et
+ * elle arrête net l'accident.
+ *
+ * Sans elle, un client bogué ou malveillant pouvait pousser des dizaines de
+ * mégaoctets : stockés, relus à chaque ouverture, et présents dans chaque
+ * sauvegarde.
+ */
+private const val MAX_LAYOUT_BYTES = 256 * 1024
+
 fun Route.projectRoutes(
     projectRepository: ProjectRepository,
     deviceRepository: DeviceRepository,
-    widgetRepository: WidgetRepository,
-    widgetHistoryRepository: WidgetHistoryRepository,
-    widgetHistoryNumericRepository: com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository,
-    widgetHistoryMinRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
-    widgetHistoryHourRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
-    widgetHistoryDayRepository: com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository,
+    signalRepository: SignalRepository,
+    signalHistoryRepository: SignalHistoryPurge,
     connections: ConnectionRegistry,
     events: ControlEventBroadcaster
 ) {
@@ -67,17 +108,12 @@ fun Route.projectRoutes(
             val ownerId = call.principal<JWTPrincipal>()?.subject
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
 
-            val projects = projectRepository.findAllByOwner(ownerId)
-                .map {
-                    ProjectResponse(
-                        id         = it.id,
-                        name       = it.name,
-                        layoutJson = it.layoutJson,
-                        version    = it.version,
-                        createdAt  = it.createdAt,
-                        updatedAt  = it.updatedAt
-                    )
-                }
+            // Sommaire, pas complet : la liste sert a afficher des noms, et le
+            // layout de chaque projet est le champ le plus lourd de la base.
+            // Le depot ne selectionne meme pas la colonne — voir
+            // `findAllByOwnerSummary`.
+            val projects = projectRepository.findAllByOwnerSummary(ownerId)
+                .map { it.toResponse() }
             call.respond(HttpStatusCode.OK, projects)
         }
 
@@ -96,17 +132,9 @@ fun Route.projectRoutes(
                     ApiError("Name must be 2-64 characters")
                 )
             }
-            val id      = projectRepository.create(name, ownerId)
-            val project = projectRepository.findById(id)!!
+            val project = projectRepository.create(ownerId, name)
 
-            call.respond(HttpStatusCode.Created, ProjectResponse(
-                id         = project.id,
-                name       = project.name,
-                layoutJson = project.layoutJson,
-                version    = project.version,
-                createdAt  = project.createdAt,
-                updatedAt  = project.updatedAt
-            ))
+            call.respond(HttpStatusCode.Created, project.toResponse())
         }
 
         // ============================================================
@@ -119,21 +147,10 @@ fun Route.projectRoutes(
             val projectId = call.parameters["id"]
                 ?: return@get call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val project = projectRepository.findById(projectId)
+            val project = projectRepository.findById(ownerId, projectId)
+                ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
 
-            if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
-                return@get
-            }
-
-            call.respond(HttpStatusCode.OK, ProjectResponse(
-                id         = project.id,
-                name       = project.name,
-                layoutJson = project.layoutJson,
-                version    = project.version,
-                createdAt  = project.createdAt,
-                updatedAt  = project.updatedAt
-            ))
+            call.respond(HttpStatusCode.OK, project.toResponse())
         }
 
         // ============================================================
@@ -146,13 +163,10 @@ fun Route.projectRoutes(
             val projectId = call.parameters["id"]
                 ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val project = projectRepository.findById(projectId)
-
-            if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
-                return@patch
-            }
-
+            // Pas de `findById` ici : `updateName` est deja scope par
+            // proprietaire et rend `null` si le projet n'existe pas ou n'est
+            // pas a nous. La garde a demenage dans le depot ; la relire ici
+            // ferait deux requetes pour une ecriture.
             val body = call.receive<UpdateProjectNameRequest>()
             val name = body.name.trim()
             if (name.length < 2 || name.length > 64) {
@@ -161,17 +175,10 @@ fun Route.projectRoutes(
                     ApiError("Name must be 2-64 characters")
                 )
             }
-            projectRepository.updateName(projectId, name)
-            val updated = projectRepository.findById(projectId)!!
+            val updated = projectRepository.updateName(ownerId, projectId, name)
+                ?: return@patch call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
 
-            call.respond(HttpStatusCode.OK, ProjectResponse(
-                id         = updated.id,
-                name       = updated.name,
-                layoutJson = updated.layoutJson,
-                version    = updated.version,
-                createdAt  = updated.createdAt,
-                updatedAt  = updated.updatedAt
-            ))
+            call.respond(HttpStatusCode.OK, updated.toResponse())
         }
 
         // ============================================================
@@ -186,14 +193,33 @@ fun Route.projectRoutes(
             val projectId = call.parameters["id"]
                 ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val project = projectRepository.findById(projectId)
-
-            if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
-                return@patch
+            // Premiere barriere, AVANT de lire le corps : refuser apres
+            // `receive` voudrait dire avoir deja charge le blob en memoire.
+            val declared = call.request.contentLength()
+            if (declared != null && declared > MAX_LAYOUT_BYTES) {
+                return@patch call.respond(
+                    HttpStatusCode.PayloadTooLarge,
+                    ApiError("Layout too large (max ${MAX_LAYOUT_BYTES / 1024} KB)")
+                )
             }
 
             val body = call.receive<UpdateProjectLayoutRequest>()
+
+            // Seconde barriere, APRES l'analyse : une requete en morceaux
+            // (`Transfer-Encoding: chunked`) n'annonce aucune taille, et la
+            // premiere barriere ne la voit pas.
+            //
+            // EN OCTETS UTF-8, pas en caracteres. `String.length` compte des
+            // unites de code : un layout plein d'accents ou d'emoji passerait
+            // une verification en caracteres et depasserait la borne la ou elle
+            // compte vraiment — en base.
+            if (body.layoutJson.toByteArray(Charsets.UTF_8).size > MAX_LAYOUT_BYTES) {
+                return@patch call.respond(
+                    HttpStatusCode.PayloadTooLarge,
+                    ApiError("Layout too large (max ${MAX_LAYOUT_BYTES / 1024} KB)")
+                )
+            }
+
             if (body.version == null) {
                 // Not refused — an app that predates the guard must keep
                 // working. But it is worth a line: while this happens, two
@@ -202,7 +228,7 @@ fun Route.projectRoutes(
                     "concurrent edits are unprotected until the app sends one")
             }
 
-            when (val r = projectRepository.updateLayout(projectId, body.layoutJson, body.version)) {
+            when (val r = projectRepository.updateLayout(ownerId, projectId, body.layoutJson, body.version)) {
                 is com.jeanloickdt.project.domain.LayoutWrite.Ok -> {
                     // The other phones learn about it now, instead of walking
                     // into a 409 the next time they save. The guard prevents the
@@ -239,12 +265,17 @@ fun Route.projectRoutes(
             val projectId = call.parameters["id"]
                 ?: return@delete call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
 
-            val project = projectRepository.findById(projectId)
-
-            if (project == null || project.ownerId != ownerId) {
-                call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
-                return@delete
-            }
+            // Celle-ci RESTE, contrairement a ses jumelles de /name et
+            // /layout — et la raison doit etre ecrite, sinon quelqu'un la
+            // supprimera avec les deux autres.
+            //
+            // Les etapes 1 et 2 ferment des sockets et des WebSockets : des
+            // effets HORS transaction, qu'aucun `rollback` ne rattrape. Sans
+            // cette garde, une suppression visant un projet inexistant — ou
+            // celui de quelqu'un d'autre — deconnecterait quand meme des
+            // cartes avant que la cascade ne reponde 404.
+            projectRepository.findById(ownerId, projectId)
+                ?: return@delete call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
 
             // ─── Step 1 : kick devices still connected over TCP ───────
             // Before the cascade delete, we fetch the list of devices
@@ -255,7 +286,7 @@ fun Route.projectRoutes(
             //      ESP device stays a ghost on the server side, shown
             //      "online" even though the project is deleted
             // Same pattern as DELETE /api/devices/{id}.
-            val devicesToKick = deviceRepository.findAllByProject(projectId)
+            val devicesToKick = deviceRepository.findAllByProject(ownerId, projectId)
             devicesToKick.forEach { d ->
                 events.deviceOffline(
                     projectId = projectId,
@@ -307,14 +338,36 @@ fun Route.projectRoutes(
             // kicks above stay outside on purpose: they are I/O effects
             // (socket/WS close), not DB, and must not be rolled back.
             transaction {
-                widgetHistoryRepository.deleteAllByProject(projectId)
-                widgetHistoryNumericRepository.deleteAllByProject(projectId)
-                widgetHistoryMinRepository.deleteAllByProject(projectId)
-                widgetHistoryHourRepository.deleteAllByProject(projectId)
-                widgetHistoryDayRepository.deleteAllByProject(projectId)
-                widgetRepository.deleteAllByProject(projectId)
-                deviceRepository.deleteAllByProject(projectId)
-                projectRepository.delete(projectId)
+                // L'ordre suit les clés étrangères : historique → signaux →
+                // cartes → projet. À l'envers, la contrainte refuse et toute
+                // la transaction avorte.
+                //
+                // Les tables d'historique ne portent pas de `project_id` — le
+                // modèle cible l'a retiré. Le lien se refait par une
+                // sous-requête, côté moteur : une instruction par table, quelle
+                // que soit la taille du projet.
+                //
+                // La version d'avant résolvait les identifiants ici : une
+                // requête par carte, puis un `IN (…)` de tous les signaux. À
+                // cent cartes, cent allers-retours et une clause de plusieurs
+                // milliers d'éléments.
+                val devices = deviceRepository.findAllByProject(ownerId, projectId)
+                val deviceIds = devices.map { it.id }
+                signalHistoryRepository.deleteAllByDevices(ownerId, deviceIds)
+                // Une instruction, pas une par carte. La ligne du dessus venait
+                // d'etre corrigee pour ce probleme exact ; la correction
+                // s'etait arretee une ligne trop tot. A cent cartes, c'etait
+                // cent allers-retours dans une transaction qui tient des
+                // verrous — et c'est le compte Advanced, celui qui a le plus de
+                // cartes, qui attendait le plus longtemps.
+                //
+                // `ownerId` vient du JETON, plus de la donnee relue
+                // (`it.ownerId`). Les deux sont egaux aujourd'hui ; suivre ce
+                // que la base dit plutot que ce que le jeton dit est le mauvais
+                // reflexe le jour ou ils divergent.
+                signalRepository.deleteByDevices(ownerId, deviceIds)
+                deviceRepository.deleteAllByProject(ownerId, projectId)
+                projectRepository.delete(ownerId, projectId)
             }
 
             call.respond(HttpStatusCode.OK, mapOf(

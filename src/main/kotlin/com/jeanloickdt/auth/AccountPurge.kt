@@ -31,10 +31,8 @@ import com.jeanloickdt.project.domain.ProjectRepository
 import com.jeanloickdt.relay.ConnectionRegistry
 import com.jeanloickdt.relay.ControlEventBroadcaster
 import com.jeanloickdt.relay.DeviceOfflineReason
-import com.jeanloickdt.widget.domain.WidgetHistoryAggregateRepository
-import com.jeanloickdt.widget.domain.WidgetHistoryNumericRepository
-import com.jeanloickdt.widget.domain.WidgetHistoryRepository
-import com.jeanloickdt.widget.domain.WidgetRepository
+import com.jeanloickdt.signal.data.ExposedSignalHistoryRepository
+import com.jeanloickdt.signal.domain.SignalRepository
 import io.ktor.websocket.CloseReason
 import io.ktor.websocket.close
 import kotlinx.serialization.Serializable
@@ -76,22 +74,22 @@ data class PurgeReport(val projects: Int, val devices: Int)
  *
  * ## What deletion promises
  *
- * After [purge] commits, no table holds a row keyed by this owner. The widget
- * deletes go through the cache-aware repository, so `knownWidgetIds` and the
- * last-value cache are evicted too — a frame from a still-flashed board hits
- * the strict-model guard and is dropped before any write.
+ * After [purge] commits, no table holds a row keyed by this owner — la
+ * declaration des signaux comme leurs quatre paliers.
+ *
+ * Une carte encore flashee qui continue d'emettre ne peut donc plus rien
+ * ecrire : son adresse n'est plus declaree, et le relais refuse une adresse
+ * inconnue avant toute ecriture. Le cache RAM des dernieres valeurs n'est pas
+ * purge explicitement — il ne survit pas au redemarrage et rien ne le relit
+ * pour un compte disparu.
  */
 class AccountPurge(
     private val userRepository: UserRepository,
     private val projectRepository: ProjectRepository,
     private val deviceRepository: DeviceRepository,
-    /** The CACHE-AWARE widget repository — eviction is part of the promise. */
-    private val widgetRepository: WidgetRepository,
-    private val widgetHistoryRepository: WidgetHistoryRepository,
-    private val widgetHistoryNumericRepository: WidgetHistoryNumericRepository,
-    private val widgetHistoryMinRepository: WidgetHistoryAggregateRepository,
-    private val widgetHistoryHourRepository: WidgetHistoryAggregateRepository,
-    private val widgetHistoryDayRepository: WidgetHistoryAggregateRepository,
+    /** Le dépôt CACHÉ — l'éviction du cache fait partie de la promesse. */
+    private val signalRepository: SignalRepository,
+    private val signalHistoryRepository: ExposedSignalHistoryRepository,
     private val connections: ConnectionRegistry,
     private val events: ControlEventBroadcaster
 ) {
@@ -110,7 +108,7 @@ class AccountPurge(
         // ── Phase 1 : kicks — I/O, never rolled back ──────────────────────
         var devicesKicked = 0
         projects.forEach { project ->
-            deviceRepository.findAllByProject(project.id).forEach { d ->
+            deviceRepository.findAllByProject(ownerId, project.id).forEach { d ->
                 devicesKicked++
                 events.deviceOffline(project.id, d.id, DeviceOfflineReason.DELETED)
                 connections.getDeviceSession(d.id)?.let { active ->
@@ -128,16 +126,23 @@ class AccountPurge(
 
         // ── Phase 2 : every row, one transaction ──────────────────────────
         transaction {
-            projects.forEach { project ->
-                widgetHistoryRepository.deleteAllByProject(project.id)
-                widgetHistoryNumericRepository.deleteAllByProject(project.id)
-                widgetHistoryMinRepository.deleteAllByProject(project.id)
-                widgetHistoryHourRepository.deleteAllByProject(project.id)
-                widgetHistoryDayRepository.deleteAllByProject(project.id)
-                widgetRepository.deleteAllByProject(project.id)
-                deviceRepository.deleteAllByProject(project.id)
-                projectRepository.delete(project.id)
-            }
+            // L'ORDRE est une contrainte, pas une préférence : chaque table
+            // d'historique porte une clé étrangère vers `signals.id`, et
+            // chaque signal une vers son device. Supprimer en sens inverse
+            // ferait échouer la contrainte et avorter toute la transaction.
+            //
+            // L'historique se purge par COMPTE, pas par projet : ses lignes
+            // ne portent pas de `project_id` — le modèle cible l'a retiré,
+            // `owner_id` dénormalisé suffit à purger sans jointure.
+            signalHistoryRepository.deleteAllByOwner(ownerId)
+            signalRepository.deleteByOwner(ownerId)
+            // Par COMPTE, pas projet par projet. La version d'avant faisait
+            // deux instructions par projet ; la suppression d'un compte tient
+            // desormais en un nombre FIXE d'instructions, quel que soit ce que
+            // le compte possede. Dans une transaction qui tient des verrous,
+            // c'est la propriete qui compte.
+            deviceRepository.deleteAllByOwner(ownerId)
+            projectRepository.deleteAllByOwner(ownerId)
 
             // Owner-level tables. automation_state and scheduled_jobs are keyed
             // by rule, not owner — resolve the rule ids first, inside the same

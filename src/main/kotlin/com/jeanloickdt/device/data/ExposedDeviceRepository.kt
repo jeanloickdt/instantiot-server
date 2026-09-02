@@ -17,7 +17,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// device/data/SqliteDeviceRepository.kt
+// device/data/ExposedDeviceRepository.kt
 package com.jeanloickdt.device.data
 
 import com.jeanloickdt.device.domain.DeviceConnectivity
@@ -29,16 +29,21 @@ import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.transactions.transaction
 import java.util.UUID
 
-class SqliteDeviceRepository : DeviceRepository {
+class ExposedDeviceRepository : DeviceRepository, com.jeanloickdt.device.domain.DevicePresenceWriter {
+
+    /** Une carte, et son proprietaire. Jamais l'un sans l'autre. */
+    private fun mine(ownerId: String, id: String) =
+        (DeviceTable.id eq id) and (DeviceTable.ownerId eq ownerId)
+
 
     override fun create(
+        ownerId: String,
         name: String,
         projectId: String,
-        ownerId: String,
         tokenHash: String,
         deviceType: DeviceType,
         connectivity: DeviceConnectivity
-    ): String {
+    ): DeviceRow {
         val id = UUID.randomUUID().toString()
         transaction {
             DeviceTable.insert {
@@ -53,14 +58,18 @@ class SqliteDeviceRepository : DeviceRepository {
                 it[DeviceTable.connectivity] = connectivity.name
             }
         }
-        return id
+        // La ligne, pas l'identifiant : l'appelant n'a plus de seconde requete
+        // a faire ni de `!!` a ecrire.
+        return transaction {
+            DeviceTable.selectAll().where { mine(ownerId, id) }.single().toDeviceRow()
+        }
     }
 
-    override fun findById(id: String): DeviceRow? {
+    override fun findById(ownerId: String, id: String): DeviceRow? {
         return transaction {
             DeviceTable
                 .selectAll()
-                .where { DeviceTable.id eq id }
+                .where { mine(ownerId, id) }
                 .singleOrNull()
                 ?.toDeviceRow()
         }
@@ -76,7 +85,7 @@ class SqliteDeviceRepository : DeviceRepository {
         }
     }
 
-    override fun findAll(): List<DeviceRow> {
+    override fun findAllForAdmin(): List<DeviceRow> {
         return transaction {
             DeviceTable.selectAll().map { it.toDeviceRow() }
         }
@@ -91,11 +100,11 @@ class SqliteDeviceRepository : DeviceRepository {
         }
     }
 
-    override fun findAllByProject(projectId: String): List<DeviceRow> {
+    override fun findAllByProject(ownerId: String, projectId: String): List<DeviceRow> {
         return transaction {
             DeviceTable
                 .selectAll()
-                .where { DeviceTable.projectId eq projectId }
+                .where { (DeviceTable.projectId eq projectId) and (DeviceTable.ownerId eq ownerId) }
                 .map { it.toDeviceRow() }
         }
     }
@@ -124,41 +133,69 @@ class SqliteDeviceRepository : DeviceRepository {
         }
     }
 
-    override fun updateName(id: String, newName: String) {
-        transaction {
-            DeviceTable.update({ DeviceTable.id eq id }) {
-                it[DeviceTable.name] = newName
-            }
+    override fun updateName(ownerId: String, id: String, newName: String): DeviceRow? = transaction {
+        val touched = DeviceTable.update({ mine(ownerId, id) }) {
+            it[DeviceTable.name] = newName
+        }
+        if (touched == 0) null
+        else DeviceTable.selectAll().where { mine(ownerId, id) }.single().toDeviceRow()
+    }
+
+    override fun updateHardware(
+        ownerId: String,
+        id: String,
+        deviceType: String?,
+        connectivity: String?
+    ): DeviceRow? = transaction {
+        // Rien a faire n'est pas une erreur : le PATCH peut ne porter que le
+        // nom, et cette methode est alors appelee sans rien.
+        if (deviceType == null && connectivity == null) {
+            return@transaction DeviceTable.selectAll()
+                .where { mine(ownerId, id) }.singleOrNull()?.toDeviceRow()
+        }
+        val touched = DeviceTable.update({ mine(ownerId, id) }) {
+            if (deviceType != null) it[DeviceTable.deviceType] = deviceType
+            if (connectivity != null) it[DeviceTable.connectivity] = connectivity
+        }
+        if (touched == 0) null
+        else DeviceTable.selectAll().where { mine(ownerId, id) }.single().toDeviceRow()
+    }
+
+    override fun delete(ownerId: String, id: String): Boolean = transaction {
+        DeviceTable.deleteWhere { (DeviceTable.id eq id) and (DeviceTable.ownerId eq ownerId) } > 0
+    }
+
+    override fun deleteAllByProject(ownerId: String, projectId: String): Int = transaction {
+        DeviceTable.deleteWhere {
+            (DeviceTable.projectId eq projectId) and (DeviceTable.ownerId eq ownerId)
         }
     }
 
-    override fun delete(id: String): Boolean {
+    override fun deleteAllByOwner(ownerId: String): Int = transaction {
+        DeviceTable.deleteWhere { DeviceTable.ownerId eq ownerId }
+    }
+
+    override fun renewToken(ownerId: String, id: String, newTokenHash: String): DeviceRow? = transaction {
+        val touched = DeviceTable.update({ mine(ownerId, id) }) {
+            it[DeviceTable.tokenHash] = newTokenHash
+        }
+        if (touched == 0) null
+        else DeviceTable.selectAll().where { mine(ownerId, id) }.single().toDeviceRow()
+    }
+
+    override fun countByOwner(ownerId: String): Long {
         return transaction {
-            DeviceTable.deleteWhere { DeviceTable.id eq id } > 0
+            DeviceTable.selectAll().where { DeviceTable.ownerId eq ownerId }.count()
         }
     }
 
-    override fun deleteAllByProject(projectId: String) {
-        transaction {
-            DeviceTable.deleteWhere { DeviceTable.projectId eq projectId }
-        }
-    }
-
-    override fun renewToken(id: String, newTokenHash: String) {
-        transaction {
-            DeviceTable.update({ DeviceTable.id eq id }) {
-                it[DeviceTable.tokenHash] = newTokenHash
-            }
-        }
-    }
-
-    override fun count(): Long {
+    override fun countAll(): Long {
         return transaction {
             DeviceTable.selectAll().count()
         }
     }
 
-    override fun countOnline(): Long {
+    override fun countOnlineAll(): Long {
         return transaction {
             DeviceTable.selectAll().where { DeviceTable.isOnline eq true }.count()
         }

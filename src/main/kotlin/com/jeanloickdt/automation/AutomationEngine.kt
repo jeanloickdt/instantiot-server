@@ -22,7 +22,7 @@ package com.jeanloickdt.automation
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.selects.select
 import kotlinx.serialization.json.JsonObject
@@ -77,10 +77,10 @@ class AutomationEngine(
     private val sinks: EventSinks,
     private val cache: RuleCache,
     private val actions: PendingActionRepository,
-    private val stateStore: SqliteAutomationStateStore,
+    private val stateStore: ExposedAutomationStateStore,
     /** COMMAND targets are re-checked against the rule's owner — étape 9's
      *  CRUD will validate too, but a row inserted any other way must not be
-     *  able to command another tenant's board. Same reflex as [WidgetKey]:
+     *  able to command another tenant's board. Same reflex as [SignalRef]:
      *  never trust an identifier without its owner. */
     private val deviceRepository: DeviceRepository,
     private val clock: () -> Long = System::currentTimeMillis
@@ -115,15 +115,15 @@ class AutomationEngine(
             return
         }
         when (event) {
-            is RelayEvent.WidgetValue -> {
-                val key = WidgetKey(event.ownerId, event.widgetId)
+            is RelayEvent.SignalValue -> {
+                val key = SignalRef(event.ownerId, event.signalKey)
                 cache.valueRules(key).forEach { evaluateValue(it, event) }
                 // The sensor spoke: any stale episode on this widget is over.
                 cache.staleRules(key).forEach { rearmIfTriggered(it) }
             }
 
-            is RelayEvent.WidgetStale -> {
-                val key = WidgetKey(event.ownerId, event.widgetId)
+            is RelayEvent.SignalStale -> {
+                val key = SignalRef(event.ownerId, event.signalKey)
                 cache.staleRules(key).forEach { evaluateStale(it, event) }
             }
 
@@ -183,7 +183,7 @@ class AutomationEngine(
 
     // ── Évaluations ───────────────────────────────────────────────────────
 
-    private fun evaluateValue(rule: LoadedRule, event: RelayEvent.WidgetValue) {
+    private fun evaluateValue(rule: LoadedRule, event: RelayEvent.SignalValue) {
         val t = rule.definition.trigger as? Trigger.ValueThreshold ?: return
         val state = rule.state
         state.lastValue = event.value
@@ -212,7 +212,7 @@ class AutomationEngine(
         }
     }
 
-    private fun evaluateStale(rule: LoadedRule, event: RelayEvent.WidgetStale) {
+    private fun evaluateStale(rule: LoadedRule, event: RelayEvent.SignalStale) {
         if (rule.state.triggered) return   // the episode was already told
         rule.state.triggered = true
         if (cooldownOk(rule, event.lastSeenAt)) {
@@ -272,8 +272,8 @@ class AutomationEngine(
             logger.error("Rule ${rule.id}: COMMAND without deviceId — action skipped")
             return false
         }
-        val device = deviceRepository.findById(deviceId)
-        if (device == null || device.ownerId != rule.ownerId) {
+        val device = deviceRepository.findById(rule.ownerId, deviceId)
+        if (device == null) {
             logger.error(
                 "Rule ${rule.id}: COMMAND targets device $deviceId which is not owned by " +
                     "${rule.ownerId} — action SKIPPED (cross-tenant command refused)"

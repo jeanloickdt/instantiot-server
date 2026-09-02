@@ -136,8 +136,8 @@ fun Application.configureAppRelay(
                 }
 
                 // verify that the user actually owns the project
-                val project = projectRepository.findById(projectId)
-                if (project == null || project.ownerId != userId) {
+                val project = projectRepository.findById(userId, projectId)
+                if (project == null) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Project not found"))
                     return@webSocket
                 }
@@ -286,22 +286,6 @@ private suspend fun relayFrameToDevices(
             return@forEach
         }
 
-        // Un EVENT vise une ADRESSE, et une adresse doit être déclarée.
-        //
-        // Relayer sans vérifier reproduirait le trou qu'`UndeclaredSignals` a
-        // fermé dans l'autre sens : la carte recevrait un événement qu'aucun
-        // bloc n'écoute, ne dirait rien, et l'utilisateur chercherait la panne
-        // dans son croquis. Ici on peut le nommer — alors on le nomme.
-        val refusal = EventFrame.refusalFor(trimmedFrame, userId, targetDeviceId, signals)
-        if (refusal != null) {
-            logger.info(
-                "Event refused — userId=$userId deviceId=$targetDeviceId " +
-                    "address=I${EventFrame.address(trimmedFrame)} reason=$refusal"
-            )
-            events.commandFailed(session = session, deviceId = targetDeviceId, reason = refusal)
-            return@forEach
-        }
-
         // ownership check — device belongs to another user
         if (deviceSession.device.ownerId != userId) {
             logger.warn("Ownership violation — userId=$userId tried to relay to device=$targetDeviceId owned by ${deviceSession.device.ownerId}")
@@ -326,20 +310,6 @@ private suspend fun relayFrameToDevices(
                 reason   = CommandFailedReason.RELAY_ERROR
             )
             return@forEach
-        }
-
-        // Un EVENT relayé laisse une trace.
-        //
-        // Sans elle, un succès et un « l'app n'a rien envoyé » se ressemblent
-        // exactement — aucune ligne dans les deux cas — et on ne peut pas les
-        // distinguer sans instrumenter à chaud. Une ligne par appui de bouton
-        // est un volume négligeable ; une valeur, non, c'est pourquoi ce log
-        // ne concerne que les événements.
-        EventFrame.address(trimmedFrame)?.let { addr ->
-            logger.info(
-                "Event relayed — deviceId=$targetDeviceId address=I$addr " +
-                    "kind=0x${EventFrame.kind(trimmedFrame)?.toString(16)}"
-            )
         }
 
         val enqueued = outbox.send(trimmedFrame, isStreaming)

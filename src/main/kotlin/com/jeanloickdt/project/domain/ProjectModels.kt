@@ -63,6 +63,36 @@ data class LayoutConflictResponse(
 // 📤 RESPONSES
 // ============================================================
 
+/**
+ * Un projet dans une LISTE — sans son layout.
+ *
+ * ## Pourquoi une seconde forme plutôt qu'un champ nullable
+ *
+ * Un `layoutJson: String?` laisserait le choix ouvert à chaque appel, et
+ * l'oubli reviendrait à la première route ajoutée. Deux types, et le
+ * compilateur dit laquelle on construit.
+ *
+ * ## Ce que ça économise vraiment
+ *
+ * Pas la sérialisation — la LECTURE. PostgreSQL stocke un `TEXT` volumineux
+ * hors ligne (TOAST) : ne pas sélectionner la colonne, c'est ne pas aller la
+ * chercher sur le disque. Filtrer en Kotlin après coup aurait tout lu pour
+ * tout jeter.
+ *
+ * `version` s'ajoute au passage : l'app en a besoin pour écrire un layout sous
+ * concurrence optimiste, et le lui donner dès la liste lui évite un aller
+ * supplémentaire. Son client HTTP ignore les clés inconnues, donc l'ajout ne
+ * casse aucune installation existante.
+ */
+@Serializable
+data class ProjectSummaryResponse(
+    val id: String,
+    val name: String,
+    val version: Int,
+    val createdAt: Long,
+    val updatedAt: Long
+)
+
 // Full project response
 @Serializable
 data class ProjectResponse(

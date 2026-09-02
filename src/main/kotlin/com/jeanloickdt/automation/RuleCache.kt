@@ -21,7 +21,7 @@ package com.jeanloickdt.automation
 
 import com.jeanloickdt.automation.data.AutomationRuleTable
 import com.jeanloickdt.automation.data.AutomationStateTable
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
@@ -52,7 +52,7 @@ class LoadedRule(
     val id: String,
     val ownerId: String,
     /** The widget for value/stale kinds; null for offline (device-keyed). */
-    val widgetId: String?,
+    val signalKey: String?,
     val definition: RuleDefinition,
     val state: RuleState
 )
@@ -79,13 +79,13 @@ class LoadedRule(
 class RuleCache {
 
     class Index(
-        val valueByWidget: Map<WidgetKey, List<LoadedRule>>,
-        val staleByWidget: Map<WidgetKey, List<LoadedRule>>,
+        val valueBySignal: Map<SignalRef, List<LoadedRule>>,
+        val staleBySignal: Map<SignalRef, List<LoadedRule>>,
         val offlineByDevice: Map<Pair<String, String>, List<LoadedRule>>,
         val scheduleById: Map<String, LoadedRule>
     ) {
         val ruleCount: Int =
-            valueByWidget.values.sumOf { it.size } + staleByWidget.values.sumOf { it.size } +
+            valueBySignal.values.sumOf { it.size } + staleBySignal.values.sumOf { it.size } +
                 offlineByDevice.values.sumOf { it.size } + scheduleById.size
     }
 
@@ -93,16 +93,16 @@ class RuleCache {
     private var index = Index(emptyMap(), emptyMap(), emptyMap(), emptyMap())
 
     /** The hot-path gate — one volatile read and two map lookups. */
-    fun watches(key: WidgetKey): Boolean {
+    fun watches(key: SignalRef): Boolean {
         val i = index
-        return key in i.valueByWidget || key in i.staleByWidget
+        return key in i.valueBySignal || key in i.staleBySignal
     }
 
     /** The stale sweeper's watched set. */
-    fun watchedStaleKeys(): Set<WidgetKey> = index.staleByWidget.keys
+    fun watchedStaleKeys(): Set<SignalRef> = index.staleBySignal.keys
 
-    fun valueRules(key: WidgetKey): List<LoadedRule> = index.valueByWidget[key] ?: emptyList()
-    fun staleRules(key: WidgetKey): List<LoadedRule> = index.staleByWidget[key] ?: emptyList()
+    fun valueRules(key: SignalRef): List<LoadedRule> = index.valueBySignal[key] ?: emptyList()
+    fun staleRules(key: SignalRef): List<LoadedRule> = index.staleBySignal[key] ?: emptyList()
     fun offlineRules(ownerId: String, deviceId: String): List<LoadedRule> =
         index.offlineByDevice[ownerId to deviceId] ?: emptyList()
 
@@ -118,8 +118,8 @@ class RuleCache {
      * are skipped loudly by the parser and simply absent from the index.
      */
     fun reload() {
-        val value = HashMap<WidgetKey, MutableList<LoadedRule>>()
-        val stale = HashMap<WidgetKey, MutableList<LoadedRule>>()
+        val value = HashMap<SignalRef, MutableList<LoadedRule>>()
+        val stale = HashMap<SignalRef, MutableList<LoadedRule>>()
         val offline = HashMap<Pair<String, String>, MutableList<LoadedRule>>()
         val schedule = HashMap<String, LoadedRule>()
 
@@ -141,18 +141,18 @@ class RuleCache {
                     val rule = LoadedRule(
                         id         = id,
                         ownerId    = row[AutomationRuleTable.ownerId],
-                        widgetId   = row[AutomationRuleTable.triggerWidgetId],
+                        signalKey  = row[AutomationRuleTable.triggerSignalKey],
                         definition = def,
                         state      = states[id] ?: RuleState()
                     )
                     when (val t = def.trigger) {
-                        is Trigger.ValueThreshold -> rule.widgetId?.let {
-                            value.getOrPut(WidgetKey(rule.ownerId, it)) { mutableListOf() }.add(rule)
-                        } ?: logger.error("Rule $id: kind 'value' without trigger_widget_id — ignored")
+                        is Trigger.ValueThreshold -> rule.signalKey?.let {
+                            value.getOrPut(SignalRef(rule.ownerId, it)) { mutableListOf() }.add(rule)
+                        } ?: logger.error("Rule $id: kind 'value' without trigger_signal_key — ignored")
 
-                        is Trigger.WidgetStale -> rule.widgetId?.let {
-                            stale.getOrPut(WidgetKey(rule.ownerId, it)) { mutableListOf() }.add(rule)
-                        } ?: logger.error("Rule $id: kind 'stale' without trigger_widget_id — ignored")
+                        is Trigger.SignalStale -> rule.signalKey?.let {
+                            stale.getOrPut(SignalRef(rule.ownerId, it)) { mutableListOf() }.add(rule)
+                        } ?: logger.error("Rule $id: kind 'stale' without trigger_signal_key — ignored")
 
                         is Trigger.DeviceOffline ->
                             offline.getOrPut(rule.ownerId to t.deviceId) { mutableListOf() }.add(rule)
@@ -172,7 +172,7 @@ class RuleCache {
  * on the first transition, not at rule creation, so a rule that never fires
  * costs no row.
  */
-class SqliteAutomationStateStore {
+class ExposedAutomationStateStore {
     fun save(ruleId: String, state: RuleState, nowMs: Long) {
         transaction {
             val updated = AutomationStateTable.update({ AutomationStateTable.ruleId eq ruleId }) {

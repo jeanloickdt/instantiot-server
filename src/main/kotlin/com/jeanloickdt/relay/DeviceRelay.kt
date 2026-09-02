@@ -23,7 +23,6 @@ package com.jeanloickdt.relay
 import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.device.domain.DeviceRow
-import com.jeanloickdt.widget.data.HistoryAggregators
 import io.ktor.network.selector.SelectorManager
 import io.ktor.network.sockets.Socket
 import io.ktor.network.sockets.aSocket
@@ -102,17 +101,17 @@ fun Application.startDeviceRelay(
     events: ControlEventBroadcaster,
     /**
      * Rule-event producers. Null = publish nothing (self-hosted pays zero).
-     * [watchedWidgets] gates WidgetValue at the producer: without it, 100 % of
+     * [watchedSignals] gates SignalValue at the producer: without it, 100 % of
      * the traffic would be pushed toward an engine that discards 99 % of it.
      * Defaults to "nobody watches" until the rule cache exists.
      */
     sinks: com.jeanloickdt.event.EventSinks? = null,
-    watchedWidgets: (WidgetKey) -> Boolean = { false },
+    watchedSignals: (SignalRef) -> Boolean = { false },
     /** The messages.perMonth ledger — one RAM bump per accepted data frame. */
     usage: com.jeanloickdt.automation.MessageUsageCounter? = null,
     /**
-     * The 2.0 value store. Null keeps the node on the widget path only — a
-     * SIGNAL frame is then dropped rather than half-handled.
+     * Le magasin des valeurs. Null fait tomber toute trame SIGNAL plutot
+     * que de la traiter a moitie.
      */
     signals: com.jeanloickdt.signal.domain.SignalRepository? = null,
     tcpPort: Int = 9001
@@ -156,7 +155,7 @@ fun Application.startDeviceRelay(
                         events           = events,
                         frameRatePerSecond = frameRate,
                         sinks            = sinks,
-                        watchedWidgets   = watchedWidgets,
+                        watchedSignals   = watchedSignals,
                         usage            = usage,
                         signals          = signals,
                         scope            = relayScope
@@ -190,7 +189,7 @@ private suspend fun handleDeviceConnection(
     events: ControlEventBroadcaster,
     frameRatePerSecond: Int,
     sinks: com.jeanloickdt.event.EventSinks?,
-    watchedWidgets: (WidgetKey) -> Boolean,
+    watchedSignals: (SignalRef) -> Boolean,
     usage: com.jeanloickdt.automation.MessageUsageCounter?,
     signals: com.jeanloickdt.signal.domain.SignalRepository?,
     scope: CoroutineScope
@@ -286,7 +285,7 @@ private suspend fun handleDeviceConnection(
             // RAM bump; heartbeats and dropped frames never count.
             if (!isHeartbeat) usage?.increment(device.ownerId)
             // inline + sequential: one bad frame is isolated inside handleDeviceFrame
-            handleDeviceFrame(frame, device, connections, buffers, lastValues, sinks, watchedWidgets, signals)
+            handleDeviceFrame(frame, device, connections, buffers, lastValues, sinks, watchedSignals, signals)
         }
     } catch (e: CancellationException) {
         throw e
@@ -363,7 +362,7 @@ private suspend fun handleDeviceFrame(
     buffers: HistoryBuffers,
     lastValues: LastValueCache,
     sinks: com.jeanloickdt.event.EventSinks? = null,
-    watchedWidgets: (WidgetKey) -> Boolean = { false },
+    watchedSignals: (SignalRef) -> Boolean = { false },
     signals: com.jeanloickdt.signal.domain.SignalRepository? = null
 ) {
     try {
@@ -388,7 +387,7 @@ private suspend fun handleDeviceFrame(
                 // switch alone, which ServerConfig already answers downstream.
                 rawAllowed  = true,
                 sinks       = sinks,
-                watched     = watchedWidgets,
+                watched     = watchedSignals,
                 nowMs       = System.currentTimeMillis()
             )
             // An undeclared address never reaches an app: it is noise, and
@@ -405,57 +404,13 @@ private suspend fun handleDeviceFrame(
             return
         }
 
-        val widgetId      = FrameParser.extractWidgetId(frameBytes) ?: return
-        val payloadBytes  = FrameParser.extractPayload(frameBytes)  ?: return
-        val payloadBase64 = FrameParser.encodePayloadToBase64(payloadBytes)
-        val now           = System.currentTimeMillis()
-
-        // Strict model: the server only serves DECLARED widgets. The app is the
-        // single source of truth — it declares widgets (POST /widgets, which the
-        // cache-aware repo adds to knownWidgetIds), and knownWidgetIds is seeded
-        // from the table at boot. A frame for an UNDECLARED (owner, widget) has
-        // no recipient: no widget on a dashboard awaits it, no row should store
-        // it (a firmware typo, or a widget removed from the dash but left in the
-        // device code). It is noise — drop it before any persistence,
-        // aggregation or live relay.
-        if (WidgetKey(device.ownerId, widgetId) !in buffers.knownWidgetIds) return
-
-        // RAM-only writes — keyed by (ownerId, widgetId), never widgetId alone
-        lastValues.put(device.ownerId, widgetId, payloadBase64, now)
-        buffers.historyBuffer.add(
-            HistoryEntry(widgetId, device.projectId, device.ownerId, payloadBase64, now)
-        )
-
-        // Numeric value → aggregators. GUARD: a non-finite value (NaN / ±Inf,
-        // reachable from a CRC-valid frame whose float bits decode to NaN) would
-        // silently and permanently poison min/max/avg — reject it here.
-        FrameParser.extractNumericValue(frameBytes)?.let { sample ->
-            if (!sample.value.isFinite()) {
-                logger.warn("Dropping non-finite sample widget=$widgetId series=${sample.seriesId} value=${sample.value}")
-                return@let
-            }
-            // Raw tier — the most expensive setting there is per device: it
-            // doubles disk growth (428 vs 202 bytes per frame, measured). Here
-            // the operator's switch alone decides; the cloud edition adds a
-            // per-account plan gate on top.
-            if (ServerConfig.historyRawEnabled) {
-                buffers.numericHistoryBuffer.add(
-                    NumericHistoryEntry(widgetId, device.projectId, device.ownerId, sample.seriesId, sample.value, now)
-                )
-            }
-            // Rule feed — gated at the producer: only widgets a rule actually
-            // watches are published, so with no rules this line costs one
-            // predicate call and nothing else.
-            if (sinks != null && watchedWidgets(WidgetKey(device.ownerId, widgetId))) {
-                sinks.publish(com.jeanloickdt.event.RelayEvent.WidgetValue(
-                    device.ownerId, widgetId, sample.seriesId, sample.value, now
-                ))
-            }
-            HistoryAggregators.minute.collect(widgetId, sample.seriesId, now, sample.value, device.projectId, device.ownerId)
-            HistoryAggregators.hour.collect(widgetId, sample.seriesId, now, sample.value, device.projectId, device.ownerId)
-            HistoryAggregators.day.collect(widgetId, sample.seriesId, now, sample.value, device.projectId, device.ownerId)
-        }
-
+        // Une trame qui n'est ni un battement ni un SIGNAL n'a plus de
+        // destinataire : elle tombe ici, sans bruit et sans ecriture.
+        //
+        // Le modele widget qui vivait ici — une trame adressee par un nom de
+        // croquis, un cache `knownWidgetIds`, trois agregateurs RAM et le type
+        // TYPE_CHART multi-series — est parti avec la table `widgets`.
+        return
         // Broadcast the intact frame to the apps watching this project.
         dispatchToApps(connections, device.projectId, frameBytes)
     } catch (e: CancellationException) {
