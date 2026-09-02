@@ -17,25 +17,15 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// widget/domain/WidgetHistoryAggregateRow.kt
-package com.jeanloickdt.widget.domain
+package com.jeanloickdt.signal.data
 
 /**
- * Row of an aggregation bucket (minute / hour / day).
+ * Miroir de [com.jeanloickdt.widget.data.HistoryAggregators], pour le modèle
+ * signal — un singleton accessible partout, dans le même style que
+ * l'existant, plutôt qu'un objet à faire voyager dans chaque signature.
  *
- * `bucketAt` is the timestamp of the bucket start, aligned to the granularity.
- * `sampleCount` is useful for weighting later aggregations (hour →
- * day) — in practice we do `SUM(avg * count) / SUM(count)`.
+ * Un seul palier, pas trois : voir [SignalMinuteAggregator].
  */
-data class WidgetHistoryAggregateRow(
-    val id: Int,
-    val widgetId: String,
-    val projectId: String,
-    val ownerId: String,
-    val seriesId: String?,
-    val avgValue: Double,
-    val minValue: Double,
-    val maxValue: Double,
-    val sampleCount: Int,
-    val bucketAt: Long
-)
+object SignalAggregators {
+    val minute = SignalMinuteAggregator(bucketSizeMs = 60_000L)
+}

@@ -20,7 +20,7 @@
 package com.jeanloickdt.event
 
 import com.jeanloickdt.relay.LastValueCache
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 
 /**
  * "The sensor went quiet" — the alert IoT is really about.
@@ -56,17 +56,17 @@ import com.jeanloickdt.relay.WidgetKey
  *
  * Not thread-safe, deliberately: one instance, driven by one periodic loop.
  */
-class WidgetStaleSweeper(
+class SignalStaleSweeper(
     private val cache: LastValueCache,
     private val sinks: EventSinks,
     /** Silence threshold. A rule-level per-widget threshold can come later. */
     private val silenceMs: Long = DEFAULT_SILENCE_MS
 ) {
     /** widget → the lastSeenAt we already alerted on. */
-    private val reported = HashMap<WidgetKey, Long>()
+    private val reported = HashMap<SignalRef, Long>()
 
-    /** @return how many [RelayEvent.WidgetStale] were published this pass. */
-    fun sweep(watched: Set<WidgetKey>, nowMs: Long): Int {
+    /** @return how many [RelayEvent.SignalStale] were published this pass. */
+    fun sweep(watched: Set<SignalRef>, nowMs: Long): Int {
         // Widgets that left the watched set must not pin memory forever.
         reported.keys.retainAll(watched)
 
@@ -82,9 +82,9 @@ class WidgetStaleSweeper(
 
             reported[key] = lastSeenAt
             sinks.publish(
-                RelayEvent.WidgetStale(
+                RelayEvent.SignalStale(
                     ownerId = key.ownerId,
-                    widgetId = key.widgetId,
+                    signalKey = key.key,
                     lastSeenAt = lastSeenAt,
                     occurredAt = nowMs
                 )

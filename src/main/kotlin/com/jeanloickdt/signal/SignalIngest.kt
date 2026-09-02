@@ -24,10 +24,8 @@ import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
 import com.jeanloickdt.relay.HistoryBuffers
 import com.jeanloickdt.relay.LastValueCache
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 import com.jeanloickdt.signal.domain.SignalRepository
-import com.jeanloickdt.widget.data.HistoryAggregators
-import com.jeanloickdt.relay.NumericHistoryEntry
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import org.slf4j.LoggerFactory
@@ -72,6 +70,80 @@ private object SignalTableRender {
 }
 
 /**
+ * Diagnostic for frames whose value does not fit the slot they are addressed to.
+ *
+ * This is the other half of [UndeclaredSignals], and it exists for the same
+ * reason: the frame is dropped, so the user must be able to learn why. The
+ * common case is a board that has not been reflashed after a type change —
+ * it keeps sending the old encoding, and without this it would look like the
+ * board simply stopped reporting.
+ *
+ * What is kept is what the app needs to write the sentence: how many, what the
+ * slot expects, what the board actually sent, and when it last happened.
+ * Counting lives in RAM because this sits on the hot path — a refused frame
+ * must never cost a write.
+ */
+object TypeMismatches {
+
+    data class State(
+        val count: Long,
+        val expectedType: String,
+        val receivedType: String,
+        val lastAtMs: Long
+    )
+
+    private val states = ConcurrentHashMap<String, State>()
+
+    fun record(
+        deviceId: String,
+        deviceName: String,
+        address: Int,
+        expectedType: String,
+        receivedType: String,
+        nowMs: Long
+    ): State {
+        val key = signalKey(deviceId, address)
+        val next = states.compute(key) { _, previous ->
+            State(
+                count = (previous?.count ?: 0L) + 1L,
+                expectedType = expectedType,
+                receivedType = receivedType,
+                lastAtMs = nowMs
+            )
+        }!!
+        // Same discipline as UndeclaredSignals: a board in a loop would write a
+        // log line per frame and drown the diagnostic it is trying to give.
+        if (next.count == 1L || next.count % 100L == 0L) {
+            logger.warn(
+                "Device '$deviceName' writes ${SignalTableRender.render(address)} as " +
+                    "'$receivedType' but it is declared '$expectedType' — frame refused " +
+                    "(${next.count} so far). Reflash the board, or change the declared type."
+            )
+        }
+        return next
+    }
+
+    /** What the app shows on the device, and what the admin panel lists. */
+    fun snapshot(): Map<String, State> = states.toMap()
+
+    /** The state of one signal, `null` when it has never sent a bad frame. */
+    fun stateOf(deviceId: String, address: Int): State? = states[signalKey(deviceId, address)]
+
+    /**
+     * Forgets one signal's mismatches.
+     *
+     * Called when the declared type changes: the previous complaint described
+     * the previous declaration, and keeping it would show the user a warning
+     * about a problem they have just fixed.
+     */
+    fun clear(deviceId: String, address: Int) {
+        states.remove(signalKey(deviceId, address))
+    }
+
+    fun reset() = states.clear()
+}
+
+/**
  * A signal's identity as the rest of the server sees it.
  *
  * The automation layer keys on `(ownerId, opaque string)`, and an address alone
@@ -79,6 +151,27 @@ private object SignalTableRender {
  * board, so a rule watching `tt`'s `I5` never fires on `bb`'s.
  */
 fun signalKey(deviceId: String, address: Int): String = "$deviceId:$address"
+
+/**
+ * L'inverse de [signalKey] — reconnaît `deviceId:adresse`.
+ *
+ * Découpe sur le **dernier** deux-points : un identifiant de carte est un
+ * UUID qui peut en contenir, l'adresse jamais. Rend `null` quand la partie
+ * droite n'est pas une adresse valide — ce n'est alors pas une clé de signal
+ * et l'appelant doit refuser plutôt que deviner.
+ *
+ * La même règle vit côté app, dans son fetcher d'historique. Elle est écrite
+ * aux deux bouts parce que les deux doivent reconnaître la forme ; c'est le
+ * genre de duplication que le module de protocole partagé (question ouverte
+ * du brief) supprimerait.
+ */
+fun parseSignalKey(key: String): Pair<String, Int>? {
+    val i = key.lastIndexOf(':')
+    if (i <= 0 || i == key.lastIndex) return null
+    val address = key.substring(i + 1).toIntOrNull() ?: return null
+    if (address !in 0..255) return null
+    return key.substring(0, i) to address
+}
 
 /**
  * The value path for `InstantIoT.write(I0, 23.4)`.
@@ -101,7 +194,7 @@ fun ingestSignalFrame(
     lastValues: LastValueCache,
     rawAllowed: Boolean,
     sinks: EventSinks?,
-    watched: (WidgetKey) -> Boolean,
+    watched: (SignalRef) -> Boolean,
     nowMs: Long
 ): Boolean {
     val address = SignalFrame.address(frameBytes) ?: run {
@@ -117,6 +210,19 @@ fun ingestSignalFrame(
         return false
     }
 
+    // The value must fit the slot. A frame that does not is refused here —
+    // before RAM, before disk, before the live relay — because a float
+    // truncated into an int is a wrong number that looks legitimate, and that
+    // is worse than a hole in the data. The hole is honest: it says the board
+    // and the declaration disagree, and it disappears the moment they agree
+    // again. See SignalTypeCompat for why this is a rank and not a table.
+    val frameTag = SignalFrame.tag(frameBytes)
+    if (frameTag == null || !SignalTypeCompat.accepts(signal.type, frameTag)) {
+        val received = frameTag?.let { SignalTypeCompat.nameOfTag(it) } ?: "unknown"
+        TypeMismatches.record(deviceId, deviceName, address, signal.type, received, nowMs)
+        return false
+    }
+
     val payload = com.jeanloickdt.relay.FrameParser.extractPayload(frameBytes) ?: return false
     val payloadB64 = com.jeanloickdt.relay.FrameParser.encodePayloadToBase64(payload)
     val key = signalKey(deviceId, address)
@@ -125,25 +231,35 @@ fun ingestSignalFrame(
     // widget paints on open, what a rule reads as a condition, and what the
     // stale sweeper watches. Never a history.
     lastValues.put(ownerId, key, payloadB64, nowMs)
-    signals.touch(ownerId, deviceId, address, payloadB64, nowMs)
+    // Buffered, not written through: this is telemetry on the hot path. The
+    // setpoint route uses touch() and keeps its guarantee — see the contract.
+    signals.touchBuffered(ownerId, deviceId, address, payloadB64, nowMs)
 
     val value = SignalFrame.numericValue(frameBytes)
     if (value != null && value.isFinite()) {
         // The rule feed is NOT conditioned on historisation: a rule must be able
         // to watch a signal nobody keeps a trace of.
-        if (sinks != null && watched(WidgetKey(ownerId, key))) {
-            sinks.publish(RelayEvent.WidgetValue(ownerId, key, null, value, nowMs))
+        if (sinks != null && watched(SignalRef(ownerId, key))) {
+            sinks.publish(RelayEvent.SignalValue(ownerId, key, null, value, nowMs))
         }
 
         if (signal.historised) {
-            if (ServerConfig.historyRawEnabled && rawAllowed) {
-                buffers.numericHistoryBuffer.add(
-                    NumericHistoryEntry(key, projectId, ownerId, null, value, nowMs)
+            // Le modèle signal, pas l'ancien : `signal.id` (l'entier de
+            // l'étape 0) plutôt que `key` (la chaîne `"$deviceId:$address"`
+            // qui indexait encore `HistoryAggregators`/`widget_history_*`).
+            // Un seul palier accumulé ici, pas trois — heure et jour restent
+            // vides tant que l'étape 3 (dérivation périodique) n'existe pas ;
+            // voir SignalMinuteAggregator.
+            // L'ordre des trois conditions dit la hierarchie : l'operateur a
+            // le dernier mot, puis le plan, puis la machine. La contre-pression
+            // est consultee EN DERNIER et compte ses refus — sans quoi une
+            // degradation ne se decouvrirait que par une plainte.
+            if (ServerConfig.historyRawEnabled && rawAllowed && buffers.backPressure.allowRaw()) {
+                buffers.signalRawBuffer.offer(
+                    com.jeanloickdt.signal.data.SignalRawEntry(signal.id, ownerId, nowMs, value)
                 )
             }
-            HistoryAggregators.minute.collect(key, null, nowMs, value, projectId, ownerId)
-            HistoryAggregators.hour.collect(key, null, nowMs, value, projectId, ownerId)
-            HistoryAggregators.day.collect(key, null, nowMs, value, projectId, ownerId)
+            com.jeanloickdt.signal.data.SignalAggregators.minute.collect(signal.id, ownerId, nowMs, value)
         }
     }
 

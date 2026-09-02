@@ -37,7 +37,7 @@ private val logger = LoggerFactory.getLogger("EventSinks")
  *
  * | channel | carries | when full |
  * |---|---|---|
- * | [values] | [RelayEvent.WidgetValue] / [RelayEvent.WidgetText] | **drop the oldest** — the next sample is a second away |
+ * | [values] | [RelayEvent.SignalValue] / [RelayEvent.SignalText] | **drop the oldest** — the next sample is a second away |
  * | [discrete] | everything else | **drop + count LOUDLY** — each one has meaning |
  *
  * A stale gauge value lost costs nothing: its successor supersedes it by
@@ -86,7 +86,7 @@ class EventSinks(
      */
     fun publish(event: RelayEvent) {
         when (event) {
-            is RelayEvent.WidgetValue, is RelayEvent.WidgetText ->
+            is RelayEvent.SignalValue, is RelayEvent.SignalText ->
                 // DROP_OLDEST makes trySend always succeed; the eviction is
                 // counted by onUndeliveredElement.
                 values.trySend(event)

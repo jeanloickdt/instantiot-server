@@ -69,9 +69,9 @@ sealed interface RelayEvent {
     // ── ① Data ────────────────────────────────────────────────────────────
 
     /** A numeric sample, already validated finite by the read path. */
-    data class WidgetValue(
+    data class SignalValue(
         override val ownerId: String,
-        val widgetId: String,
+        val signalKey: String,
         val seriesId: String?,
         val value: Double,
         override val occurredAt: Long,
@@ -79,9 +79,9 @@ sealed interface RelayEvent {
     ) : RelayEvent
 
     /** A non-numeric payload — the opaque tier's cousin. */
-    data class WidgetText(
+    data class SignalText(
         override val ownerId: String,
-        val widgetId: String,
+        val signalKey: String,
         val payloadBase64: String,
         override val occurredAt: Long,
         override val depth: Int = 0
@@ -112,9 +112,9 @@ sealed interface RelayEvent {
      * widget since [lastSeenAt]. The failure nobody sees on a dashboard —
      * a dashboard shows the last value, not the fact that it stopped moving.
      */
-    data class WidgetStale(
+    data class SignalStale(
         override val ownerId: String,
-        val widgetId: String,
+        val signalKey: String,
         val lastSeenAt: Long,
         override val occurredAt: Long,
         override val depth: Int = 0

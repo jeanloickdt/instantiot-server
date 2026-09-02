@@ -27,10 +27,11 @@ import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 
-class SqliteSignalRepository : SignalRepository {
+class ExposedSignalRepository : SignalRepository {
 
     override fun find(ownerId: String, deviceId: String, address: Int): SignalRow? = transaction {
         SignalTable.selectAll()
@@ -44,11 +45,25 @@ class SqliteSignalRepository : SignalRepository {
             ?.toRow()
     }
 
+    override fun findById(ownerId: String, id: Long): SignalRow? = transaction {
+        SignalTable.selectAll()
+            .where { (SignalTable.id eq id) and (SignalTable.ownerId eq ownerId) }
+            .limit(1)
+            .firstOrNull()
+            ?.toRow()
+    }
+
     override fun listByDevice(ownerId: String, deviceId: String): List<SignalRow> = transaction {
         SignalTable.selectAll()
             .where { (SignalTable.ownerId eq ownerId) and (SignalTable.deviceId eq deviceId) }
             .orderBy(SignalTable.address)
             .map { it.toRow() }
+    }
+
+    override fun countHistorised(ownerId: String): Int = transaction {
+        SignalTable.selectAll()
+            .where { (SignalTable.ownerId eq ownerId) and (SignalTable.historised eq true) }
+            .count().toInt()
     }
 
     override fun listByOwner(ownerId: String): List<SignalRow> = transaction {
@@ -69,10 +84,9 @@ class SqliteSignalRepository : SignalRepository {
         decimals: Int,
         minValue: Double?,
         maxValue: Double?,
-        nature: String,
         historised: Boolean,
         replayOnConnect: Boolean,
-        direction: String,
+        automationVisible: Boolean,
         nowMs: Long
     ): Boolean {
         if (address < SignalTable.ADDRESS_MIN || address > SignalTable.ADDRESS_MAX) return false
@@ -98,10 +112,9 @@ class SqliteSignalRepository : SignalRepository {
                 it[SignalTable.decimals]   = decimals
                 it[SignalTable.minValue]   = minValue
                 it[SignalTable.maxValue]   = maxValue
-                it[SignalTable.nature] = nature
                 it[SignalTable.historised] = historised
                 it[SignalTable.replayOnConnect] = replayOnConnect
-                it[SignalTable.direction]  = direction
+                it[SignalTable.automationVisible] = automationVisible
                 it[SignalTable.createdAt]  = nowMs
                 it[SignalTable.updatedAt]  = nowMs
             }
@@ -132,7 +145,7 @@ class SqliteSignalRepository : SignalRepository {
         maxValue: Double?,
         historised: Boolean?,
         replayOnConnect: Boolean?,
-        direction: String?,
+        automationVisible: Boolean?,
         type: String?,
         nowMs: Long
     ): Boolean = transaction {
@@ -161,7 +174,7 @@ class SqliteSignalRepository : SignalRepository {
             if (maxValue != null)   row[SignalTable.maxValue] = maxValue
             if (historised != null) row[SignalTable.historised] = historised
             if (replayOnConnect != null) row[SignalTable.replayOnConnect] = replayOnConnect
-            if (direction != null)  row[SignalTable.direction] = direction
+            if (automationVisible != null) row[SignalTable.automationVisible] = automationVisible
             if (typeChanged) {
                 row[SignalTable.type] = type!!
                 // The bytes were encoded with the OLD tag. Replaying them
@@ -188,6 +201,18 @@ class SqliteSignalRepository : SignalRepository {
         }
     }
 
+    override fun deleteByDevices(ownerId: String, deviceIds: List<String>): Int {
+        // Le garde-fou de la liste vide : `inList emptyList()` produit `IN ()`,
+        // que la plupart des moteurs refusent. Un projet sans carte echouerait
+        // a se supprimer. Meme precaution que `deleteAllByDevices`.
+        if (deviceIds.isEmpty()) return 0
+        return transaction {
+            SignalTable.deleteWhere {
+                (SignalTable.ownerId eq ownerId) and (SignalTable.deviceId inList deviceIds)
+            }
+        }
+    }
+
     override fun deleteByOwner(ownerId: String): Int = transaction {
         SignalTable.deleteWhere { SignalTable.ownerId eq ownerId }
     }
@@ -209,7 +234,29 @@ class SqliteSignalRepository : SignalRepository {
         } > 0
     }
 
+    /**
+     * The whole batch inside ONE transaction.
+     *
+     * This is the reason the buffer exists: the cost of storing a last value is
+     * not the `UPDATE`, it is the transaction around it — one round trip and
+     * one commit, per transaction. Folding the round's values into one keeps
+     * that price fixed however busy the relay gets.
+     */
+    override fun touchAll(batch: List<SignalTouch>): Int = transaction {
+        batch.count { t ->
+            SignalTable.update({
+                (SignalTable.ownerId eq t.ownerId) and
+                    (SignalTable.deviceId eq t.deviceId) and
+                    (SignalTable.address eq t.address)
+            }) {
+                it[lastPayload] = t.payloadB64
+                it[lastSeenAt]  = t.atMs
+            } > 0
+        }
+    }
+
     private fun ResultRow.toRow() = SignalRow(
+        id          = this[SignalTable.id],
         ownerId     = this[SignalTable.ownerId],
         deviceId    = this[SignalTable.deviceId],
         address     = this[SignalTable.address],
@@ -219,10 +266,9 @@ class SqliteSignalRepository : SignalRepository {
         decimals    = this[SignalTable.decimals],
         minValue    = this[SignalTable.minValue],
         maxValue    = this[SignalTable.maxValue],
-        nature      = this[SignalTable.nature],
         historised  = this[SignalTable.historised],
         replayOnConnect = this[SignalTable.replayOnConnect],
-        direction   = this[SignalTable.direction],
+        automationVisible = this[SignalTable.automationVisible],
         lastPayload = this[SignalTable.lastPayload],
         lastSeenAt  = this[SignalTable.lastSeenAt]
     )

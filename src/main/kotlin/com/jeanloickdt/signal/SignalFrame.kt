@@ -62,15 +62,14 @@ object SignalFrame {
      *
      * Une carte qui se reconnecte reçoit sa dernière valeur, et la trame est
      * autrement identique à ce qu'un doigt vient d'écrire. Sans marque, le
-     * bloc d'un geste — `ISimpleButton(I5)` — se déclencherait au
+     * bloc d'un widget — `ISimpleButton(I5)` — se déclencherait au
      * redémarrage, sans que personne n'ait appuyé. Un geste ne se rejoue pas.
      *
      * Dans le tag et non dans le TYPE : un rappel n'est pas un autre genre de
      * message, c'est le même signal envoyé pour une autre raison. Les tags
      * vont de 1 à 4, les bits hauts étaient libres.
      *
-     * L'app ne le voit jamais — [forApps] reconstruit à partir de [tag], qui
-     * l'a déjà masqué.
+     * L'app ne le voit jamais — [forApps] reconstruit sans lui.
      */
     const val TAG_RESTORE: Int = 0x80
 
@@ -90,7 +89,7 @@ object SignalFrame {
     fun address(frame: ByteArray): Int? = try {
         // Le TYPE d'abord : un EVENT a exactement la même disposition, et sans
         // ce contrôle un appui de bouton se lirait comme une mesure — la
-        // symétrie de [com.jeanloickdt.relay.EventFrame.address].
+        // L'adresse se lit là où un nom de widget se trouvait.
         if (!isSignal(frame)) return null
         var o = BODY
         val deviceCount = frame[o++].toInt() and 0xFF
@@ -104,12 +103,13 @@ object SignalFrame {
         null
     }
 
+    /** The type tag, read from the EVENT slot. */
     /**
      * Le TYPE DE VALEUR porté par la trame — sans le drapeau du rappel.
      *
-     * Masqué ici plutôt qu'à chaque appel : plusieurs lecteurs interrogent ce
-     * tag pour savoir comment décoder, et aucun n'a à connaître l'existence du
-     * drapeau. Celui qui veut la question pose [isRestore].
+     * Masqué ici plutôt qu'à chaque appel : six lecteurs interrogent ce tag
+     * pour savoir comment décoder, et aucun n'a à connaître l'existence du
+     * drapeau. Celui qui veut la question posent [isRestore].
      */
     fun tag(frame: ByteArray): Int? = rawTag(frame)?.let { it and 0x7F }
 
