@@ -75,7 +75,22 @@ class RuleRoutesTest {
         cache = RuleCache()
     }
 
-    private fun ApplicationTestBuilder.installTestApp(policies: RulePolicies = RulePolicies()) {
+    /**
+     * Le harnais cable LES TROIS canaux.
+     *
+     * La plupart de ces épreuves portent sur le CRUD, le cloisonnement entre
+     * comptes et les quotas — pas sur la disponibilité d'un canal. Elles
+     * utilisent `pushDef()` comme décor, et hériter du défaut (qui exclut
+     * `PUSH`) les ferait échouer pour une raison qui n'est pas la leur. Les
+     * épreuves qui portent VRAIMENT sur la frontière passent leur politique.
+     */
+    private fun ApplicationTestBuilder.installTestApp(
+        policies: RulePolicies = RulePolicies(
+            allowedActionTypes = setOf(
+                RuleDefinition.TYPE_PUSH, RuleDefinition.TYPE_EMAIL, RuleDefinition.TYPE_COMMAND
+            )
+        )
+    ) {
         application {
             install(ContentNegotiation) { json() }
             configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
@@ -267,12 +282,32 @@ class RuleRoutesTest {
             "the refusal must say WHY — not enqueue rows the worker can only mark DEAD")
     }
 
+    @Test
+    fun `le defaut EXCLUT push — un defaut permissif se paie toujours du meme cote`() = testApplication {
+        // La faute que le depot du nuage a reellement commise en recopiant ce
+        // cablage : il avait perdu le parametre, herite du defaut, et une regle
+        // de notification y mourait en silence chez le livreur.
+        installTestApp(RulePolicies())   // LE defaut, celui dont on peut heriter
+        val (_, token, ids) = account("defaut")
+
+        val res = client.createRule(token, ids.second, pushDef())
+        assertEquals(HttpStatusCode.BadRequest, res.status,
+            "sans expediteur declare, PUSH ne doit pas etre creable")
+    }
+
     // ── Le portail de quota (câblé côté cloud sur enforceStock) ───────────
 
     @Test
     fun `the quota gate can refuse, and sees the right classification`() = testApplication {
         var asked: Pair<Boolean, Int>? = null
-        installTestApp(RulePolicies(quotaGate = { call, _, isAutomation, current ->
+        // Les trois canaux : cette épreuve porte sur le portail de quota, et sa
+        // règle est volontairement PUSH-seule — c'est ce qui la classe en
+        // NOTIFICATION plutôt qu'en automatisation.
+        installTestApp(RulePolicies(
+            allowedActionTypes = setOf(
+                RuleDefinition.TYPE_PUSH, RuleDefinition.TYPE_EMAIL, RuleDefinition.TYPE_COMMAND
+            ),
+            quotaGate = { call, _, isAutomation, current ->
             asked = isAutomation to current()
             call.respondQuota()
             false
