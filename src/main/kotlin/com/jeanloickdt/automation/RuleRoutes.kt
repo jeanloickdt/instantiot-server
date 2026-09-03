@@ -53,16 +53,14 @@ import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 
 /**
- * Le nom que ce champ porte SUR LE FIL.
+ * Le nom que ce champ porte SUR LE FIL — et qui dit enfin ce qu'il transporte :
+ * une CLÉ DE SIGNAL (`deviceId:adresse`), jamais un widget.
  *
- * Le code dit `triggerSignalKey` — c'est ce qu'il contient depuis que les
- * regles surveillent des signaux. Le JSON dit encore `triggerWidgetId`, parce
- * que les apps deja installees l'envoient et le lisent : renommer le champ
- * ici ferait echouer la creation de regles sur le terrain, sans rien
- * apprendre a personne. Le renommage du fil se fait avec une version d'app,
- * pas avec un nettoyage de serveur.
+ * Le champ s'est appelé `triggerWidgetId` le temps où l'app ne parlait pas
+ * encore à `/api/rules`. Aucune version publiée n'en a jamais lu ni écrit une
+ * ligne — corrigé avant que l'écran naissant des règles ne fige le mauvais mot.
  */
-private const val WIRE_TRIGGER = "triggerWidgetId"
+private const val WIRE_TRIGGER = "triggerSignalKey"
 
 @Serializable
 data class RuleResponse(
@@ -296,7 +294,7 @@ private fun validateRule(
     when (definition.trigger) {
         is Trigger.ValueThreshold, is Trigger.SignalStale -> {
             if (triggerSignalKey == null) {
-                return HttpStatusCode.BadRequest to "This rule kind needs triggerWidgetId"
+                return HttpStatusCode.BadRequest to "This rule kind needs triggerSignalKey"
             }
             // La cible d'une règle est désormais une clé de SIGNAL —
             // `deviceId:adresse`, exactement ce que l'ingestion publie dans
@@ -305,7 +303,7 @@ private fun validateRule(
             // c'est une clé qui n'en a jamais été une.
             val parsed = com.jeanloickdt.signal.parseSignalKey(triggerSignalKey)
                 ?: return HttpStatusCode.BadRequest to
-                    "triggerWidgetId must be a signal key (deviceId:address)"
+                    "triggerSignalKey must be a signal key (deviceId:address)"
             if (signals.find(ownerId, parsed.first, parsed.second) == null) {
                 // 404, jamais 403 — confirmer l'existence serait un bit de
                 // l'inventaire de quelqu'un d'autre.
