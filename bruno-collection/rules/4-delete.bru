@@ -1,0 +1,15 @@
+meta {
+  name: 4. Supprimer une regle
+  type: http
+  seq: 4
+}
+
+delete {
+  url: {{baseUrl}}/api/rules/{{ruleId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

@@ -25,7 +25,7 @@ import com.jeanloickdt.automation.data.ScheduledJobTable
 import com.jeanloickdt.common.ApiError
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.relay.FrameParser
-import com.jeanloickdt.widget.domain.WidgetRepository
+import com.jeanloickdt.signal.domain.SignalRepository
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
@@ -40,6 +40,7 @@ import io.ktor.server.routing.post
 import io.ktor.server.application.ApplicationCall
 import java.util.Base64
 import java.util.UUID
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -51,13 +52,25 @@ import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
 
+/**
+ * Le nom que ce champ porte SUR LE FIL.
+ *
+ * Le code dit `triggerSignalKey` — c'est ce qu'il contient depuis que les
+ * regles surveillent des signaux. Le JSON dit encore `triggerWidgetId`, parce
+ * que les apps deja installees l'envoient et le lisent : renommer le champ
+ * ici ferait echouer la creation de regles sur le terrain, sans rien
+ * apprendre a personne. Le renommage du fil se fait avec une version d'app,
+ * pas avec un nettoyage de serveur.
+ */
+private const val WIRE_TRIGGER = "triggerWidgetId"
+
 @Serializable
 data class RuleResponse(
     val id: String,
     val name: String,
     val enabled: Boolean,
     val triggerKind: String,
-    val triggerWidgetId: String?,
+    @SerialName(WIRE_TRIGGER) val triggerSignalKey: String?,
     /** The engine-owned JSON, verbatim — the app round-trips it untouched. */
     val definition: String,
     /** Live state, for the "currently firing" badge. */
@@ -70,7 +83,7 @@ data class RuleResponse(
 data class CreateRuleRequest(
     val name: String,
     /** Required for value/stale kinds; ignored for offline (device-keyed). */
-    val triggerWidgetId: String? = null,
+    @SerialName(WIRE_TRIGGER) val triggerSignalKey: String? = null,
     val definition: String
 )
 
@@ -78,21 +91,19 @@ data class CreateRuleRequest(
 data class UpdateRuleRequest(
     val name: String? = null,
     val enabled: Boolean? = null,
-    val triggerWidgetId: String? = null,
+    @SerialName(WIRE_TRIGGER) val triggerSignalKey: String? = null,
     val definition: String? = null
 )
 
 /**
- * Cloud-only concerns, injected so this file stays byte-identical across
- * editions:
+ * Les regles de decision, injectees plutot que codees en dur :
  *
- *  - [quotaGate] — the plan quotas (`automations.max` / `notifications.max`).
- *    The plan module lives only in the cloud repo; the cloud wires this to
- *    `enforceStock`, the default always allows.
- *  - [allowedActionTypes] — the OFFRE boundary. Self-host wires
- *    `{EMAIL, COMMAND}`: a PUSH rule there would enqueue rows the worker can
- *    only mark DEAD (no Firebase credentials can ship in a public repo), so
- *    it is refused AT CREATION with a message that says why.
+ *  - [quotaGate] — les quotas du plan (`automations.max` /
+ *    `notifications.max`), cable sur `enforceStock`. Le defaut laisse passer.
+ *  - [allowedActionTypes] — la frontiere de l'OFFRE. Un type d'action qui
+ *    n'est pas cable enfilerait des lignes que le livreur ne peut que marquer
+ *    DEAD ; il est donc refuse A LA CREATION, avec un message qui dit
+ *    pourquoi.
  */
 class RulePolicies(
     val allowedActionTypes: Set<String> = setOf(
@@ -109,7 +120,7 @@ class RulePolicies(
  */
 fun Route.ruleRoutes(
     cache: RuleCache,
-    widgetRepository: WidgetRepository,
+    signalRepository: SignalRepository,
     deviceRepository: DeviceRepository,
     policies: RulePolicies = RulePolicies()
 ) {
@@ -137,7 +148,7 @@ fun Route.ruleRoutes(
                 is RuleDefinition.Companion.ParseOutcome.Ok -> r.definition
             }
 
-            validateRule(ownerId, body.triggerWidgetId, definition, widgetRepository, deviceRepository, policies)
+            validateRule(ownerId, body.triggerSignalKey, definition, signalRepository, deviceRepository, policies)
                 ?.let { return@post call.respond(it.first, ApiError(it.second)) }
 
             // The quota: rules with a COMMAND action count as automations,
@@ -157,7 +168,7 @@ fun Route.ruleRoutes(
                     it[AutomationRuleTable.name]      = name
                     it[enabled]                       = true
                     it[triggerKind]                   = kindOf(definition)
-                    it[triggerWidgetId]               = widgetIdFor(definition, body.triggerWidgetId)
+                    it[triggerSignalKey]               = signalKeyFor(definition, body.triggerSignalKey)
                     it[AutomationRuleTable.definition] = body.definition
                     it[createdAt]                     = now
                     it[updatedAt]                     = now
@@ -180,18 +191,18 @@ fun Route.ruleRoutes(
                 ?: return@patch call.respond(HttpStatusCode.NotFound, ApiError("Rule not found"))
 
             var newKind: String? = null
-            var newWidget: String? = null
+            var newTrigger: String? = null
             if (body.definition != null) {
                 val definition = when (val r = RuleDefinition.parse(body.definition)) {
                     is RuleDefinition.Companion.ParseOutcome.Invalid ->
                         return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Invalid definition: ${r.reason}"))
                     is RuleDefinition.Companion.ParseOutcome.Ok -> r.definition
                 }
-                val widgetArg = body.triggerWidgetId ?: existing.triggerWidgetId
-                validateRule(ownerId, widgetArg, definition, widgetRepository, deviceRepository, policies)
+                val triggerArg = body.triggerSignalKey ?: existing.triggerSignalKey
+                validateRule(ownerId, triggerArg, definition, signalRepository, deviceRepository, policies)
                     ?.let { return@patch call.respond(it.first, ApiError(it.second)) }
                 newKind = kindOf(definition)
-                newWidget = widgetIdFor(definition, widgetArg)
+                newTrigger = signalKeyFor(definition, triggerArg)
             }
 
             transaction {
@@ -202,7 +213,7 @@ fun Route.ruleRoutes(
                     body.enabled?.let { e -> it[enabled] = e }
                     body.definition?.let { d -> it[definition] = d }
                     newKind?.let { k -> it[triggerKind] = k }
-                    if (body.definition != null) it[triggerWidgetId] = newWidget
+                    if (body.definition != null) it[triggerSignalKey] = newTrigger
                     it[updatedAt] = System.currentTimeMillis()
                 }
             }
@@ -252,9 +263,9 @@ fun Route.ruleRoutes(
  */
 private fun validateRule(
     ownerId: String,
-    triggerWidgetId: String?,
+    triggerSignalKey: String?,
     definition: RuleDefinition,
-    widgets: WidgetRepository,
+    signals: SignalRepository,
     devices: DeviceRepository,
     policies: RulePolicies
 ): Pair<HttpStatusCode, String>? {
@@ -265,17 +276,28 @@ private fun validateRule(
     }
 
     when (definition.trigger) {
-        is Trigger.ValueThreshold, is Trigger.WidgetStale -> {
-            if (triggerWidgetId == null) {
+        is Trigger.ValueThreshold, is Trigger.SignalStale -> {
+            if (triggerSignalKey == null) {
                 return HttpStatusCode.BadRequest to "This rule kind needs triggerWidgetId"
             }
-            if (widgets.findById(ownerId, triggerWidgetId) == null) {
-                return HttpStatusCode.NotFound to "Widget not found"
+            // La cible d'une règle est désormais une clé de SIGNAL —
+            // `deviceId:adresse`, exactement ce que l'ingestion publie dans
+            // le flux des règles. Une clé qui ne s'analyse pas est refusée
+            // au lieu d'être cherchée : ce n'est pas un signal introuvable,
+            // c'est une clé qui n'en a jamais été une.
+            val parsed = com.jeanloickdt.signal.parseSignalKey(triggerSignalKey)
+                ?: return HttpStatusCode.BadRequest to
+                    "triggerWidgetId must be a signal key (deviceId:address)"
+            if (signals.find(ownerId, parsed.first, parsed.second) == null) {
+                // 404, jamais 403 — confirmer l'existence serait un bit de
+                // l'inventaire de quelqu'un d'autre.
+                return HttpStatusCode.NotFound to "Signal not found"
             }
         }
         is Trigger.DeviceOffline -> {
-            val d = devices.findById(definition.trigger.deviceId)
-            if (d == null || d.ownerId != ownerId) {
+            // 404, jamais 403 — voir plus bas. La signature porte deja
+            // l'appartenance : `findById` ne resout que ce qui est au bon compte.
+            if (devices.findById(ownerId, definition.trigger.deviceId) == null) {
                 // 404, not 403 — never reveal another tenant's device exists.
                 return HttpStatusCode.NotFound to "Device not found"
             }
@@ -289,22 +311,29 @@ private fun validateRule(
     definition.actions.filter { it.type == RuleDefinition.TYPE_COMMAND }.forEach { spec ->
         val deviceId = spec.params["deviceId"]?.jsonPrimitive?.content
             ?: return HttpStatusCode.BadRequest to "COMMAND needs deviceId"
-        val device = devices.findById(deviceId)
-        if (device == null || device.ownerId != ownerId) {
+        if (devices.findById(ownerId, deviceId) == null) {
             return HttpStatusCode.NotFound to "Device not found"
         }
 
-        // The most frequent loop, refused at the door: a COMMAND writing the
-        // very widget the rule watches — the rule feeds itself through the
-        // board. The command frame carries its widget id; decode and compare.
+        // La boucle la plus frequente, refusee a la porte : une COMMAND qui
+        // ecrit le signal meme que la regle surveille — la regle se nourrit
+        // elle-meme, en passant par le materiel, la ou `depth` ne peut pas
+        // suivre.
+        //
+        // La comparaison se fait sur (carte, adresse), pas sur une chaine.
+        // Le modele widget comparait le nom porte par la trame au declencheur
+        // de la regle ; depuis que le declencheur est une cle de signal, ces
+        // deux chaines ne peuvent plus etre egales et la garde ne se serait
+        // plus jamais declenchee.
         val payloadB64 = spec.params["payloadB64"]?.jsonPrimitive?.content
-        if (payloadB64 != null && triggerWidgetId != null) {
+        val watched = triggerSignalKey?.let { com.jeanloickdt.signal.parseSignalKey(it) }
+        if (payloadB64 != null && watched != null && deviceId == watched.first) {
             val frame = runCatching { Base64.getDecoder().decode(payloadB64) }.getOrNull()
             if (frame != null && FrameParser.isValid(frame) &&
-                FrameParser.extractWidgetId(frame) == triggerWidgetId
+                com.jeanloickdt.signal.SignalFrame.address(frame) == watched.second
             ) {
                 return HttpStatusCode.BadRequest to
-                    "This COMMAND writes the widget the rule watches — the rule would trigger itself"
+                    "This COMMAND writes the signal the rule watches — the rule would trigger itself"
             }
         }
     }
@@ -333,11 +362,11 @@ private fun materializeSchedule(ruleId: String, definition: RuleDefinition, enab
 private fun kindOf(d: RuleDefinition): String = when (d.trigger) {
     is Trigger.ValueThreshold -> "value"
     is Trigger.DeviceOffline  -> "offline"
-    is Trigger.WidgetStale    -> "stale"
+    is Trigger.SignalStale    -> "stale"
     is Trigger.Schedule       -> "schedule"
 }
 
-private fun widgetIdFor(d: RuleDefinition, arg: String?): String? =
+private fun signalKeyFor(d: RuleDefinition, arg: String?): String? =
     when (d.trigger) {
         is Trigger.DeviceOffline, is Trigger.Schedule -> null   // not widget-keyed
         else -> arg
@@ -347,8 +376,8 @@ private fun findRule(ownerId: String, ruleId: String) = transaction {
     AutomationRuleTable.selectAll()
         .where { (AutomationRuleTable.id eq ruleId) and (AutomationRuleTable.ownerId eq ownerId) }
         .singleOrNull()
-        ?.let { it[AutomationRuleTable.id] to it[AutomationRuleTable.triggerWidgetId] }
-        ?.let { (id, w) -> object { val id = id; val triggerWidgetId = w } }
+        ?.let { it[AutomationRuleTable.id] to it[AutomationRuleTable.triggerSignalKey] }
+        ?.let { (id, w) -> object { val id = id; val triggerSignalKey = w } }
 }
 
 private fun countRules(ownerId: String, automation: Boolean): Int = transaction {
@@ -375,7 +404,7 @@ private fun listRules(ownerId: String): List<RuleResponse> = transaction {
                 name            = row[AutomationRuleTable.name],
                 enabled         = row[AutomationRuleTable.enabled],
                 triggerKind     = row[AutomationRuleTable.triggerKind],
-                triggerWidgetId = row[AutomationRuleTable.triggerWidgetId],
+                triggerSignalKey = row[AutomationRuleTable.triggerSignalKey],
                 definition      = row[AutomationRuleTable.definition],
                 triggered       = state?.first ?: false,
                 lastFiredAt     = state?.second,

@@ -1,0 +1,26 @@
+meta {
+  name: 5. Regenerer le jeton
+  type: http
+  seq: 5
+}
+
+post {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/renew-token
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Coupe la session TCP en cours : l'ancien jeton cesse d'etre valable
+  immediatement. C'est ce qu'on fait quand un jeton a fuite.
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("deviceToken", res.body.token);
+  }
+}

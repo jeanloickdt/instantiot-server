@@ -1,0 +1,21 @@
+meta {
+  name: Sante des automatisations
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/api/admin/automation/health
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Le serveur est le seul a pouvoir voir une panne de livraison
+  SILENCIEUSE : des actions qui s'accumulent, une plus ancienne qui
+  vieillit, des DEAD qui montent.
+}

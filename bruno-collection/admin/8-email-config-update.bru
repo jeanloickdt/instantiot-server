@@ -1,0 +1,23 @@
+meta {
+  name: Modifier la configuration e-mail
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/api/admin/email-config
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "apiKey": "xkeysib-…",
+    "from": "noreply@exemple.fr",
+    "alertTo": "moi@exemple.fr"
+  }
+}

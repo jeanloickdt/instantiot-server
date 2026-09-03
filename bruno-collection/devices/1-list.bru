@@ -1,0 +1,15 @@
+meta {
+  name: 1. Lister les cartes
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/devices
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

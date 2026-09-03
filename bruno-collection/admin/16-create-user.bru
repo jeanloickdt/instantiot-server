@@ -1,0 +1,32 @@
+meta {
+  name: Creer un compte
+  type: http
+  seq: 16
+}
+
+post {
+  url: {{baseUrl}}/api/admin/users
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "username": "bob",
+    "password": "provisoire-8-car",
+    "role": "user"
+  }
+}
+
+docs {
+  Le scenario pour lequel ca existe : l'inscription reste FERMEE et
+  l'administrateur cree les comptes lui-meme.
+
+  Le mot de passe est provisoire — `passwordChanged=false` force le
+  changement a la premiere connexion, donc l'administrateur ne connait
+  jamais durablement le mot de passe de quelqu'un.
+}

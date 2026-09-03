@@ -46,27 +46,65 @@ interface PresenceStore {
  * before — the REST device lists keep reading the DB unchanged.
  */
 class DbBackedPresenceStore(
-    private val deviceRepository: DeviceRepository
+    /**
+     * Le contrat de PRESENCE, pas le depot entier.
+     *
+     * Ces ecritures ne portent pas de proprietaire — elles sont internes au
+     * relais, pour une carte qu'il vient d'authentifier par son jeton. Dependre
+     * du contrat etroit rend cette absence visible ici, au lieu de la laisser
+     * passer pour un oubli de la regle.
+     */
+    private val deviceRepository: com.jeanloickdt.device.domain.DevicePresenceWriter
 ) : PresenceStore {
 
     private val online = ConcurrentHashMap.newKeySet<String>()
     private val lastSeen = ConcurrentHashMap<String, Long>()
 
+    /**
+     * Boards whose presence has changed in RAM and not yet reached the table.
+     *
+     * The reason this exists is one realistic incident, not a benchmark: a
+     * regional carrier hiccups, three thousand boards drop and come back inside
+     * the same minute, and the old code turned that into **six thousand
+     * synchronous writes** — while the five-second flush was writing too. The
+     * network event became a database event.
+     *
+     * Presence was already held in RAM; what was missing was the patience. Now
+     * the truth is in memory the instant it changes, and the table catches up
+     * on the next round.
+     */
+    private val dirty = ConcurrentHashMap<String, Boolean>()
+
     override suspend fun markOnline(deviceId: String, at: Long) {
         online.add(deviceId)
         lastSeen[deviceId] = at
-        withContext(Dispatchers.IO) {
-            deviceRepository.updateOnlineStatus(deviceId, isOnline = true)
-            deviceRepository.updateLastSeen(deviceId, at)
-        }
+        dirty[deviceId] = true
     }
 
     override suspend fun markOffline(deviceId: String) {
         online.remove(deviceId)
-        withContext(Dispatchers.IO) {
-            deviceRepository.updateOnlineStatus(deviceId, isOnline = false)
-        }
+        dirty[deviceId] = false
     }
+
+    /**
+     * Writes the pending changes, and returns how many.
+     *
+     * Drained before writing so a board that reconnects mid-flush is recorded
+     * on the next round rather than lost with a cleared key. A reconnection
+     * storm therefore costs one round of writes, not two per board.
+     */
+    suspend fun flushPending(): Int = withContext(com.jeanloickdt.common.ServerDispatchers.storage) {
+        if (dirty.isEmpty()) return@withContext 0
+        val batch = dirty.keys.toList().mapNotNull { id -> dirty.remove(id)?.let { id to it } }
+        batch.forEach { (deviceId, isOnline) ->
+            deviceRepository.updateOnlineStatus(deviceId, isOnline)
+            if (isOnline) lastSeen[deviceId]?.let { deviceRepository.updateLastSeen(deviceId, it) }
+        }
+        batch.size
+    }
+
+    /** How many presence changes are waiting — for the flush loop's log line. */
+    fun pendingCount(): Int = dirty.size
 
     override fun isOnline(deviceId: String): Boolean = deviceId in online
 

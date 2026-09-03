@@ -19,24 +19,16 @@
 
 package com.jeanloickdt.automation
 
-import com.jeanloickdt.auth.HmacTokenService
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.projectRepository
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 import com.jeanloickdt.userRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import com.jeanloickdt.widgetRepository
+import com.jeanloickdt.signalRepository
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -56,7 +48,6 @@ import io.ktor.server.response.respondText
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.ApplicationTestBuilder
 import io.ktor.server.testing.testApplication
-import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -76,40 +67,34 @@ import kotlin.test.assertTrue
  */
 class RuleRoutesTest {
 
-    private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
     private lateinit var cache: RuleCache
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-ruleroutes-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = db
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
         cache = RuleCache()
     }
 
     private fun ApplicationTestBuilder.installTestApp(policies: RulePolicies = RulePolicies()) {
         application {
             install(ContentNegotiation) { json() }
-            configureAuth(userRepository, tokenService)
-            routing { ruleRoutes(cache, widgetRepository, deviceRepository, policies) }
+            configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
+            routing { ruleRoutes(cache, signalRepository, deviceRepository, policies) }
         }
     }
 
     private fun account(username: String): Triple<String, String, Pair<String, String>> {
         val id = userRepository.create(username, BCrypt.hashpw("secret123", BCrypt.gensalt()), "user", true)
-        val projectId = projectRepository.create("p-$username", id)
+        val projectId = projectRepository.create(id, "p-$username").id
         val deviceId = deviceRepository.create(
-            name = "board", projectId = projectId, ownerId = id, tokenHash = "h-$username",
+            name         = "board", projectId = projectId, ownerId = id, tokenHash = "h-$username",
             deviceType = com.jeanloickdt.device.domain.DeviceType.ESP32,
             connectivity = com.jeanloickdt.device.domain.DeviceConnectivity.WIFI
-        )
-        widgetRepository.register("w-$username", projectId, id, "gauge")
-        return Triple(id, tokenService.issue(id, 0), deviceId to "w-$username")
+        ).id
+        // La cible d'une règle est une clé de SIGNAL — `deviceId:adresse` —
+        // depuis le retrait du modèle widget.
+        signalRepository.create(id, deviceId, 0, "s0", "float", nowMs = 0L)
+        return Triple(id, com.jeanloickdt.auth.LocalTestAuth.token(id, tokenVersion = 0), deviceId to "$deviceId:0")
     }
 
     private suspend fun io.ktor.client.HttpClient.createRule(
@@ -132,13 +117,13 @@ class RuleRoutesTest {
         val (ownerId, token, ids) = account("alice")
         val (_, widgetId) = ids
 
-        assertFalse(cache.watches(WidgetKey(ownerId, widgetId)), "before: nobody watches")
+        assertFalse(cache.watches(SignalRef(ownerId, widgetId)), "before: nobody watches")
 
         val created = client.createRule(token, widgetId, pushDef())
         assertEquals(HttpStatusCode.Created, created.status, created.bodyAsText())
         val ruleId = Json.parseToJsonElement(created.bodyAsText()).jsonObject["id"]!!.jsonPrimitive.content
 
-        assertTrue(cache.watches(WidgetKey(ownerId, widgetId)),
+        assertTrue(cache.watches(SignalRef(ownerId, widgetId)),
             "the mutation reloaded the cache — the hot path starts publishing THIS instant")
 
         val list = client.get("/api/rules") { header(HttpHeaders.Authorization, "Bearer $token") }
@@ -150,7 +135,7 @@ class RuleRoutesTest {
             setBody("""{"enabled":false}""")
         }
         assertEquals(HttpStatusCode.OK, disabled.status)
-        assertFalse(cache.watches(WidgetKey(ownerId, widgetId)),
+        assertFalse(cache.watches(SignalRef(ownerId, widgetId)),
             "a disabled rule stops the producer too — the frame costs a predicate again")
 
         val deleted = client.delete("/api/rules/$ruleId") { header(HttpHeaders.Authorization, "Bearer $token") }
@@ -227,39 +212,44 @@ class RuleRoutesTest {
     // ── La garde pour l'utilisateur lui-même ──────────────────────────────
 
     @Test
-    fun `a COMMAND writing the watched widget is refused — the rule would feed itself`() = testApplication {
+    fun `a COMMAND writing the watched signal is refused — the rule would feed itself`() {
+        // La boucle passe par le MATERIEL : la regle ecrit le signal qu'elle
+        // surveille, la carte renvoie la valeur, la regle se redeclenche. Ni
+        // `depth` ni le refroidissement ne peuvent la voir — elle doit etre
+        // refusee a la creation.
+        //
+        // La comparaison porte sur (carte, adresse). Le modele widget
+        // comparait deux chaines : le nom que portait la trame et le
+        // declencheur de la regle. Depuis que le declencheur est une cle
+        // `deviceId:adresse`, ces deux chaines ne peuvent plus etre egales —
+        // la garde aurait laisse passer toutes les boucles sans qu'un seul
+        // test le remarque.
+        testApplication {
         installTestApp()
         val (_, token, ids) = account("frank")
-        val (deviceId, widgetId) = ids
+        val (deviceId, signalKey) = ids
 
-        // A real command frame targeting the SAME widget the rule watches —
-        // the loop runs through physical hardware, where depth cannot follow.
-        val frame = com.jeanloickdt.relay.FrameParser.let {
-            // build minimal device-direction frame: AA 01 LEN(2) DEVCOUNT=0 WIDLEN WID TYPE EVENT
-            val wid = widgetId.toByteArray()
-            val body = byteArrayOf(0) + byteArrayOf(wid.size.toByte()) + wid + byteArrayOf(0x0A, 0x10)
-            val header = byteArrayOf(0xAA.toByte(), 0x01, (body.size and 0xFF).toByte(), ((body.size shr 8) and 0xFF).toByte())
-            var crc = 0
-            body.forEach { b ->
-                crc = crc xor (b.toInt() and 0xFF)
-                repeat(8) { crc = if (crc and 0x80 != 0) ((crc shl 1) xor 0x07) and 0xFF else (crc shl 1) and 0xFF }
-            }
-            header + body + byteArrayOf(crc.toByte())
-        }
-        val b64 = java.util.Base64.getEncoder().encodeToString(frame)
+        // Une vraie trame SIGNAL sur l'adresse 0 — celle que la regle surveille.
+        val b64 = java.util.Base64.getEncoder().encodeToString(
+            com.jeanloickdt.signal.SignalFrame.build(
+                0, com.jeanloickdt.signal.SignalFrame.TAG_FLOAT,
+                com.jeanloickdt.signal.SignalFrame.floatBytes(1f)
+            )
+        )
 
-        val res = client.createRule(token, widgetId,
+        val res = client.createRule(token, signalKey,
             """{"when":{"kind":"value","above":90},"actions":[{"type":"COMMAND","deviceId":"$deviceId","payloadB64":"$b64"}]}""")
-        assertEquals(HttpStatusCode.BadRequest, res.status)
+        assertEquals(HttpStatusCode.BadRequest, res.status, res.bodyAsText())
         assertTrue("trigger itself" in res.bodyAsText())
 
-        // The same command aimed at a DIFFERENT widget passes.
-        widgetRepository.register("w-other", projectRepository.findAllByOwner(
-            userRepository.findByUsername("frank")!!.id).first().id,
-            userRepository.findByUsername("frank")!!.id, "gauge")
-        val ok = client.createRule(token, "w-other",
+        // La MEME trame, mais la regle surveille une autre adresse : pas de
+        // boucle, la creation passe.
+        val frankId = userRepository.findByUsername("frank")!!.id
+        signalRepository.create(frankId, deviceId, 1, "s1", "float", nowMs = 0L)
+        val ok = client.createRule(token, "$deviceId:1",
             """{"when":{"kind":"value","above":90},"actions":[{"type":"COMMAND","deviceId":"$deviceId","payloadB64":"$b64"}]}""")
         assertEquals(HttpStatusCode.Created, ok.status, ok.bodyAsText())
+        }
     }
 
     // ── La frontière de l'OFFRE ───────────────────────────────────────────

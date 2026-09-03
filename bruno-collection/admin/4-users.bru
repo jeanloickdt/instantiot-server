@@ -1,0 +1,15 @@
+meta {
+  name: Tous les comptes
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/admin/users
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

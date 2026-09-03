@@ -1,0 +1,19 @@
+meta {
+  name: Sauvegarder maintenant
+  type: http
+  seq: 21
+}
+
+post {
+  url: {{baseUrl}}/api/admin/backup/now
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  `VACUUM INTO` — un instantane coherent, sans arreter le serveur.
+}

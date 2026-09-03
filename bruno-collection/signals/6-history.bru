@@ -1,0 +1,34 @@
+meta {
+  name: 6. Historique
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/signals/{{address}}/history?from={{fromMs}}&to={{toMs}}&resolution=auto
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  `resolution` vaut `auto|raw|min|hour|day`. **`auto` est le bon defaut** :
+  le serveur choisit le palier qui rend une courbe lisible pour la plage
+  demandee, la ou `raw` sur six mois renverrait des centaines de milliers
+  de points pour en dessiner deux mille.
+
+  La reponse DIT ce qu'elle a servi (`resolution`) et pourquoi quand ca
+  differe de la demande (`notice`). `truncated` signale un plafond
+  atteint.
+
+  Ici rien n'est borne par une offre : la retention est celle de
+  `server.properties`, et c'est tout.
+}
+
+script:pre-request {
+  if (!bru.getVar("fromMs")) bru.setVar("fromMs", (Date.now() - 3600000).toString());
+  if (!bru.getVar("toMs")) bru.setVar("toMs", Date.now().toString());
+}

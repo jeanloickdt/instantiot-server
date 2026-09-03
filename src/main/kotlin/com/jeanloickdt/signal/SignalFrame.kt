@@ -57,6 +57,22 @@ object SignalFrame {
     const val TAG_FLOAT: Int  = 0x03
     const val TAG_STRING: Int = 0x04
 
+    /**
+     * Le bit haut du tag : **ceci est un rappel**, pas une écriture vive.
+     *
+     * Une carte qui se reconnecte reçoit sa dernière valeur, et la trame est
+     * autrement identique à ce qu'un doigt vient d'écrire. Sans marque, le
+     * bloc d'un widget — `ISimpleButton(I5)` — se déclencherait au
+     * redémarrage, sans que personne n'ait appuyé. Un geste ne se rejoue pas.
+     *
+     * Dans le tag et non dans le TYPE : un rappel n'est pas un autre genre de
+     * message, c'est le même signal envoyé pour une autre raison. Les tags
+     * vont de 1 à 4, les bits hauts étaient libres.
+     *
+     * L'app ne le voit jamais — [forApps] reconstruit sans lui.
+     */
+    const val TAG_RESTORE: Int = 0x80
+
     /** Offset of `DEV_COUNT`, i.e. the first body byte. */
     private const val BODY = 4
 
@@ -73,7 +89,7 @@ object SignalFrame {
     fun address(frame: ByteArray): Int? = try {
         // Le TYPE d'abord : un EVENT a exactement la même disposition, et sans
         // ce contrôle un appui de bouton se lirait comme une mesure — la
-        // symétrie de [com.jeanloickdt.relay.EventFrame.address].
+        // L'adresse se lit là où un nom de widget se trouvait.
         if (!isSignal(frame)) return null
         var o = BODY
         val deviceCount = frame[o++].toInt() and 0xFF
@@ -88,7 +104,20 @@ object SignalFrame {
     }
 
     /** The type tag, read from the EVENT slot. */
-    fun tag(frame: ByteArray): Int? = try {
+    /**
+     * Le TYPE DE VALEUR porté par la trame — sans le drapeau du rappel.
+     *
+     * Masqué ici plutôt qu'à chaque appel : six lecteurs interrogent ce tag
+     * pour savoir comment décoder, et aucun n'a à connaître l'existence du
+     * drapeau. Celui qui veut la question posent [isRestore].
+     */
+    fun tag(frame: ByteArray): Int? = rawTag(frame)?.let { it and 0x7F }
+
+    /** Cette trame est-elle un rappel plutôt qu'une écriture vive ? */
+    fun isRestore(frame: ByteArray): Boolean =
+        rawTag(frame)?.let { it and TAG_RESTORE != 0 } ?: false
+
+    private fun rawTag(frame: ByteArray): Int? = try {
         var o = BODY
         val deviceCount = frame[o++].toInt() and 0xFF
         repeat(deviceCount) {
@@ -144,6 +173,7 @@ object SignalFrame {
      */
     fun build(address: Int, tag: Int, value: ByteArray, deviceId: String? = null): ByteArray {
         require(address in 0..255) { "address out of range: $address" }
+        require(tag in 0..255) { "tag out of range: $tag" }
         val device = deviceId?.encodeToByteArray()
         require(device == null || device.size <= 255) { "deviceId too long" }
         val head = if (device == null) {

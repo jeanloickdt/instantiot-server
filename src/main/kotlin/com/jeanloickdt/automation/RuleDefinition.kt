@@ -75,7 +75,7 @@ sealed interface Trigger {
     ) : Trigger
 
     /** The sensor stopped reporting — the sweeper detects, the rule reacts. */
-    data object WidgetStale : Trigger
+    data object SignalStale : Trigger
 
     /**
      * A wall-clock schedule, IN THE RULE'S TIMEZONE. "7 h" means 7 h where
@@ -190,7 +190,7 @@ data class RuleDefinition(
                     Trigger.DeviceOffline(deviceId, (afterS?.toLong() ?: (DEFAULT_OFFLINE_AFTER_MS / 1000)) * 1000)
                 }
 
-                "stale" -> Trigger.WidgetStale
+                "stale" -> Trigger.SignalStale
 
                 "schedule" -> {
                     val at = whenNode["at"]?.jsonPrimitive?.content

@@ -25,21 +25,11 @@ import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
+import com.jeanloickdt.signalHistoryRepository
+import com.jeanloickdt.signalRepository
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.projectRepository
 import com.jeanloickdt.userRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import com.jeanloickdt.widgetHistoryDayRepository
-import com.jeanloickdt.widgetHistoryHourRepository
-import com.jeanloickdt.widgetHistoryMinRepository
-import com.jeanloickdt.widgetHistoryNumericRepository
-import com.jeanloickdt.widgetHistoryRepository
-import com.jeanloickdt.widgetRepository
 import io.ktor.client.request.delete
 import io.ktor.client.request.header
 import io.ktor.client.request.post
@@ -79,14 +69,7 @@ class AdminCreateUserTest {
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-admincreate-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = db
-        )
+        com.jeanloickdt.database.TestDatabase.fresh("admincreate")
         // The scenario this feature exists for: registration CLOSED.
         ServerConfig.registrationOpen = false
     }
@@ -105,13 +88,9 @@ class AdminCreateUserTest {
             val buffers     = com.jeanloickdt.relay.HistoryBuffers()
             val lastValues  = com.jeanloickdt.relay.InMemoryLastValueCache()
             val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
-            val cacheAware  = com.jeanloickdt.relay.CacheAwareWidgetRepository(
-                widgetRepository, buffers.knownWidgetIds, lastValues
-            )
             val purge = AccountPurge(
-                userRepository, projectRepository, deviceRepository, cacheAware,
-                widgetHistoryRepository, widgetHistoryNumericRepository,
-                widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+                userRepository, projectRepository, deviceRepository,
+                signalRepository, signalHistoryRepository,
                 connections, events
             )
             routing {

@@ -1,0 +1,36 @@
+meta {
+  name: 3. Declarer une carte
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/devices
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "name": "ESP32 Garage",
+    "projectId": "{{projectId}}",
+    "deviceType": "ESP32",
+    "connectivity": "WIFI"
+  }
+}
+
+docs {
+  **Le jeton n'est montre qu'ICI, une fois.** La base n'en garde que le
+  SHA-256 : elle ne contient jamais d'identifiant utilisable.
+}
+
+script:post-response {
+  if (res.status === 200 || res.status === 201) {
+    bru.setVar("deviceId", res.body.id);
+    bru.setVar("deviceToken", res.body.token);
+  }
+}

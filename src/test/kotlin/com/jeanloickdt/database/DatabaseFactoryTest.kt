@@ -22,12 +22,6 @@ package com.jeanloickdt.database
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
 import java.io.File
 import java.sql.DriverManager
 import kotlin.test.Test
@@ -43,9 +37,8 @@ import kotlin.test.assertTrue
 class DatabaseFactoryTest {
 
     private fun initAll(dbFile: File) = DatabaseFactory.init(
-        UserTable, ProjectTable, DeviceTable, WidgetTable,
-        WidgetHistoryTable, WidgetHistoryNumericTable,
-        WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
+        UserTable, ProjectTable, DeviceTable,
+        *com.jeanloickdt.signal.data.SignalTables.ALL,
         *com.jeanloickdt.automation.data.AutomationTables.ALL,
         dbFile = dbFile
     )
@@ -96,52 +89,9 @@ class DatabaseFactoryTest {
             }
         }
 
-    @Test
-    fun `widgets table migrates from single-column PK to composite without losing any row`() {
-        val db = File.createTempFile("instantiot-dbfactory-widgetpk-", ".db").apply { deleteOnExit() }
-        db.delete()
-        // Recreate a LEGACY widgets table exactly as the old server shipped it:
-        // single-column PK on id, with real rows (including a null payload row).
-        DriverManager.getConnection("jdbc:sqlite:${db.absolutePath}").use { c ->
-            c.createStatement().use { s ->
-                s.execute(
-                    """CREATE TABLE widgets (id TEXT NOT NULL PRIMARY KEY, project_id TEXT NOT NULL,
-                       owner_id TEXT NOT NULL, "type" TEXT NOT NULL, last_payload TEXT NULL,
-                       last_seen_at BIGINT NULL)"""
-                )
-                s.execute("INSERT INTO widgets VALUES ('gauge1','p1','ownerA','gauge','payA',111)")
-                s.execute("INSERT INTO widgets VALUES ('btn1','p1','ownerA','button',NULL,NULL)")
-            }
-        }
-        assertEquals(listOf("id"), pkCols(db, "widgets"), "precondition: legacy single-column PK")
+    // Le test de migration de cle primaire des widgets est parti avec la
+    // table : `widgets` n'existe plus, et la migration qu'il eprouvait non
+    // plus. Une adresse se declare desormais dans `signals`, dont la cle est
+    // composite depuis le premier jour.
 
-        initAll(db)  // runs the widgets PK migration
-
-        // PK is now composite (owner_id, id)
-        assertEquals(listOf("owner_id", "id"), pkCols(db, "widgets"), "PK must be composite after migration")
-
-        // every row + every column preserved (zero loss)
-        DriverManager.getConnection("jdbc:sqlite:${db.absolutePath}").use { c ->
-            c.createStatement().use { s ->
-                s.executeQuery("SELECT count(*) FROM widgets").use { rs -> rs.next(); assertEquals(2, rs.getInt(1)) }
-                s.executeQuery(
-                    "SELECT project_id, owner_id, \"type\", last_payload, last_seen_at FROM widgets WHERE id='gauge1'"
-                ).use { rs ->
-                    assertTrue(rs.next())
-                    assertEquals("p1", rs.getString(1))
-                    assertEquals("ownerA", rs.getString(2))
-                    assertEquals("gauge", rs.getString(3))
-                    assertEquals("payA", rs.getString(4))
-                    assertEquals(111L, rs.getLong(5))
-                }
-                s.executeQuery("SELECT last_payload FROM widgets WHERE id='btn1'").use { rs ->
-                    assertTrue(rs.next()); assertEquals(null, rs.getString(1))
-                }
-            }
-        }
-
-        // idempotent: a second init does not re-migrate or lose anything
-        initAll(db)
-        assertEquals(listOf("owner_id", "id"), pkCols(db, "widgets"))
-    }
 }

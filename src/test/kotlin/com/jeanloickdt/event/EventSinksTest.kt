@@ -36,7 +36,7 @@ class EventSinksTest {
     private val T0 = 1_000_000L
 
     private fun value(n: Int = 0) =
-        RelayEvent.WidgetValue("u1", "w1", null, n.toDouble(), T0 + n)
+        RelayEvent.SignalValue("u1", "w1", null, n.toDouble(), T0 + n)
 
     private fun offline(id: String = "d1") =
         RelayEvent.DeviceOffline("u1", id, "disconnected", T0)
@@ -48,9 +48,9 @@ class EventSinksTest {
         val sinks = EventSinks()
 
         sinks.publish(value())
-        sinks.publish(RelayEvent.WidgetText("u1", "w1", "AA==", T0))
+        sinks.publish(RelayEvent.SignalText("u1", "w1", "AA==", T0))
         sinks.publish(offline())
-        sinks.publish(RelayEvent.WidgetStale("u1", "w1", T0 - 60_000, T0))
+        sinks.publish(RelayEvent.SignalStale("u1", "w1", T0 - 60_000, T0))
         sinks.publish(RelayEvent.QuotaReached("u1", "devices.max", T0))
 
         var values = 0
@@ -73,7 +73,7 @@ class EventSinksTest {
         val kept = buildList {
             while (true) {
                 val r = sinks.values.tryReceive().getOrNull() ?: break
-                add((r as RelayEvent.WidgetValue).value.toInt())
+                add((r as RelayEvent.SignalValue).value.toInt())
             }
         }
         // 0..5 evicted, 6..9 kept — the newest survive, by design: the next
@@ -152,10 +152,10 @@ class EventSinksTest {
         val sinks = EventSinks()
         listOf(
             value(),
-            RelayEvent.WidgetText("u1", "w1", "AA==", T0),
+            RelayEvent.SignalText("u1", "w1", "AA==", T0),
             RelayEvent.DeviceOnline("u1", "d1", T0),
             offline(),
-            RelayEvent.WidgetStale("u1", "w1", T0 - 1, T0),
+            RelayEvent.SignalStale("u1", "w1", T0 - 1, T0),
             RelayEvent.TimeReached("u1", "r1", T0, T0),
             RelayEvent.QuotaReached("u1", "devices.max", T0),
             RelayEvent.DeviceRejected("u1", "d1", "rate_limited", T0),

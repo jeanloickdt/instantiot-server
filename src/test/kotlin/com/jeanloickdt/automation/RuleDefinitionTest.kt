@@ -44,7 +44,7 @@ class RuleDefinitionTest {
         assertEquals(RuleDefinition.DEFAULT_OFFLINE_AFTER_MS, (offline.trigger as Trigger.DeviceOffline).afterMs)
 
         assertTrue(parse("""{"when":{"kind":"stale"},"actions":[{"type":"PUSH","title":"t","body":"b"}]}""")!!
-            .trigger is Trigger.WidgetStale)
+            .trigger is Trigger.SignalStale)
     }
 
     @Test

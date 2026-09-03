@@ -64,3 +64,18 @@ data class CreateDeviceResponse(
 data class UpdateDeviceNameRequest(
     val name: String
 )
+/**
+ * Le PATCH d'une carte — tout est optionnel, `null` veut dire « ne touche
+ * pas ».
+ *
+ * Le type et la connectivite n'etaient poses qu'a l'enregistrement : une
+ * carte declaree « ESP32 / WiFi » par erreur le restait pour toujours. Et ce
+ * ne sont pas des etiquettes — c'est sur eux que le generateur de croquis
+ * s'appuiera pour emettre le bon en-tete et la bonne pile reseau.
+ */
+@kotlinx.serialization.Serializable
+data class UpdateDeviceRequest(
+    val name: String? = null,
+    val deviceType: String? = null,
+    val connectivity: String? = null
+)

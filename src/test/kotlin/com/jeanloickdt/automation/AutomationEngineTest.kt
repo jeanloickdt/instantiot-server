@@ -21,21 +21,12 @@ package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.projectRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
-import java.sql.DriverManager
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -50,7 +41,6 @@ import kotlin.test.assertTrue
  */
 class AutomationEngineTest {
 
-    private lateinit var dbFile: File
     private lateinit var sinks: EventSinks
     private lateinit var cache: RuleCache
     private lateinit var engine: AutomationEngine
@@ -58,36 +48,29 @@ class AutomationEngineTest {
 
     @BeforeTest
     fun setup() {
-        dbFile = File.createTempFile("instantiot-engine-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = dbFile
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
         sinks = EventSinks()
         cache = RuleCache()
         engine = AutomationEngine(
-            sinks, cache, SqlitePendingActionRepository(), SqliteAutomationStateStore(),
+            sinks, cache, ExposedPendingActionRepository(), ExposedAutomationStateStore(),
             deviceRepository, clock = { now }
         )
     }
 
     // ── seeding ───────────────────────────────────────────────────────────
 
+    // Le JDBC brut visait le fichier SQLite. La meme instruction passe par la
+    // transaction Exposed, donc par la connexion du moment — celle de Postgres.
     private fun exec(sql: String) =
-        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
-            c.createStatement().use { it.execute(sql) }
-        }
+        org.jetbrains.exposed.sql.transactions.transaction { exec(sql) }
 
     private fun insertRule(
-        id: String, owner: String = "u1", widgetId: String? = "w1",
+        id: String, owner: String = "u1", signalKey: String? = "w1",
         kind: String, definition: String
     ) {
-        val widgetCol = if (widgetId == null) "NULL" else "'$widgetId'"
-        exec("""INSERT INTO automation_rules (id, owner_id, name, enabled, trigger_kind, trigger_widget_id, definition, created_at, updated_at)
-                VALUES ('$id','$owner','$id',1,'$kind',$widgetCol,'$definition',0,0)""")
+        val triggerCol = if (signalKey == null) "NULL" else "'$signalKey'"
+        exec("""INSERT INTO automation_rules (id, owner_id, name, enabled, trigger_kind, trigger_signal_key, definition, created_at, updated_at)
+                VALUES ('$id','$owner','$id',true,'$kind',$triggerCol,'$definition',0,0)""")
         cache.reload()
     }
 
@@ -101,16 +84,14 @@ class AutomationEngineTest {
     }
 
     private fun value(v: Double, at: Long = now, depth: Int = 0) =
-        RelayEvent.WidgetValue("u1", "w1", null, v, at, depth)
+        RelayEvent.SignalValue("u1", "w1", null, v, at, depth)
 
     private fun pendingRows(type: String? = null): List<Pair<String, String>> =
-        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
+        org.jetbrains.exposed.sql.transactions.transaction {
             val where = type?.let { "WHERE type = '$it'" } ?: ""
-            c.createStatement().use { s ->
-                s.executeQuery("SELECT idempotency_key, payload FROM pending_actions $where").use { rs ->
-                    buildList { while (rs.next()) add(rs.getString(1) to rs.getString(2)) }
-                }
-            }
+            exec("SELECT idempotency_key, payload FROM pending_actions $where") { rs ->
+                buildList { while (rs.next()) add(rs.getString(1) to rs.getString(2)) }
+            }!!
         }
 
     // ── Le seuil, l'hystérésis ────────────────────────────────────────────
@@ -195,12 +176,12 @@ class AutomationEngineTest {
         insertRule("r1", kind = "stale",
             definition = """{"when":{"kind":"stale"},"cooldownS":0,"actions":[{"type":"PUSH","title":"muet","body":"b"}]}""")
         val lastSeen = now - 20 * 60_000L
-        engine.handle(RelayEvent.WidgetStale("u1", "w1", lastSeen, now))
+        engine.handle(RelayEvent.SignalStale("u1", "w1", lastSeen, now))
 
         // Sweeper restart: same episode re-reported, same lastSeenAt — the
         // engine state was ALSO reset to simulate the worst case.
         cache.reload()
-        engine.handle(RelayEvent.WidgetStale("u1", "w1", lastSeen, now + 60_000))
+        engine.handle(RelayEvent.SignalStale("u1", "w1", lastSeen, now + 60_000))
 
         assertEquals(1, pendingRows().size, "the fact time keys the dedup — one push per silence")
     }
@@ -209,9 +190,9 @@ class AutomationEngineTest {
     fun `the sensor speaking closes the stale episode — the next silence fires anew`() {
         insertRule("r1", kind = "stale",
             definition = """{"when":{"kind":"stale"},"cooldownS":0,"actions":[{"type":"PUSH","title":"muet","body":"b"}]}""")
-        engine.handle(RelayEvent.WidgetStale("u1", "w1", now - 20 * 60_000, now))
+        engine.handle(RelayEvent.SignalStale("u1", "w1", now - 20 * 60_000, now))
         engine.handle(value(42.0, at = now + 1))   // it spoke
-        engine.handle(RelayEvent.WidgetStale("u1", "w1", now + 1, now + 30 * 60_000))
+        engine.handle(RelayEvent.SignalStale("u1", "w1", now + 1, now + 30 * 60_000))
 
         assertEquals(2, pendingRows().size)
     }
@@ -219,7 +200,7 @@ class AutomationEngineTest {
     // ── Offline : la confirmation par le tick, jamais par une attente ─────
 
     private fun offlineRule(afterS: Int = 30) {
-        insertRule("r1", widgetId = null, kind = "offline",
+        insertRule("r1", signalKey = null, kind = "offline",
             definition = """{"when":{"kind":"offline","deviceId":"d1","afterS":$afterS},"cooldownS":0,"actions":[{"type":"PUSH","title":"hors ligne","body":"b"}]}""")
     }
 
@@ -263,12 +244,12 @@ class AutomationEngineTest {
 
     @Test
     fun `a COMMAND aimed at another tenant's board is skipped, the PUSH still fires`() {
-        val victimProject = projectRepository.create("p-victim", "victim")
+        val victimProject = projectRepository.create("victim", "p-victim").id
         deviceRepository.create(
-            name = "board", projectId = victimProject, ownerId = "victim",
+            name         = "board", projectId = victimProject, ownerId = "victim",
             tokenHash = "h", deviceType = com.jeanloickdt.device.domain.DeviceType.ESP32,
             connectivity = com.jeanloickdt.device.domain.DeviceConnectivity.WIFI
-        ).let { victimDevice ->
+        ).id.let { victimDevice ->
             valueRule(actions = """[
                 {"type":"COMMAND","deviceId":"$victimDevice","payloadB64":"AA=="},
                 {"type":"PUSH","title":"t","body":"b"}
@@ -301,7 +282,7 @@ class AutomationEngineTest {
         // Restart: fresh cache (state reloaded from the table), fresh engine.
         val cache2 = RuleCache().apply { reload() }
         val engine2 = AutomationEngine(
-            sinks, cache2, SqlitePendingActionRepository(), SqliteAutomationStateStore(),
+            sinks, cache2, ExposedPendingActionRepository(), ExposedAutomationStateStore(),
             deviceRepository, clock = { now }
         )
         // The condition still holds — the rule must be loaded TRIGGERED.

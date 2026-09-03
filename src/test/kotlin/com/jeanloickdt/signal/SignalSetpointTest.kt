@@ -21,18 +21,10 @@ package com.jeanloickdt.signal
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.signal.data.SignalTable
-import com.jeanloickdt.signal.data.SqliteSignalRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
+import com.jeanloickdt.signal.data.ExposedSignalRepository
 import kotlinx.coroutines.runBlocking
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -53,21 +45,14 @@ class SignalSetpointTest {
     private val OWNER = "u1"
     private val TT = "dev-tt"
 
-    private lateinit var signals: SqliteSignalRepository
+    private lateinit var signals: ExposedSignalRepository
     private val sent = mutableListOf<ByteArray>()
     private var deviceOnline = true
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-setpoint-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            SignalTable, *AutomationTables.ALL,
-            dbFile = db
-        )
-        signals = SqliteSignalRepository()
+        com.jeanloickdt.database.TestDatabase.fresh()
+        signals = ExposedSignalRepository()
         sent.clear()
         broadcast.clear()
         deviceOnline = true
@@ -83,12 +68,11 @@ class SignalSetpointTest {
     private fun declare(
         address: Int,
         type: String = SignalTable.TYPE_FLOAT,
-        direction: String = SignalTable.DIRECTION_SETPOINT,
         min: Double? = null,
         max: Double? = null
     ) = signals.create(
         ownerId = OWNER, deviceId = TT, address = address, label = "s$address",
-        type = type, minValue = min, maxValue = max, direction = direction, nowMs = 0
+        type = type, minValue = min, maxValue = max, nowMs = 0
     )
 
     private suspend fun write(address: Int, value: Double? = null, text: String? = null) =
@@ -141,13 +125,89 @@ class SignalSetpointTest {
     }
 
     @Test
-    fun `a measure is NEVER replayed — what the board is, is the board's to say`(): Unit = runBlocking {
-        declare(1, direction = SignalTable.DIRECTION_MEASURE)
-        // The board itself reported a value at some point.
+    fun `le drapeau du rejeu decide seul — la direction ne le contredit plus`(): Unit = runBlocking {
+        // La regle etait : « une mesure n'est jamais rejouee — ce que la
+        // carte EST, c'est a elle de le dire ». L'idee tient, mais la
+        // direction ne la porte plus : l'ecriture ne la consulte plus depuis
+        // que tout le monde peut ecrire, et la colonne s'apprete a partir.
+        //
+        // Il en resterait un drapeau menteur : « Retrouver apres un
+        // redemarrage », active dans le formulaire, sans effet. Pire, la
+        // valeur par defaut de la colonne est `measure` — des que l'app
+        // cesse d'envoyer la direction, PLUS RIEN ne serait jamais rejoue.
+        //
+        // Le drapeau decide, et lui seul.
+        declare(1)
         signals.touch(OWNER, TT, 1, java.util.Base64.getEncoder().encodeToString(SignalFrame.floatBytes(30f)), 500)
 
-        assertEquals(0, SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send))
-        assertTrue(sent.isEmpty(), "replaying a measure would tell the board what it measured")
+        assertEquals(1, SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send))
+        assertEquals(setOf(1), sent.mapNotNull { SignalFrame.address(it) }.toSet())
+    }
+
+    @Test
+    fun `un signal a deux etats ne rabote plus ce qu on lui ecrit`(): Unit = runBlocking {
+        // Le type `bool` n'existe plus. Il ne restreignait aucune liaison —
+        // un interrupteur, une LED et une jauge acceptaient deja `NUMERIC`
+        // en entier — et il ne faisait qu'une chose : aplatir.
+        //
+        //     TYPE_BOOL -> byteArrayOf(if (v != 0.0) 1 else 0)
+        //
+        // Le 2 de la convention des gestes y devenait 1. Un appui long et un
+        // appui court arrivaient a la carte sous la meme forme, indiscernables,
+        // et le geste se perdait sans un mot.
+        //
+        // Une adresse a deux etats est un entier qui vaut 0 ou 1. Elle porte
+        // donc 2 aussi, et c'est ce qui rend WHEN_LONG_PRESSED possible.
+        // Declaree « bool » — par une app plus ancienne, ou par une ligne
+        // deja en base. Elle doit se comporter comme l'entier qu'elle est.
+        declare(7, type = "bool")
+
+        write(7, 2.0)
+
+        assertEquals(2.0, SignalFrame.numericValue(sent.single())!!, 0.001)
+    }
+
+    @Test
+    fun `un rappel se signale, une ecriture vive non`(): Unit = runBlocking {
+        // La carte ne peut pas distinguer les deux : la trame rejouee est
+        // rigoureusement identique a une ecriture. Elle livrerait donc au bloc
+        // d'un widget — `ISimpleButton(I5)` se declencherait au redemarrage,
+        // sans que personne n'ait appuye.
+        //
+        // Un geste ne se rejoue pas. Le drapeau le dit dans la trame, pour que
+        // la garantie soit une propriete du systeme et non une case cochee.
+        //
+        // Il vit dans le bit haut du tag, pas dans le TYPE : un rappel n'est
+        // pas un autre genre de message, c'est le meme signal envoye pour une
+        // autre raison.
+        declare(5)
+        write(5, 19.0)
+
+        assertTrue(!SignalFrame.isRestore(sent.single()),
+            "une ecriture vive ne porte pas le drapeau")
+
+        sent.clear()
+        SignalSetpoint.restoreOnConnect(signals, OWNER, TT, send)
+
+        assertTrue(SignalFrame.isRestore(sent.single()), "un rappel le porte")
+        assertEquals(SignalFrame.TAG_FLOAT, SignalFrame.tag(sent.single()),
+            "et le type de valeur se lit comme avant, sans savoir que le drapeau existe")
+    }
+
+    @Test
+    fun `l app ne voit jamais le drapeau`(): Unit = runBlocking {
+        // Il ne regarde que la carte : c'est elle qui doit distinguer un
+        // rappel d'un geste. Une jauge, elle, affiche une valeur — d'ou
+        // qu'elle vienne. `forApps` reconstruit donc sans lui, et ce test
+        // le fixe parce que c'est une reconstruction, pas une copie.
+        val rappel = SignalFrame.build(
+            5, SignalFrame.TAG_FLOAT or SignalFrame.TAG_RESTORE, SignalFrame.floatBytes(21.5f)
+        )
+        assertTrue(SignalFrame.isRestore(rappel))
+
+        val versLApp = SignalFrame.forApps(rappel, TT)!!
+        assertTrue(!SignalFrame.isRestore(versLApp))
+        assertEquals(21.5, SignalFrame.numericValue(versLApp)!!, 0.001)
     }
 
     @Test
@@ -183,30 +243,37 @@ class SignalSetpointTest {
 
     @Test
     fun `a refused write tells nobody`(): Unit = runBlocking {
-        declare(1, direction = SignalTable.DIRECTION_MEASURE)
+        // Le refus ne vient plus de la direction — elle n'existe plus comme
+        // regle — mais d'un signal qui n'existe pas du tout.
+        val r = write(200, 42.0)
 
-        write(1, 42.0)
-
+        assertTrue(r is SignalSetpoint.Outcome.Refused)
         assertTrue(broadcast.isEmpty(), "nothing changed, so there is nothing to announce")
     }
 
     // ── Les refus ─────────────────────────────────────────────────────────
 
     @Test
-    fun `the app cannot write a measure`(): Unit = runBlocking {
-        declare(1, direction = SignalTable.DIRECTION_MEASURE)
+    fun `the app writes a measure too, and that is the point`(): Unit = runBlocking {
+        // Ce test disait l'inverse jusqu'ici : « l'app ne peut pas ecrire une
+        // mesure ». Le garde defendait une vraie idee — une mesure est ce que
+        // la carte dit qu'il EST — mais le seul lese etait le proprietaire du
+        // tableau de bord, sur ses propres donnees, deliberement. Et il
+        // interdisait le cas le plus frequent du developpement : essayer un
+        // tableau de bord sans carte branchee.
+        //
+        // Un signal est un signal. Tout le monde peut y ecrire.
+        declare(1)
 
         val r = write(1, 42.0)
 
-        assertTrue(r is SignalSetpoint.Outcome.Refused)
-        assertTrue("measure" in (r as SignalSetpoint.Outcome.Refused).reason,
-            "otherwise a value would assert something no sensor ever reported: ${r.reason}")
-        assertTrue(sent.isEmpty())
+        assertTrue(r !is SignalSetpoint.Outcome.Refused,
+            "la direction ne decide plus de qui a le droit d'ecrire")
     }
 
     @Test
     fun `direction both accepts the app`(): Unit = runBlocking {
-        declare(7, direction = SignalTable.DIRECTION_BOTH)
+        declare(7)
         assertTrue(write(7, 1.0) is SignalSetpoint.Outcome.Delivered)
     }
 
@@ -276,7 +343,7 @@ class SignalSetpointTest {
     fun `an action is never replayed — nothing is there to open a gate by itself`(): Unit = runBlocking {
         signals.create(
             ownerId = OWNER, deviceId = TT, address = 9, label = "Portail",
-            type = SignalTable.TYPE_BOOL, direction = SignalTable.DIRECTION_SETPOINT,
+            type = SignalTable.TYPE_BOOL,
             replayOnConnect = false, nowMs = 0
         )
         write(9, 1.0)

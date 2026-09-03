@@ -29,14 +29,14 @@ import org.jetbrains.exposed.sql.Table
  * lost alert.
  *
  * All schema is additive (new tables only), so the boot migration is the
- * usual `createMissingTablesAndColumns` and self-hosted upgrades untouched.
+ * usual `createMissingTablesAndColumns`.
  */
 
 /**
  * One rule = one row. `definition` is JSON the ENGINE owns — thresholds,
  * hysteresis, schedule, the actions to produce. The relational columns are
  * exactly the ones something else queries: the rule cache loads by
- * `(owner_id, trigger_widget_id)`, the REST API scopes by `owner_id`, the
+ * `(owner_id, trigger_signal_key)`, the REST API scopes by `owner_id`, the
  * scheduler filters by `trigger_kind`. Modelling the rest as columns would
  * freeze the rule vocabulary into the schema and cost a migration per new
  * operator — the engine's vocabulary must stay the engine's.
@@ -50,8 +50,16 @@ object AutomationRuleTable : Table("automation_rules") {
     /** `value` | `presence` | `stale` | `schedule` | `system` — which events feed it. */
     val triggerKind = text("trigger_kind")
 
-    /** Null for rules not tied to one widget (schedule, presence-of-device). */
-    val triggerWidgetId = text("trigger_widget_id").nullable()
+    /**
+     * La cle du signal surveille — `"deviceId:adresse"`, la meme que partout
+     * ailleurs. Null pour une regle qui ne surveille aucun signal : un
+     * horaire, la presence d'une carte.
+     *
+     * La colonne s'appelait `trigger_widget_id`. Le renommage se faisait au
+     * demarrage du fabricant SQLite, disparu avec lui : la colonne porte son
+     * nom actuel dans Postgres depuis la bascule.
+     */
+    val triggerSignalKey = text("trigger_signal_key").nullable()
 
     /** Engine-owned JSON: condition, hysteresis, cooldown, actions. */
     val definition = text("definition")
@@ -164,7 +172,7 @@ object MessageUsageTable : Table("message_usage") {
 }
 
 object AutomationTables {
-    /** Registered together everywhere `DatabaseFactory.init` is called. */
+    /** Registered together everywhere the schema is built. */
     val ALL = arrayOf<Table>(
         AutomationRuleTable, AutomationStateTable, PendingActionTable,
         ScheduledJobTable, PushTokenTable, MessageUsageTable

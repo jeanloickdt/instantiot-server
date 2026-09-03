@@ -78,15 +78,21 @@ object SignalSetpoint {
         val signal = signals.find(ownerId, deviceId, address)
             ?: return Outcome.Refused("No signal at ${SignalTable.render(address)} on this board")
 
-        // A measure is what the board says it IS. Letting the app write it would
-        // recreate exactly the lie the model exists to avoid: a value that
-        // asserts something no sensor ever reported.
-        if (signal.direction == SignalTable.DIRECTION_MEASURE) {
-            return Outcome.Refused(
-                "${SignalTable.render(address)} is a measure — only the board writes it. " +
-                    "Use direction 'setpoint' or 'both' to let the app write."
-            )
-        }
+        // Le garde « c'est une mesure, seule la carte l'ecrit » a disparu.
+        //
+        // Il defendait une vraie idee : une mesure est ce que la carte dit
+        // qu'il EST, et laisser l'app l'ecrire produit une valeur qu'aucun
+        // capteur n'a rapportee.
+        //
+        // Mais le seul lese etait le proprietaire du tableau de bord, sur ses
+        // propres donnees, deliberement. Et le garde interdisait le cas le
+        // plus frequent du developpement : essayer un tableau de bord sans
+        // carte branchee. Un signal est un signal ; tout le monde peut y
+        // ecrire, et ce qu'on en fait appartient a l'utilisateur.
+        //
+        // La direction n'a plus d'effet nulle part : elle est restee dans le
+        // schema le temps que les widgets finissent d'etre portes, et partira
+        // avec le reste de l'ancien modele.
 
         val frame = encode(signal, raw, text)
             ?: return Outcome.Refused("Value does not fit type '${signal.type}'")
@@ -115,7 +121,11 @@ object SignalSetpoint {
      * "a setpoint is a state" true in practice, and it is why the board needs
      * no SYNC request of its own — the server already knows what to replay.
      *
-     * Measures are never replayed: what the board *is* is the board's to say.
+     * Le drapeau du signal decide seul. La direction filtrait ici en plus de
+     * lui — « une mesure n'est jamais rejouee » — mais elle ne servait plus
+     * qu'a ca, et sa valeur par defaut est `measure` : des que l'app cesse de
+     * l'envoyer, plus rien ne serait rejoue. Un drapeau qu'on active dans le
+     * formulaire et qui reste sans effet est pire qu'un reglage absent.
      */
     suspend fun restoreOnConnect(
         signals: SignalRepository,
@@ -126,8 +136,7 @@ object SignalSetpoint {
         var sent = 0
         val toRestore = signals.listByDevice(ownerId, deviceId)
             .filter {
-                it.direction != SignalTable.DIRECTION_MEASURE &&
-                    it.lastPayload != null &&
+                it.lastPayload != null &&
                     // Le drapeau du signal, pas une règle en dur. Rejouer une
                     // ACTION serait rouvrir un portail à chaque hoquet du WiFi.
                     it.replayOnConnect
@@ -135,7 +144,11 @@ object SignalSetpoint {
         for (signal in toRestore) {
             val payload = runCatching { Base64.getDecoder().decode(signal.lastPayload) }.getOrNull()
                 ?: continue
-            if (send(deviceId, SignalFrame.build(signal.address, tagOf(signal.type), payload))) sent++
+            // Le drapeau du rappel, pose ICI et nulle part ailleurs : c'est
+            // le seul endroit du relais qui renvoie une valeur que personne
+            // ne vient d'ecrire.
+            val tag = tagOf(signal.type) or SignalFrame.TAG_RESTORE
+            if (send(deviceId, SignalFrame.build(signal.address, tag, payload))) sent++
         }
         if (sent > 0) logger.info("Restored $sent setpoint(s) to device $deviceId on connect")
         return sent
@@ -152,9 +165,8 @@ object SignalSetpoint {
     }
 
     private fun tagOf(type: String): Int = when (type) {
-        SignalTable.TYPE_BOOL   -> SignalFrame.TAG_BOOL
-        SignalTable.TYPE_INT,
-        SignalTable.TYPE_ENUM   -> SignalFrame.TAG_INT
+        SignalTable.TYPE_BOOL   -> SignalFrame.TAG_INT   // lu comme l'entier qu'il est
+        SignalTable.TYPE_INT    -> SignalFrame.TAG_INT
         SignalTable.TYPE_STRING -> SignalFrame.TAG_STRING
         else                    -> SignalFrame.TAG_FLOAT
     }
@@ -162,11 +174,10 @@ object SignalSetpoint {
     private fun encode(signal: SignalRow, raw: Double?, text: String?): ByteArray? {
         val addr = signal.address
         return when (signal.type) {
-            SignalTable.TYPE_BOOL -> {
-                val v = raw ?: return null
-                SignalFrame.build(addr, SignalFrame.TAG_BOOL, byteArrayOf(if (v != 0.0) 1 else 0))
-            }
-            SignalTable.TYPE_INT, SignalTable.TYPE_ENUM -> {
+            // `bool` encode comme un entier : c'est ce qu'il est, et c'est ce
+            // que `tagOf` annonce. Sa branche a lui aplatissait tout ce qui
+            // n'etait pas zero — le 2 de l'appui long y devenait 1.
+            SignalTable.TYPE_INT, SignalTable.TYPE_BOOL -> {
                 val v = clamp(signal, raw ?: return null)!!.toInt()
                 SignalFrame.build(addr, SignalFrame.TAG_INT, byteArrayOf(
                     (v and 0xFF).toByte(), ((v shr 8) and 0xFF).toByte(),

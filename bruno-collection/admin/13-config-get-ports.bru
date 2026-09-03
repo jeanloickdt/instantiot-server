@@ -1,0 +1,31 @@
+meta {
+  name: Modifier les ports
+  type: http
+  seq: 13
+}
+
+patch {
+  url: {{baseUrl}}/api/admin/config
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "httpPort": 8080,
+    "tcpPort": 9001
+  }
+}
+
+docs {
+  **Redemarrage requis.** Les ports en cours ne changent pas ; le fichier
+  de proprietes est ecrit et le prochain demarrage les prend.
+
+  Cette route n'existe pas dans le nuage : les ports y sont fixes par le
+  compose, et les changer depuis un panneau armerait une panne pour le
+  deploiement suivant.
+}

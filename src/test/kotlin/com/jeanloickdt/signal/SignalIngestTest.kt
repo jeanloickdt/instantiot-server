@@ -21,24 +21,15 @@ package com.jeanloickdt.signal
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.relay.HistoryBuffers
 import com.jeanloickdt.relay.InMemoryLastValueCache
-import com.jeanloickdt.relay.WidgetKey
+import com.jeanloickdt.relay.SignalRef
 import com.jeanloickdt.signal.data.SignalTable
-import com.jeanloickdt.signal.data.SqliteSignalRepository
-import com.jeanloickdt.widget.data.HistoryAggregators
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
+import com.jeanloickdt.signal.data.ExposedSignalRepository
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -48,12 +39,18 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Étape 1's proof: a synthetic SIGNAL frame reaches the store, the cascade and
- * the rule sinks — **without a line of the engine changing**.
+ * Une trame SIGNAL synthétique atteint le store, la cascade et les sinks de
+ * règles.
  *
- * The interesting assertions are the refusals. A value path that accepts too
- * much corrupts somebody's history silently, and silence is the failure mode
- * this whole step exists to end.
+ * L'assertion sur la cascade a changé de cible depuis l'étape 1 du passage au
+ * modèle signal : un signal historisé alimente désormais
+ * `SignalAggregators.minute` (indexé par `signal.id`, l'entier de l'étape 0)
+ * — pas `HistoryAggregators` (indexé par la chaîne `widgetId`), qui reste le
+ * chemin de l'ancien modèle jusqu'à ce qu'il soit retiré.
+ *
+ * Les assertions les plus intéressantes restent les refus. Un chemin qui
+ * accepte trop corrompt l'historique de quelqu'un en silence, et le silence
+ * est exactement le défaut que ce chemin existe pour terminer.
  */
 class SignalIngestTest {
 
@@ -62,29 +59,22 @@ class SignalIngestTest {
     private val BB = "dev-bb"
     private val PROJ = "p1"
 
-    private lateinit var signals: SqliteSignalRepository
+    private lateinit var signals: ExposedSignalRepository
     private lateinit var buffers: HistoryBuffers
     private lateinit var lastValues: InMemoryLastValueCache
     private lateinit var sinks: EventSinks
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-signal-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            SignalTable, *AutomationTables.ALL,
-            dbFile = db
-        )
-        signals = SqliteSignalRepository()
+        com.jeanloickdt.database.TestDatabase.fresh()
+        signals = ExposedSignalRepository()
         buffers = HistoryBuffers()
         lastValues = InMemoryLastValueCache()
         sinks = EventSinks()
         UndeclaredSignals.reset()
-        HistoryAggregators.minute.extractAllBuckets()
-        HistoryAggregators.hour.extractAllBuckets()
-        HistoryAggregators.day.extractAllBuckets()
+        // Isolation entre tests : l'agrégateur est un singleton global au
+        // process de test, pas une instance par classe.
+        com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets()
     }
 
     private fun declare(
@@ -103,8 +93,8 @@ class SignalIngestTest {
         rawAllowed = true, sinks = sinks, watched = { watched }, nowMs = now
     )
 
-    private fun drained(): List<RelayEvent.WidgetValue> = buildList {
-        while (true) add((sinks.values.tryReceive().getOrNull() ?: break) as RelayEvent.WidgetValue)
+    private fun drained(): List<RelayEvent.SignalValue> = buildList {
+        while (true) add((sinks.values.tryReceive().getOrNull() ?: break) as RelayEvent.SignalValue)
     }
 
     // ── Le chemin nominal ─────────────────────────────────────────────────
@@ -121,10 +111,13 @@ class SignalIngestTest {
 
         val event = drained().single()
         assertEquals(23.4, event.value, 0.0001)
-        assertEquals(key, event.widgetId, "the rule keys on the signal, board included")
+        assertEquals(key, event.signalKey, "the rule keys on the signal, board included")
 
-        assertEquals(1, HistoryAggregators.minute.extractAllBuckets().size,
-            "the existing cascade is fed as-is — no engine change")
+        val bucket = com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets().single()
+        assertEquals(
+            signals.find(OWNER, TT, 5)!!.id, bucket.signalId,
+            "le seau doit être indexé par l'entier du signal, pas par la chaîne widgetId"
+        )
     }
 
     // ── Les refus ─────────────────────────────────────────────────────────
@@ -157,7 +150,7 @@ class SignalIngestTest {
 
         assertEquals(10.0, SignalFrame.numericValue(
             SignalFrame.build(5, SignalFrame.TAG_FLOAT, SignalFrame.floatBytes(10f)))!!, 0.0)
-        val keys = drained().map { it.widgetId }.toSet()
+        val keys = drained().map { it.signalKey }.toSet()
         assertEquals(setOf(signalKey(TT, 5), signalKey(BB, 5)), keys,
             "one rule on tt's I5 must never fire on bb's")
     }
@@ -172,9 +165,9 @@ class SignalIngestTest {
 
         assertNotNull(lastValues.get(OWNER, signalKey(TT, 3)),
             "the current value always exists — it costs one overwritten row")
-        assertEquals(0, HistoryAggregators.minute.extractAllBuckets().size,
+        assertEquals(0, com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets().size,
             "…but nothing is kept: that is the whole point of being able to say no")
-        assertEquals(0, buffers.numericHistoryBuffer.size)
+        assertEquals(0, buffers.signalRawBuffer.size)
     }
 
     @Test
@@ -191,7 +184,12 @@ class SignalIngestTest {
 
     @Test
     fun `a string is stored and relayed, but never aggregated`() {
-        declare(TT, 6)
+        // Déclarée EN TEXTE : depuis la garde de type, une case flottante
+        // refuse un texte — un texte n'entre que dans une case texte.
+        signals.create(
+            ownerId = OWNER, deviceId = TT, address = 6, label = "s6",
+            type = SignalTable.TYPE_STRING, historised = true, nowMs = 0
+        )
 
         val accepted = ingestSignalFrame(
             frameBytes = SignalFrame.build(6, SignalFrame.TAG_STRING, "OK".toByteArray()),
@@ -202,7 +200,7 @@ class SignalIngestTest {
 
         assertTrue(accepted, "a text is a legitimate value — it is simply not a curve")
         assertNotNull(lastValues.get(OWNER, signalKey(TT, 6)))
-        assertEquals(0, HistoryAggregators.minute.extractAllBuckets().size)
+        assertEquals(0, com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets().size)
         assertTrue(drained().isEmpty(), "no numeric sample, so no rule event")
     }
 
@@ -227,7 +225,7 @@ class SignalIngestTest {
                 rawAllowed = true, sinks = sinks, watched = { true }, nowMs = 1_000
             )
         )
-        assertEquals(0, HistoryAggregators.minute.extractAllBuckets().size)
+        assertEquals(0, com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets().size)
     }
 
     // ── Le dépôt ──────────────────────────────────────────────────────────
@@ -250,5 +248,45 @@ class SignalIngestTest {
         assertEquals(2, signals.deleteByDevice(OWNER, TT))
         assertTrue(signals.listByDevice(OWNER, TT).isEmpty())
         assertEquals(1, signals.listByDevice(OWNER, BB).size)
+    }
+
+    // ── La contre-pression : le brut d'abord, jamais la courbe ────────────
+
+    @Test
+    fun `under back-pressure the raw tier is dropped and the curve is not`() {
+        // L'acceptation de la contre-pression, vue du chemin d'ingestion.
+        // [IngestBackPressureTest] prouve la regle ; celui-ci prouve qu'elle
+        // est CONSULTEE — une regle juste que personne n'appelle protege
+        // exactement rien.
+        declare(TT, 5)
+        // Le brut est actif par defaut ; si un jour ce n'est plus vrai, ce
+        // test mesurerait le mauvais interrupteur et il vaut mieux qu'il le
+        // dise que de passer pour une raison qui n'est pas la sienne.
+        assertTrue(com.jeanloickdt.common.ServerConfig.historyRawEnabled)
+
+        // Deux tours de vidage au-dela de leur periode : la pression engage.
+        repeat(2) { buffers.backPressure.record(5_000L, 5_000L) }
+        assertTrue(buffers.backPressure.isRawSuspended)
+
+        assertTrue(ingest(TT, 5, 23.4f))
+
+        assertEquals(0, buffers.signalRawBuffer.size, "le brut est lache — c'est le confort")
+        assertEquals(1L, buffers.backPressure.droppedRaw, "et l'ecart se compte")
+        assertEquals(
+            1, com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets().size,
+            "la courbe, elle, reste complete — c'est le produit"
+        )
+    }
+
+    @Test
+    fun `once the pressure releases the raw tier fills again`() {
+        declare(TT, 5)
+        assertTrue(com.jeanloickdt.common.ServerConfig.historyRawEnabled)
+
+        repeat(2) { buffers.backPressure.record(5_000L, 5_000L) }
+        repeat(3) { buffers.backPressure.record(10L, 5_000L) }
+
+        assertTrue(ingest(TT, 5, 23.4f))
+        assertEquals(1, buffers.signalRawBuffer.size)
     }
 }

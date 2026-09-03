@@ -1,0 +1,37 @@
+meta {
+  name: 3. Declarer une adresse
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/signals
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "address": {{address}},
+    "label": "Temperature",
+    "type": "float",
+    "unit": "C"
+  }
+}
+
+docs {
+  **Une adresse doit etre declaree pour exister.** Une trame qui arrive
+  sur une adresse inconnue est comptee puis jetee — le croquis peut lire
+  ce compteur avec `InstantIoT.ignoredFrames()`.
+
+  Omettre `address` laisse le serveur prendre le plus petit creneau libre,
+  de sorte qu'un croquis lise I0, I1, I2.
+
+  `replayOnConnect` vaut vrai par defaut : la carte retrouve cette valeur
+  en se reconnectant. Le passer a faux fait de l'adresse une ACTION —
+  rien n'est rejoue, donc rien ne se declenche tout seul.
+}

@@ -39,7 +39,7 @@ import org.jetbrains.exposed.sql.update
  *
  *  - **hot path**: [MessageUsageCounter.increment] — one `LongAdder`-style
  *    RAM bump, same discipline as the history buffers
- *  - **flush**: [drain] hands the deltas to [SqliteMessageUsageRepository],
+ *  - **flush**: [drain] hands the deltas to [ExposedMessageUsageRepository],
  *    which adds them to one row per (owner, month)
  *
  * The period key is `"2026-08"` in **UTC**: the monthly reset is a NEW key,
@@ -98,7 +98,7 @@ interface MessageUsageRepository {
     }
 }
 
-class SqliteMessageUsageRepository : MessageUsageRepository {
+class ExposedMessageUsageRepository : MessageUsageRepository {
 
     override fun add(ownerId: String, period: String, delta: Long) {
         if (delta <= 0) return

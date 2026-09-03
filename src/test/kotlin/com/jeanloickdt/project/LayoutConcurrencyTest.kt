@@ -19,14 +19,8 @@
 
 package com.jeanloickdt.project
 
-import com.jeanloickdt.auth.data.UserTable
-import com.jeanloickdt.database.DatabaseFactory
-import com.jeanloickdt.device.data.DeviceTable
-import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.project.data.SqliteProjectRepository
+import com.jeanloickdt.project.data.ExposedProjectRepository
 import com.jeanloickdt.project.domain.LayoutWrite
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -41,40 +35,29 @@ import kotlin.test.assertTrue
  */
 class LayoutConcurrencyTest {
 
-    private lateinit var projects: SqliteProjectRepository
+    private lateinit var projects: ExposedProjectRepository
     private lateinit var projectId: String
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-layout-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            com.jeanloickdt.widget.data.WidgetHistoryTable,
-            com.jeanloickdt.widget.data.WidgetHistoryNumericTable,
-            com.jeanloickdt.widget.data.WidgetHistoryMinTable,
-            com.jeanloickdt.widget.data.WidgetHistoryHourTable,
-            com.jeanloickdt.widget.data.WidgetHistoryDayTable,
-            com.jeanloickdt.signal.data.SignalTable,
-            *com.jeanloickdt.automation.data.AutomationTables.ALL,
-            dbFile = db
-        )
-        projects = SqliteProjectRepository()
-        projectId = projects.create("Maison", "u1")
+        com.jeanloickdt.database.TestDatabase.fresh()
+        projects = ExposedProjectRepository()
+        projectId = projects.create("u1", "Maison").id
     }
 
-    private fun layout(id: String) = projects.findById(id)!!.layoutJson
+    private fun layout(id: String) = projects.findById("u1", id)!!.layoutJson
 
     // ── Le scénario exact ─────────────────────────────────────────────────
 
     @Test
     fun `the second phone is refused instead of erasing the first`() {
         // Both open the dashboard: same version in hand.
-        val v = projects.findById(projectId)!!.version
+        val v = projects.findById("u1", projectId)!!.version
 
-        val a = projects.updateLayout(projectId, """{"widgets":["gauge moved by A"]}""", v)
+        val a = projects.updateLayout("u1", projectId, """{"widgets":["gauge moved by A"]}""", v)
         assertTrue(a is LayoutWrite.Ok)
 
-        val b = projects.updateLayout(projectId, """{"widgets":["B's stale copy"]}""", v)
+        val b = projects.updateLayout("u1", projectId, """{"widgets":["B's stale copy"]}""", v)
 
         assertTrue(b is LayoutWrite.Conflict, "B saved from a copy A had already replaced")
         assertTrue("A" in layout(projectId), "A's work survives — that is the whole point")
@@ -82,10 +65,10 @@ class LayoutConcurrencyTest {
 
     @Test
     fun `the conflict hands back what actually won`() {
-        val v = projects.findById(projectId)!!.version
-        projects.updateLayout(projectId, """{"who":"A"}""", v)
+        val v = projects.findById("u1", projectId)!!.version
+        projects.updateLayout("u1", projectId, """{"who":"A"}""", v)
 
-        val b = projects.updateLayout(projectId, """{"who":"B"}""", v) as LayoutWrite.Conflict
+        val b = projects.updateLayout("u1", projectId, """{"who":"B"}""", v) as LayoutWrite.Conflict
 
         assertEquals(v + 1, b.currentVersion)
         assertTrue("""{"who":"A"}""" == b.currentLayoutJson,
@@ -94,12 +77,12 @@ class LayoutConcurrencyTest {
 
     @Test
     fun `B reloads and its save then goes through`() {
-        val v = projects.findById(projectId)!!.version
-        projects.updateLayout(projectId, """{"who":"A"}""", v)
-        val conflict = projects.updateLayout(projectId, """{"who":"B"}""", v) as LayoutWrite.Conflict
+        val v = projects.findById("u1", projectId)!!.version
+        projects.updateLayout("u1", projectId, """{"who":"A"}""", v)
+        val conflict = projects.updateLayout("u1", projectId, """{"who":"B"}""", v) as LayoutWrite.Conflict
 
         // B merges onto what it just received, and retries with that version.
-        val retry = projects.updateLayout(projectId, """{"who":"A+B"}""", conflict.currentVersion)
+        val retry = projects.updateLayout("u1", projectId, """{"who":"A+B"}""", conflict.currentVersion)
 
         assertTrue(retry is LayoutWrite.Ok)
         assertEquals(v + 2, (retry as LayoutWrite.Ok).version)
@@ -110,34 +93,50 @@ class LayoutConcurrencyTest {
 
     @Test
     fun `the version moves on every write, so two saves in the same millisecond differ`() {
-        var v = projects.findById(projectId)!!.version
+        var v = projects.findById("u1", projectId)!!.version
         repeat(3) {
-            val r = projects.updateLayout(projectId, """{"n":$it}""", v) as LayoutWrite.Ok
+            val r = projects.updateLayout("u1", projectId, """{"n":$it}""", v) as LayoutWrite.Ok
             assertEquals(v + 1, r.version)
             v = r.version
         }
         // A timestamp would have collapsed these three into one value; a
         // counter cannot, and it cannot go backwards on a clock adjustment.
-        assertEquals(4, projects.findById(projectId)!!.version)
+        assertEquals(4, projects.findById("u1", projectId)!!.version)
     }
 
     @Test
     fun `a write for an unknown project is NotFound, never a silent no-op`() {
-        assertTrue(projects.updateLayout("does-not-exist", "{}", 1) is LayoutWrite.NotFound)
+        assertTrue(projects.updateLayout("u1", "does-not-exist", "{}", 1) is LayoutWrite.NotFound)
     }
 
     // ── La compatibilité, et ce qu'elle coûte ─────────────────────────────
 
     @Test
     fun `no version means no protection — and that is why it is temporary`() {
-        val v = projects.findById(projectId)!!.version
-        projects.updateLayout(projectId, """{"who":"A"}""", v)
+        val v = projects.findById("u1", projectId)!!.version
+        projects.updateLayout("u1", projectId, """{"who":"A"}""", v)
 
         // An app that predates the guard: it keeps working…
-        val b = projects.updateLayout(projectId, """{"who":"B"}""", null)
+        val b = projects.updateLayout("u1", projectId, """{"who":"B"}""", null)
 
         assertTrue(b is LayoutWrite.Ok)
         assertTrue("B" in layout(projectId),
             "…but it still erases A. The guard only protects once the app sends its version.")
     }
+
+    // ── Pourquoi la course elle-même n'est PAS testée ici ─────────────────
+    //
+    // Tous les tests ci-dessus sont séquentiels, et c'est une limite du moteur,
+    // pas un oubli. La perte de mise à jour n'apparaît qu'en s'insérant ENTRE
+    // la lecture et l'écriture — or SQLite sérialise ses écrivains : un second
+    // écrivain qui a lu avant la validation du premier se fait refuser par le
+    // moteur lui-même. Sur ce moteur, l'implémentation fautive est protégée
+    // par accident.
+    //
+    // Un test de concurrence écrit ici passerait donc AVEC ET SANS le correctif
+    // — vérifié, en remettant l'ancienne version. Un test qui ne peut pas
+    // échouer ne garde rien.
+    //
+    // La course vit dans `PostgresContractTest`, sous le moteur où elle se
+    // produit réellement.
 }

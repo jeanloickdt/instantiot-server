@@ -17,7 +17,7 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// project/data/WidgetTable.kt
+// project/data/ProjectTable.kt
 package com.jeanloickdt.project.data
 
 import org.jetbrains.exposed.sql.Table

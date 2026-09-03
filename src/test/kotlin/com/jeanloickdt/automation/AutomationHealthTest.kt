@@ -19,22 +19,14 @@
 
 package com.jeanloickdt.automation
 
-import com.jeanloickdt.auth.HmacTokenService
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.userRepository
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
@@ -45,7 +37,6 @@ import io.ktor.server.application.install
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.routing.routing
 import io.ktor.server.testing.testApplication
-import java.io.File
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -64,24 +55,16 @@ import kotlin.test.assertTrue
  */
 class AutomationHealthTest {
 
-    private val tokenService = HmacTokenService("test-secret", "instantiot-server", "instantiot-app")
-    private val repo = SqlitePendingActionRepository()
+    private val repo = ExposedPendingActionRepository()
     private var now = 1_000_000L
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-health-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = db
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
     }
 
     private fun engine(sinks: EventSinks = EventSinks()) = AutomationEngine(
-        sinks, RuleCache(), repo, SqliteAutomationStateStore(), deviceRepository, clock = { now }
+        sinks, RuleCache(), repo, ExposedAutomationStateStore(), deviceRepository, clock = { now }
     )
 
     // ── Les seuils de la veille ───────────────────────────────────────────
@@ -135,7 +118,7 @@ class AutomationHealthTest {
         val sinks = EventSinks()
         application {
             install(ContentNegotiation) { json() }
-            configureAuth(userRepository, tokenService)
+            configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
             routing { automationHealthRoutes(userRepository, repo, sinks, engine(sinks), clock = { now }) }
         }
         val adminId = userRepository.create("root", BCrypt.hashpw("adminpass", BCrypt.gensalt()), "admin", true)
@@ -144,12 +127,12 @@ class AutomationHealthTest {
         repo.enqueue("k1", "u1", null, "PUSH", "{}", occurredAt = now - 5_000, nowMs = now - 5_000)
 
         val forbidden = client.get("/api/admin/automation/health") {
-            header(HttpHeaders.Authorization, "Bearer ${tokenService.issue(userId, 0)}")
+            header(HttpHeaders.Authorization, "Bearer ${com.jeanloickdt.auth.LocalTestAuth.token(userId, tokenVersion = 0)}")
         }
         assertTrue(forbidden.status == HttpStatusCode.Forbidden || forbidden.status == HttpStatusCode.Unauthorized)
 
         val res = client.get("/api/admin/automation/health") {
-            header(HttpHeaders.Authorization, "Bearer ${tokenService.issue(adminId, 0)}")
+            header(HttpHeaders.Authorization, "Bearer ${com.jeanloickdt.auth.LocalTestAuth.token(adminId, tokenVersion = 0)}")
         }
         assertEquals(HttpStatusCode.OK, res.status)
         val json = Json.parseToJsonElement(res.bodyAsText()).jsonObject

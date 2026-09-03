@@ -1,0 +1,23 @@
+meta {
+  name: Supprimer MON compte
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/api/users/me
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Tout part, `users` comprise. La validation relit le compte a chaque
+  requete : plus de ligne, plus d'entree — la revocation est immediate.
+
+  Le dernier administrateur ne peut pas se supprimer lui-meme : un
+  panneau que personne ne peut ouvrir est un piege, pas une liberte.
+}

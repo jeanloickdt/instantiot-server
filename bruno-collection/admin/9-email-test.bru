@@ -1,0 +1,26 @@
+meta {
+  name: Envoyer un e-mail de test
+  type: http
+  seq: 9
+}
+
+post {
+  url: {{baseUrl}}/api/admin/email-config/test
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "to": "moi@exemple.fr"
+  }
+}
+
+docs {
+  Le destinataire suit la meme chaine que l'expediteur reel : ce qu'on
+  demande, puis l'adresse du compte, puis le defaut du panneau.
+}

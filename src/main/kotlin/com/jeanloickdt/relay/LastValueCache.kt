@@ -23,85 +23,62 @@ package com.jeanloickdt.relay
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Identity of a widget across the node-local RAM structures (last-value cache,
- * declared-set). widgetId (= protocolId) is a GLOBAL identifier, but protocolIds
- * (gauge1, temp…) are chosen locally per user and collide across tenants — so a
- * widget is identified by (ownerId, widgetId), never widgetId alone, otherwise
- * two owners' live values stomp the same cache entry (last-writer-wins).
+ * L'identite d'un signal dans les structures RAM du noeud.
+ *
+ * La cle textuelle est `"deviceId:adresse"` — voir `signalKey()`. Elle est
+ * deja unique par carte, mais elle est TOUJOURS accompagnee du compte :
+ * deux locataires peuvent posseder deux cartes homonymes le temps d'une
+ * migration, et surtout l'isolation ne doit dependre d'aucune propriete des
+ * donnees. Un seul champ, et la derniere valeur d'un compte ecraserait celle
+ * d'un autre.
  */
-data class WidgetKey(val ownerId: String, val widgetId: String)
+data class SignalRef(val ownerId: String, val key: String)
 
-/** A widget's last received payload (base64) and when it arrived. */
+/** Le dernier payload recu (base64) et l'instant ou il est arrive. */
 data class LastValue(val payload: String, val at: Long)
 
 /**
- * The real-time "last value" of every widget — the read path the app uses
- * (states on reconnect) and the single write the device read-loop performs
- * per frame (pure RAM, never DB).
+ * La valeur courante de chaque signal — ce que l'app lit a la reconnexion,
+ * et la seule ecriture que la boucle de lecture fait par trame. Pure RAM,
+ * jamais la base.
  *
- * Persistence of `widgets.last_payload` is COALESCED: the 5s flush job calls
- * [drainDirty] and batch-upserts one row per changed widget (instead of one
- * DB write per frame). The DB column is therefore a cold-start fallback that
- * may lag ≤5s — the live value always comes from this cache.
+ * La persistance passe ailleurs : `signals.last_payload` est mis a jour par
+ * `touchBuffered`, cote depot. Ce cache-ci ne connait plus de "sale a vider"
+ * — le couple `drainDirty`/`evict` servait a remonter `widgets.last_payload`,
+ * une table qui n'existe plus.
  *
- * Certain seam: a future multi-node deployment swaps [InMemoryLastValueCache]
- * for a shared implementation (e.g. Redis) without touching any call site.
+ * Couture assumee : un deploiement multi-noeud remplace
+ * [InMemoryLastValueCache] par une implementation partagee (Redis, par
+ * exemple) sans toucher un seul appelant.
  */
 interface LastValueCache {
-    fun put(ownerId: String, widgetId: String, payload: String, at: Long)
-    fun get(ownerId: String, widgetId: String): LastValue?
+    fun put(ownerId: String, key: String, payload: String, at: Long)
+    fun get(ownerId: String, key: String): LastValue?
 
     /**
-     * Returns the entries modified since the last drain and clears their dirty
-     * mark — the flush job persists exactly these. Keyed by [WidgetKey] so the
-     * flush can upsert `widgets` by (owner_id, id). Accepted design point: a
-     * frame landing between the mark-clear and the value read may defer that
-     * widget's persistence by one cycle (≤10s worst case); harmless because
-     * the live value is RAM and the DB column is cold-start only.
+     * Les signaux parmi [watched] dont le dernier echantillon est plus vieux
+     * que [cutoffMs] — la lecture "le capteur s'est taru".
+     *
+     * [watched] est passe plutot que de balayer tout le cache : un signal que
+     * personne ne surveille ne doit jamais etre releve, et c'est le cote
+     * regles qui sait lesquels comptent. Une methode dediee plutot que la
+     * carte exposee : la carte est l'affaire de cette classe.
      */
-    fun drainDirty(): Map<WidgetKey, LastValue>
-
-    /** Drops a widget's entry (widget deleted) — RAM-leak/correctness hook. */
-    fun evict(ownerId: String, widgetId: String)
-
-    /**
-     * The widgets among [watched] whose last sample is older than [cutoffMs] —
-     * the "sensor went quiet" read. [watched] is passed in rather than scanning
-     * everything: widgets no rule watches must never be swept, and the caller
-     * (the rules side) is the one who knows which ones matter. A dedicated
-     * method rather than exposing the map: the map is this class's own
-     * business.
-     */
-    fun staleSince(cutoffMs: Long, watched: Set<WidgetKey>): List<Pair<WidgetKey, Long>>
+    fun staleSince(cutoffMs: Long, watched: Set<SignalRef>): List<Pair<SignalRef, Long>>
 }
 
 class InMemoryLastValueCache : LastValueCache {
-    private val values = ConcurrentHashMap<WidgetKey, LastValue>()
-    private val dirty = ConcurrentHashMap.newKeySet<WidgetKey>()
+    private val values = ConcurrentHashMap<SignalRef, LastValue>()
 
-    override fun put(ownerId: String, widgetId: String, payload: String, at: Long) {
-        val key = WidgetKey(ownerId, widgetId)
-        values[key] = LastValue(payload, at)
-        dirty.add(key)
+    override fun put(ownerId: String, key: String, payload: String, at: Long) {
+        values[SignalRef(ownerId, key)] = LastValue(payload, at)
     }
 
-    override fun get(ownerId: String, widgetId: String): LastValue? = values[WidgetKey(ownerId, widgetId)]
+    override fun get(ownerId: String, key: String): LastValue? = values[SignalRef(ownerId, key)]
 
-    override fun drainDirty(): Map<WidgetKey, LastValue> {
-        val keys = HashSet(dirty)
-        dirty.removeAll(keys)
-        return keys.mapNotNull { key -> values[key]?.let { key to it } }.toMap()
-    }
-
-    override fun evict(ownerId: String, widgetId: String) {
-        val key = WidgetKey(ownerId, widgetId)
-        values.remove(key)
-        dirty.remove(key)
-    }
-
-    override fun staleSince(cutoffMs: Long, watched: Set<WidgetKey>): List<Pair<WidgetKey, Long>> =
-        // Iterate the WATCHED set, not the cache: rules per node number in the
-        // hundreds, cached widgets in the tens of thousands.
+    override fun staleSince(cutoffMs: Long, watched: Set<SignalRef>): List<Pair<SignalRef, Long>> =
+        // On parcourt l'ensemble SURVEILLE, pas le cache : les regles d'un
+        // noeud se comptent en centaines, les signaux en dizaines de milliers.
         watched.mapNotNull { key ->
             val last = values[key] ?: return@mapNotNull null
             if (last.at < cutoffMs) key to last.at else null

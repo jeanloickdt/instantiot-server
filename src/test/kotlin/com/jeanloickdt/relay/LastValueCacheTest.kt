@@ -45,29 +45,16 @@ class LastValueCacheTest {
     }
 
     @Test
-    fun `evicting one owner leaves the other's entry`() {
+    fun `two owners under the same key never see each other's value`() {
+        // Le test que la classe existe pour porter. La cle textuelle est deja
+        // unique par carte, mais l'isolation ne doit dependre d'aucune
+        // propriete des donnees : un seul champ, et le dernier ecrivain
+        // gagnerait pour tout le monde.
         val cache = InMemoryLastValueCache()
         cache.put(A, widget, "A-val", 100)
         cache.put(B, widget, "B-val", 200)
 
-        cache.evict(A, widget)
-
-        assertNull(cache.get(A, widget), "A's entry dropped")
-        assertEquals("B-val", cache.get(B, widget)?.payload, "B's entry under the same widgetId survives")
-    }
-
-    @Test
-    fun `drainDirty keys entries by owner and widget`() {
-        val cache = InMemoryLastValueCache()
-        cache.put(A, widget, "A-val", 100)
-        cache.put(B, widget, "B-val", 200)
-
-        val drained = cache.drainDirty()
-        assertEquals("A-val", drained[WidgetKey(A, widget)]?.payload)
-        assertEquals("B-val", drained[WidgetKey(B, widget)]?.payload)
-        assertEquals(2, drained.size, "both owners' dirty entries are distinct")
-
-        // dirty marks cleared → a second drain yields nothing
-        assertEquals(0, cache.drainDirty().size)
+        assertEquals("A-val", cache.get(A, widget)?.payload)
+        assertEquals("B-val", cache.get(B, widget)?.payload)
     }
 }

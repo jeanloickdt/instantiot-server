@@ -17,39 +17,98 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
-// project/domain/WidgetRepository.kt
+// project/domain/ProjectRepository.kt
 package com.jeanloickdt.project.domain
 
+/**
+ * Les projets, sous trois règles qui ne souffrent aucune exception.
+ *
+ * **1. `ownerId` en premier, partout.** Pas de surcharge « pratique » sans lui.
+ * La vérification d'appartenance était recopiée à la main dans cinq routes ;
+ * une sixième qui l'oublie, et un compte lit le projet d'un autre. Le
+ * compilateur doit rendre la faute impossible, pas la relecture la rendre
+ * détectable — c'est la même règle que `SignalRepository.findById(ownerId, id)`,
+ * et pour la même raison.
+ *
+ * **2. Toute écriture est UNE instruction conditionnelle.** Jamais lire puis
+ * écrire. `updateLayout` le faisait, et la garde de version qu'il portait ne
+ * protégeait rien sous PostgreSQL : deux téléphones lisaient la même version,
+ * la trouvaient bonne, et écrivaient tous les deux. Voir la mesure dans
+ * `PostgresContractTest` — trois gagnants sur huit.
+ *
+ * **3. Toute écriture rend la ligne**, jamais un `Boolean` ni un `String`. Les
+ * routes n'ont alors ni seconde requête à faire, ni `!!` à écrire.
+ */
 interface ProjectRepository {
 
-    // Create a new project
-    fun create(name: String, ownerId: String): String
+    /** @return la ligne créée — l'appelant n'a pas à la relire. */
+    fun create(ownerId: String, name: String): ProjectRow
 
-    // Find a project by its id
-    fun findById(id: String): ProjectRow?
+    fun findById(ownerId: String, id: String): ProjectRow?
 
-    // List all projects of a user
     fun findAllByOwner(ownerId: String): List<ProjectRow>
 
-    // Rename a project
-    fun updateName(id: String, name: String): Boolean
-
-    // Sync full layout — called with debounce from the app
     /**
-     * Writes the layout under optimistic concurrency.
+     * Les projets d'un compte, **sans leur layout**.
      *
-     * [expectedVersion] null keeps the legacy behaviour — write and hope. It
-     * exists only so an app that has not been updated yet keeps working; it
-     * offers no protection, and that is the point of naming it.
+     * La liste sert à afficher des noms. Son pendant complet transportait le
+     * champ le plus lourd de chaque projet à chaque ouverture de l'app — et
+     * sous PostgreSQL un `TEXT` volumineux est stocké hors ligne (TOAST), donc
+     * le servir voulait dire aller le LIRE sur le disque.
+     *
+     * L'implémentation ne doit pas sélectionner la colonne. Filtrer en Kotlin
+     * aurait tout lu pour tout jeter, et n'aurait rien économisé de ce qui
+     * coûte.
      */
-    fun updateLayout(id: String, layoutJson: String, expectedVersion: Int? = null): LayoutWrite
+    fun findAllByOwnerSummary(ownerId: String): List<ProjectSummary>
 
-    // Delete a project
-    fun delete(id: String): Boolean
+    /**
+     * Renomme, et rend la ligne à jour — `null` si le projet n'existe pas, ou
+     * n'appartient pas à ce compte. Les deux se répondent pareil : un 404.
+     *
+     * **`version` ne bouge PAS, et c'est voulu.** Ce compteur garde le LAYOUT.
+     * L'incrémenter sur un renommage provoquerait un 409 sur l'autre téléphone,
+     * qui n'a pourtant rien à réconcilier — son plan de tableau de bord est
+     * toujours le bon. Ne « corrigez » pas cet oubli : ce n'en est pas un.
+     */
+    fun updateName(ownerId: String, id: String, name: String): ProjectRow?
 
-    // Total number of projects
-    fun count(): Long
+    /**
+     * Écrit le layout sous concurrence optimiste.
+     *
+     * [expectedVersion] à `null` garde le comportement d'avant — écrire et
+     * espérer. Il n'existe que pour qu'une app pas encore mise à jour continue
+     * de fonctionner ; il n'offre aucune protection, et c'est tout l'intérêt
+     * de le nommer.
+     */
+    fun updateLayout(
+        ownerId: String,
+        id: String,
+        layoutJson: String,
+        expectedVersion: Int? = null
+    ): LayoutWrite
+
+    fun delete(ownerId: String, id: String): Boolean
+
+    /**
+     * Tous les projets d'un compte — la suppression de compte.
+     *
+     * Même raison que son homologue côté cartes : la purge les supprimait un
+     * par un. Une instruction FIXE vaut mieux qu'une par projet dans une
+     * transaction qui tient des verrous.
+     */
+    fun deleteAllByOwner(ownerId: String): Int
+
+    /**
+     * Tous les projets de tous les comptes — une métrique d'administration.
+     *
+     * Le nom porte le `All` parce que c'est la seule méthode de cette interface
+     * qui ne soit pas cadrée par un compte, et qu'un `count()` au milieu de
+     * méthodes scopées se lit comme « les miens ».
+     */
+    fun countAll(): Long
 }
+
 /**
  * What a layout write did.
  *

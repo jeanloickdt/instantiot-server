@@ -243,8 +243,8 @@ fun Route.adminStatsRoute(
 
         call.respond(AdminStatsResponse(
             users                = userRepository.count(),
-            projects             = projectRepository.count(),
-            devicesTotal         = deviceRepository.count(),
+            projects             = projectRepository.countAll(),
+            devicesTotal         = deviceRepository.countAll(),
             devicesOnline        = connections.deviceSessions.size,
             appSessionsActive    = connections.appSessions.size,
             deviceSessionsActive = connections.deviceSessions.size
@@ -263,7 +263,7 @@ fun Route.adminDevicesRoute(
         call.requireAdmin(userRepository) ?: return@get
 
         // return ALL devices — not filtered by owner
-        val devices = deviceRepository.findAll().map {
+        val devices = deviceRepository.findAllForAdmin().map {
             DeviceResponse(
                 id        = it.id,
                 name      = it.name,

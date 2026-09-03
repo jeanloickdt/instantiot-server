@@ -51,7 +51,12 @@ build/jpackage-input/
 .kotlin/
 
 # Private local doc — actor map (stays local, never pushed)
-ARCHITECTURE_ACTORS.md
+#
+# Motif, pas nom exact : les cartes se datent quand le code qu'elles
+# decrivent change (ARCHITECTURE_ACTORS-2026-08.md). Un nom exact laissait
+# la version renommee sortir de l'ignore sans que rien ne le dise, et un
+# `git add -A` l'aurait poussee.
+ARCHITECTURE_ACTORS*.md
 
 # Reglages locaux de l'agent — JAMAIS dans un depot public.
 #

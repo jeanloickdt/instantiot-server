@@ -1,0 +1,15 @@
+meta {
+  name: 7. Supprimer une declaration
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/api/devices/{{deviceId}}/signals/{{address}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

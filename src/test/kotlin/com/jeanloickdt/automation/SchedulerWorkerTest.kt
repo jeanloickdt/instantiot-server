@@ -21,20 +21,11 @@ package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
 import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
-import java.sql.DriverManager
 import java.time.DayOfWeek
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -52,7 +43,6 @@ private val TORONTO = ZoneId.of("America/Toronto")
  */
 class SchedulerWorkerTest {
 
-    private lateinit var dbFile: File
     private lateinit var sinks: EventSinks
     private var now = 0L
 
@@ -67,14 +57,7 @@ class SchedulerWorkerTest {
 
     @BeforeTest
     fun setup() {
-        dbFile = File.createTempFile("instantiot-sched-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = dbFile
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
         sinks = EventSinks()
     }
 
@@ -135,24 +118,23 @@ class SchedulerWorkerTest {
 
     // ── Le poll — contre SQLite réel ──────────────────────────────────────
 
+    // Le JDBC brut visait le fichier SQLite. La meme instruction passe par la
+    // transaction Exposed, donc par la connexion du moment — celle de Postgres.
     private fun exec(sql: String) =
-        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
-            c.createStatement().use { it.execute(sql) }
-        }
+        org.jetbrains.exposed.sql.transactions.transaction { exec(sql) }
 
     private fun seedScheduleRule(id: String, dueAt: Long, enabled: Boolean = true) {
-        exec("""INSERT INTO automation_rules (id, owner_id, name, enabled, trigger_kind, trigger_widget_id, definition, created_at, updated_at)
-                VALUES ('$id','u1','$id',${if (enabled) 1 else 0},'schedule',NULL,
+        exec("""INSERT INTO automation_rules (id, owner_id, name, enabled, trigger_kind, trigger_signal_key, definition, created_at, updated_at)
+                VALUES ('$id','u1','$id',$enabled,'schedule',NULL,
                 '{"when":{"kind":"schedule","at":"07:00","tz":"America/Toronto"},"cooldownS":0,"actions":[{"type":"EMAIL","body":"b"}]}',0,0)""")
         exec("INSERT INTO scheduled_jobs (rule_id, next_run_at, timezone) VALUES ('$id',$dueAt,'America/Toronto')")
     }
 
     private fun nextRunOf(id: String): Long =
-        DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
-            c.createStatement().use { s ->
-                s.executeQuery("SELECT next_run_at FROM scheduled_jobs WHERE rule_id='$id'")
-                    .use { rs -> rs.next(); rs.getLong(1) }
-            }
+        org.jetbrains.exposed.sql.transactions.transaction {
+            exec("SELECT next_run_at FROM scheduled_jobs WHERE rule_id='$id'") { rs ->
+                rs.next(); rs.getLong(1)
+            }!!
         }
 
     private fun drained(): List<RelayEvent.TimeReached> = buildList {
@@ -227,7 +209,7 @@ class SchedulerWorkerTest {
 
         val cache = RuleCache().apply { reload() }
         val engine = AutomationEngine(
-            sinks, cache, SqlitePendingActionRepository(), SqliteAutomationStateStore(),
+            sinks, cache, ExposedPendingActionRepository(), ExposedAutomationStateStore(),
             deviceRepository, clock = { now }
         )
         SchedulerWorker(sinks, clock = { now }).pollOnce()
@@ -236,10 +218,8 @@ class SchedulerWorkerTest {
         // A restart-race replay of the SAME occurrence: same scheduledFor.
         engine.handle(RelayEvent.TimeReached("u1", "r1", due, now + 1_000))
 
-        val rows = DriverManager.getConnection("jdbc:sqlite:${dbFile.absolutePath}").use { c ->
-            c.createStatement().use { s ->
-                s.executeQuery("SELECT count(*) FROM pending_actions").use { rs -> rs.next(); rs.getInt(1) }
-            }
+        val rows = org.jetbrains.exposed.sql.transactions.transaction {
+            exec("SELECT count(*) FROM pending_actions") { rs -> rs.next(); rs.getInt(1) }!!
         }
         assertEquals(1, rows, "one occurrence = one action, however many times it is delivered to the engine")
     }

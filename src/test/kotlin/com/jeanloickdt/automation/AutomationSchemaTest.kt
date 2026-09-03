@@ -24,12 +24,6 @@ import com.jeanloickdt.automation.data.AutomationTables
 import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
 import java.io.File
 import java.sql.DriverManager
 import java.sql.SQLException
@@ -54,9 +48,8 @@ class AutomationSchemaTest {
     }
 
     private fun initAll() = DatabaseFactory.init(
-        UserTable, ProjectTable, DeviceTable, WidgetTable,
-        WidgetHistoryTable, WidgetHistoryNumericTable,
-        WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
+        UserTable, ProjectTable, DeviceTable,
+        *com.jeanloickdt.signal.data.SignalTables.ALL,
         *AutomationTables.ALL,
         dbFile = db
     )
@@ -121,7 +114,7 @@ class AutomationSchemaTest {
         listOf(
             "uniq_pending_idempotency",   // the guarantee above
             "idx_pending_due",            // the every-second "what is due?"
-            "idx_rules_owner_widget",     // the rule-cache load
+            "idx_rules_owner_signal",     // the rule-cache load
             "idx_scheduled_due",          // the scheduler's range scan
             "idx_push_tokens_owner"       // delivery fan-out per owner
         ).forEach { assertTrue(it in indexes, "index $it must exist") }

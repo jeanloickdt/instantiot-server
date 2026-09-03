@@ -1,0 +1,15 @@
+meta {
+  name: Lister les sauvegardes
+  type: http
+  seq: 20
+}
+
+get {
+  url: {{baseUrl}}/api/admin/backup/list
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}

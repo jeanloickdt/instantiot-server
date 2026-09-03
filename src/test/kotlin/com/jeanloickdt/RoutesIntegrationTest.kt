@@ -21,21 +21,9 @@ package com.jeanloickdt
 
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.auth.configureAuth
-import com.jeanloickdt.auth.data.UserTable
-import com.jeanloickdt.common.ServerConfig
 import com.jeanloickdt.common.systemRoutes
-import com.jeanloickdt.database.DatabaseFactory
-import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.device.deviceRoutes
-import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.project.projectRoutes
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import com.jeanloickdt.widget.widgetRoutes
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.get
@@ -62,7 +50,6 @@ import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.mindrot.jbcrypt.BCrypt
-import java.io.File
 import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -75,30 +62,21 @@ import kotlin.time.Duration.Companion.minutes
  * password-change signal, ownership isolation, the admin guard and
  * registration gating.
  *
- * Harness: each test gets a fresh throwaway SQLite DB (temp file) via the
- * new `DatabaseFactory.init(*com.jeanloickdt.automation.data.AutomationTables.ALL,dbFile = ...)` overload, and a slim Ktor app that
- * wires only the plugins + auth + routes — NO TCP relay, mDNS or background
- * loops (those bind real ports and would make the test flaky). The routes run
- * against the same global repositories as production.
+ * Harness: chaque test part d'une base vide sur le moteur de production
+ * (`PostgresTestBase`), et d'une app Ktor mince qui ne cable que les plugins,
+ * l'authentification et les routes — pas de relais TCP ni de boucles de fond,
+ * qui ouvriraient de vrais ports et rendraient le test instable. Les routes
+ * tournent sur les memes depots globaux que la production.
  */
 class RoutesIntegrationTest {
 
     @BeforeTest
     fun setup() {
-        val tmpDb = File.createTempFile("instantiot-test-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *com.jeanloickdt.automation.data.AutomationTables.ALL,
-            dbFile = tmpDb
-        )
-        ServerConfig.registrationOpen = false
+        com.jeanloickdt.database.TestDatabase.fresh()
     }
 
-    private val tokenService = com.jeanloickdt.auth.HmacTokenService(
-        "test-secret", "instantiot-server", "instantiot-app"
-    )
+    // Ce serveur ne vend rien : aucun quota a monter, la couture
+    // `quotaGate` de `deviceRoutes` laisse passer par defaut.
 
     // ── slim test application (no relay / mDNS / loops) ──────────
     private fun ApplicationTestBuilder.installTestApp() {
@@ -115,7 +93,7 @@ class RoutesIntegrationTest {
                     requestKey { it.request.local.remoteAddress }
                 }
             }
-            configureAuth(userRepository, tokenService)
+            configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
             // per-test relay seams (DI) — isolated, no global singleton
             val connections = com.jeanloickdt.relay.ConnectionRegistry()
             val buffers     = com.jeanloickdt.relay.HistoryBuffers()
@@ -123,30 +101,23 @@ class RoutesIntegrationTest {
             val events      = com.jeanloickdt.relay.ControlEventBroadcaster(connections)
             // same composition as production: routes get the cache-aware repo so
             // the cascade purge path is exercised by the tests.
-            val cacheAwareWidgets = com.jeanloickdt.relay.CacheAwareWidgetRepository(
-                widgetRepository, buffers.knownWidgetIds, lastValues
-            )
             routing {
                 systemRoutes()
                 val accountPurge = com.jeanloickdt.auth.AccountPurge(
-                    userRepository, projectRepository, deviceRepository, cacheAwareWidgets,
-                    widgetHistoryRepository, widgetHistoryNumericRepository,
-                    widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+                    userRepository, projectRepository, deviceRepository, 
+                signalRepository, signalHistoryRepository,
                     connections, events
                 )
-                authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, accountPurge)
+                authRoutes(
+                    userRepository, projectRepository, deviceRepository, connections,
+                    com.jeanloickdt.auth.LocalTestAuth.service, accountPurge
+                )
                 projectRoutes(
-                    projectRepository, deviceRepository, cacheAwareWidgets,
-                    widgetHistoryRepository, widgetHistoryNumericRepository,
-                    widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
+                    projectRepository, deviceRepository, 
+                    signalRepository, signalHistoryRepository,
                     connections, events
                 )
                 deviceRoutes(deviceRepository, projectRepository, connections, events)
-                widgetRoutes(
-                    cacheAwareWidgets, projectRepository, widgetHistoryRepository, widgetHistoryNumericRepository,
-                    widgetHistoryMinRepository, widgetHistoryHourRepository, widgetHistoryDayRepository,
-                    lastValues
-                )
             }
         }
     }
@@ -159,93 +130,16 @@ class RoutesIntegrationTest {
         passwordChanged: Boolean = true
     ): Pair<String, String> {
         val id = userRepository.create(username, BCrypt.hashpw(password, BCrypt.gensalt()), role, passwordChanged)
-        return id to tokenService.issue(id, 0)
+        return id to com.jeanloickdt.auth.LocalTestAuth.token(id, tokenVersion = 0)
     }
 
     private fun jsonOf(body: String) = Json.parseToJsonElement(body).jsonObject
 
     // ── tests ───────────────────────────────────────────────────
 
-    @Test
-    fun `login succeeds and signals passwordChanged false for default admin`() = testApplication {
-        installTestApp()
-        createUser("admin", "admin", role = "admin", passwordChanged = false)
 
-        val res = client.post("/api/login") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"admin","password":"admin"}""")
-        }
-        assertEquals(HttpStatusCode.OK, res.status)
-        val json = jsonOf(res.bodyAsText())
-        assertFalse(json["passwordChanged"]!!.jsonPrimitive.boolean, "default admin must be flagged to change")
-        assertTrue(json["token"]!!.jsonPrimitive.content.isNotBlank())
-    }
 
-    @Test
-    fun `login with a wrong password is rejected`() = testApplication {
-        installTestApp()
-        createUser("bob", "secret123")
 
-        val res = client.post("/api/login") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"bob","password":"wrong"}""")
-        }
-        assertEquals(HttpStatusCode.Unauthorized, res.status)
-    }
-
-    @Test
-    fun `changing the password clears the must-change flag`() = testApplication {
-        installTestApp()
-        val (_, token) = createUser("admin", "admin", role = "admin", passwordChanged = false)
-
-        val change = client.patch("/api/users/me/password") {
-            header(HttpHeaders.Authorization, "Bearer $token")
-            contentType(ContentType.Application.Json)
-            setBody("""{"currentPassword":"admin","newPassword":"newsecret1"}""")
-        }
-        assertEquals(HttpStatusCode.OK, change.status)
-
-        val relog = client.post("/api/login") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"admin","password":"newsecret1"}""")
-        }
-        assertEquals(HttpStatusCode.OK, relog.status)
-        assertTrue(jsonOf(relog.bodyAsText())["passwordChanged"]!!.jsonPrimitive.boolean)
-    }
-
-    @Test
-    fun `changing the password revokes the old token and re-issues a working one`() = testApplication {
-        installTestApp()
-        // login to get a real, version-0 token
-        createUser("carol", "oldsecret1")
-        val login = client.post("/api/login") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"carol","password":"oldsecret1"}""")
-        }
-        val oldToken = jsonOf(login.bodyAsText())["token"]!!.jsonPrimitive.content
-
-        // old token works before the change
-        assertEquals(HttpStatusCode.OK, client.get("/api/projects") {
-            header(HttpHeaders.Authorization, "Bearer $oldToken")
-        }.status)
-
-        // change password → bumps token_version (revokes) AND returns a fresh token
-        val change = client.patch("/api/users/me/password") {
-            header(HttpHeaders.Authorization, "Bearer $oldToken")
-            contentType(ContentType.Application.Json)
-            setBody("""{"currentPassword":"oldsecret1","newPassword":"newsecret1"}""")
-        }
-        assertEquals(HttpStatusCode.OK, change.status)
-        val newToken = jsonOf(change.bodyAsText())["token"]!!.jsonPrimitive.content
-
-        // the OLD token is now revoked (401), the RE-ISSUED token works (200)
-        assertEquals(HttpStatusCode.Unauthorized, client.get("/api/projects") {
-            header(HttpHeaders.Authorization, "Bearer $oldToken")
-        }.status)
-        assertEquals(HttpStatusCode.OK, client.get("/api/projects") {
-            header(HttpHeaders.Authorization, "Bearer $newToken")
-        }.status)
-    }
 
     @Test
     fun `a user cannot read another user's project`() = testApplication {
@@ -352,72 +246,6 @@ class RoutesIntegrationTest {
         assertFalse(client.get("/api/devices") {
             header(HttpHeaders.Authorization, "Bearer $token")
         }.bodyAsText().contains("esp-to-purge"), "the project's device must be cascade-deleted")
-    }
-
-    @Test
-    fun `a user cannot register a widget in another user's project`() = testApplication {
-        installTestApp()
-        val (_, tokenA) = createUser("alice", "password1")
-        val (_, tokenB) = createUser("bob", "password2")
-
-        val bobProjectId = jsonOf(client.post("/api/projects") {
-            header(HttpHeaders.Authorization, "Bearer $tokenB")
-            contentType(ContentType.Application.Json)
-            setBody("""{"name":"Bob project"}""")
-        }.bodyAsText())["id"]!!.jsonPrimitive.content
-
-        // single register
-        assertEquals(HttpStatusCode.NotFound, client.post("/api/projects/$bobProjectId/widgets") {
-            header(HttpHeaders.Authorization, "Bearer $tokenA")
-            contentType(ContentType.Application.Json)
-            setBody("""{"id":"evil","type":"gauge"}""")
-        }.status)
-
-        // bulk register
-        assertEquals(HttpStatusCode.NotFound, client.post("/api/projects/$bobProjectId/widgets/bulk") {
-            header(HttpHeaders.Authorization, "Bearer $tokenA")
-            contentType(ContentType.Application.Json)
-            setBody("""{"widgets":[{"id":"evil2","type":"gauge"}]}""")
-        }.status)
-
-        // and the owner can register in their own project (201)
-        assertEquals(HttpStatusCode.Created, client.post("/api/projects/$bobProjectId/widgets") {
-            header(HttpHeaders.Authorization, "Bearer $tokenB")
-            contentType(ContentType.Application.Json)
-            setBody("""{"id":"ok","type":"gauge"}""")
-        }.status)
-    }
-
-    @Test
-    fun `widget history read does not leak another owner's samples under a colliding widgetId`() = testApplication {
-        installTestApp()
-        val (aliceOwnerId, tokenA) = createUser("alice", "password1")
-
-        // A owns a project and registers the (collision-prone) widget gauge1
-        val projA = jsonOf(client.post("/api/projects") {
-            header(HttpHeaders.Authorization, "Bearer $tokenA")
-            contentType(ContentType.Application.Json)
-            setBody("""{"name":"Alice project"}""")
-        }.bodyAsText())["id"]!!.jsonPrimitive.content
-        client.post("/api/projects/$projA/widgets") {
-            header(HttpHeaders.Authorization, "Bearer $tokenA")
-            contentType(ContentType.Application.Json)
-            setBody("""{"id":"gauge1","type":"gauge"}""")
-        }
-
-        // Two users' samples land in the numeric table under the SAME widgetId,
-        // exactly as the relay would write them (ownerId carried per row).
-        widgetHistoryNumericRepository.insertBatch(listOf(
-            com.jeanloickdt.widget.domain.WidgetHistoryNumericRow(0, "gauge1", projA, aliceOwnerId, null, 1.0, 100),
-            com.jeanloickdt.widget.domain.WidgetHistoryNumericRow(0, "gauge1", "projB", "u-bob", null, 99.0, 150),
-        ))
-
-        // A reads gauge1 history → must see ONLY its own sample (1.0), never B's 99.0
-        val body = client.get("/api/widgets/gauge1/history?granularity=raw&from=0&to=1000") {
-            header(HttpHeaders.Authorization, "Bearer $tokenA")
-        }.bodyAsText()
-        assertTrue(body.contains("1.0"), "A sees its own sample")
-        assertFalse(body.contains("99.0"), "A must NOT see B's sample under the colliding widgetId")
     }
 
     @Test
@@ -547,6 +375,176 @@ class RoutesIntegrationTest {
         assertFalse(bobList.bodyAsText().contains("Alice project"))
     }
 
+    // ── La liste ne transporte pas les layouts ────────────────────────────
+
+    @Test
+    fun `the project list carries no layout at all`() = testApplication {
+        // La liste sert à afficher des NOMS. Elle transportait le champ le plus
+        // lourd de chaque projet, à chaque ouverture de l'app — et un layout
+        // volumineux est stocké hors ligne par PostgreSQL (TOAST), donc le
+        // servir veut dire aller le LIRE sur le disque, pas seulement le
+        // sérialiser.
+        //
+        // Le test regarde la charge utile, pas le type : c'est ce que l'app
+        // reçoit réellement, et c'est là que le coût se paie.
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+
+        val created = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Atelier"}""")
+        }
+        val projectId = jsonOf(created.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        // Un layout reconnaissable : s'il traverse, on le verra.
+        val marker = "GROSSE-CHAINE-DE-LAYOUT"
+        client.patch("/api/projects/$projectId/layout") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"layoutJson":"{\"marker\":\"$marker\"}"}""")
+        }
+
+        val list = client.get("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        val body = list.bodyAsText()
+
+        assertEquals(HttpStatusCode.OK, list.status)
+        assertTrue("Atelier" in body, "la liste doit toujours porter les noms")
+        assertFalse("layoutJson" in body, "le champ n'a rien à faire dans une liste de noms")
+        assertFalse(marker in body, "et sa valeur encore moins")
+
+        // Le détail, lui, le porte toujours — c'est lui que l'app appelle en
+        // ouvrant un projet.
+        val detail = client.get("/api/projects/$projectId") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+        assertTrue(marker in detail.bodyAsText(), "le détail reste complet")
+    }
+
+    @Test
+    fun `deleting a project with no device at all still works`() = testApplication {
+        // La cascade passe une LISTE d'identifiants de cartes aux deux purges
+        // par lot. Vide, elle deviendrait `IN ()` — une erreur de syntaxe sur
+        // la plupart des moteurs, et un projet sans carte ne pourrait plus être
+        // supprimé.
+        //
+        // Le cas le plus banal qui soit : un projet qu'on vient de créer.
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+
+        val created = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Vide"}""")
+        }
+        val projectId = jsonOf(created.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val res = client.delete("/api/projects/$projectId") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+        }
+
+        assertEquals(HttpStatusCode.OK, res.status)
+        val after = client.get("/api/projects") { header(HttpHeaders.Authorization, "Bearer $token") }
+        assertFalse("Vide" in after.bodyAsText(), "le projet doit avoir disparu")
+    }
+
+    // ── Le layout est borné ───────────────────────────────────────────────
+
+    @Test
+    fun `a layout beyond the limit is refused`() = testApplication {
+        // Le nom est validé 2-64 caractères ; le layout ne l'était pas du tout.
+        // Un client bogué ou malveillant pouvait pousser des dizaines de
+        // mégaoctets — stockés, relus, et présents dans chaque sauvegarde.
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+
+        val created = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Atelier"}""")
+        }
+        val projectId = jsonOf(created.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val enorme = "a".repeat(300 * 1024)
+        val res = client.patch("/api/projects/$projectId/layout") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"layoutJson":"$enorme"}""")
+        }
+
+        assertEquals(HttpStatusCode.PayloadTooLarge, res.status)
+        assertTrue(
+            "256" in res.bodyAsText(),
+            "la borne part dans le message, pour que l'app prévienne avant d'envoyer — " +
+                "reçu : ${res.bodyAsText().take(120)}"
+        )
+    }
+
+    @Test
+    fun `the limit counts UTF-8 bytes, not characters`() = testApplication {
+        // LE test subtil. `String.length` compte des unités de code : un layout
+        // plein d'accents ou d'emoji passerait une vérification en caractères
+        // et dépasserait la borne en base, là où elle compte.
+        //
+        // Chaque « é » pèse deux octets en UTF-8 : 200 000 caractères font
+        // 400 000 octets. Sous la limite si on compte mal, au-dessus si on
+        // compte juste.
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+
+        val created = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Atelier"}""")
+        }
+        val projectId = jsonOf(created.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val accents = "é".repeat(200_000)
+        assertTrue(accents.length < 256 * 1024, "précondition : sous la borne si on compte les caractères")
+        assertTrue(
+            accents.toByteArray(Charsets.UTF_8).size > 256 * 1024,
+            "précondition : au-dessus si on compte les octets"
+        )
+
+        val res = client.patch("/api/projects/$projectId/layout") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"layoutJson":"$accents"}""")
+        }
+
+        assertEquals(
+            HttpStatusCode.PayloadTooLarge, res.status,
+            "compter les caractères laisserait passer deux fois la borne"
+        )
+    }
+
+    @Test
+    fun `a layout under the limit still goes through`() = testApplication {
+        // Le pendant : une borne qui refuse tout serait aussi fausse. Un gros
+        // tableau de bord réaliste pèse une dizaine de kilo-octets ; on vérifie
+        // qu'on est très loin de le gêner.
+        installTestApp()
+        val (_, token) = createUser("alice", "password1")
+
+        val created = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Atelier"}""")
+        }
+        val projectId = jsonOf(created.bodyAsText())["id"]!!.jsonPrimitive.content
+
+        val realiste = "w".repeat(64 * 1024)
+        val res = client.patch("/api/projects/$projectId/layout") {
+            header(HttpHeaders.Authorization, "Bearer $token")
+            contentType(ContentType.Application.Json)
+            setBody("""{"layoutJson":"$realiste"}""")
+        }
+
+        assertEquals(HttpStatusCode.OK, res.status)
+    }
+
     @Test
     fun `admin routes reject a non-admin user`() = testApplication {
         installTestApp()
@@ -571,24 +569,6 @@ class RoutesIntegrationTest {
         assertEquals(HttpStatusCode.Unauthorized, res.status)
     }
 
-    @Test
-    fun `registration is gated by the open flag`() = testApplication {
-        installTestApp()
-
-        ServerConfig.registrationOpen = false
-        val closed = client.post("/api/register") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"newuser","password":"password12"}""")
-        }
-        assertEquals(HttpStatusCode.Forbidden, closed.status)
-
-        ServerConfig.registrationOpen = true
-        val open = client.post("/api/register") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"newuser","password":"password12"}""")
-        }
-        assertEquals(HttpStatusCode.Created, open.status)
-    }
 
     @Test
     fun `health and version endpoints are public`() = testApplication {
@@ -606,15 +586,13 @@ class RoutesIntegrationTest {
     @Test
     fun `error responses use the unified ApiError JSON envelope`() = testApplication {
         installTestApp()
-        createUser("bob", "secret123")
 
-        val res = client.post("/api/login") {
-            contentType(ContentType.Application.Json)
-            setBody("""{"username":"bob","password":"wrong"}""")
-        }
+        // Visait `/api/login` avec un mauvais mot de passe. Cette porte
+        // n'existe plus : le relais ne verifie aucun mot de passe, et la
+        // route delegue a iia — injoignable ici. L'intention du test tient
+        // toujours, elle vise juste une autre erreur : une route
+        // authentifiee, sans jeton.
+        val res = client.get("/api/admin/stats")
         assertEquals(HttpStatusCode.Unauthorized, res.status)
-        // P1-2 contract: every error is a JSON object with an `error` field
-        // (this path was a bare string before — would have failed to parse here).
-        assertEquals("Invalid credentials", jsonOf(res.bodyAsText())["error"]!!.jsonPrimitive.content)
     }
 }

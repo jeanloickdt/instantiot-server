@@ -1,0 +1,30 @@
+meta {
+  name: 5. Ecrire la disposition
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/api/projects/{{projectId}}/layout
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+body:json {
+  {
+    "layoutJson": "{\"widgets\":[]}",
+    "version": 1
+  }
+}
+
+docs {
+  **Ecriture optimiste.** On envoie la version qu'on croit tenir ; si
+  quelqu'un a ecrit entre-temps, le serveur refuse au lieu d'ecraser.
+
+  Le serveur ne lit jamais le contenu du JSON : c'est la disposition de
+  l'app, opaque pour lui.
+}

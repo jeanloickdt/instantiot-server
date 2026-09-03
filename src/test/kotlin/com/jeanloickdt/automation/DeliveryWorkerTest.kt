@@ -21,16 +21,8 @@ package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
-import com.jeanloickdt.database.DatabaseFactory
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.project.data.ProjectTable
-import com.jeanloickdt.widget.data.WidgetHistoryDayTable
-import com.jeanloickdt.widget.data.WidgetHistoryHourTable
-import com.jeanloickdt.widget.data.WidgetHistoryMinTable
-import com.jeanloickdt.widget.data.WidgetHistoryNumericTable
-import com.jeanloickdt.widget.data.WidgetHistoryTable
-import com.jeanloickdt.widget.data.WidgetTable
-import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlin.test.BeforeTest
 import kotlin.test.Test
@@ -46,7 +38,7 @@ import kotlin.test.assertTrue
  */
 class DeliveryWorkerTest {
 
-    private val repo = SqlitePendingActionRepository()
+    private val repo = ExposedPendingActionRepository()
     private var now = 1_000_000L
     private val clock = { now }
 
@@ -60,14 +52,7 @@ class DeliveryWorkerTest {
 
     @BeforeTest
     fun setup() {
-        val db = File.createTempFile("instantiot-delivery-", ".db").apply { deleteOnExit() }
-        DatabaseFactory.init(
-            UserTable, ProjectTable, DeviceTable, WidgetTable,
-            WidgetHistoryTable, WidgetHistoryNumericTable,
-            WidgetHistoryMinTable, WidgetHistoryHourTable, WidgetHistoryDayTable,
-            *AutomationTables.ALL,
-            dbFile = db
-        )
+        com.jeanloickdt.database.TestDatabase.fresh()
     }
 
     private fun worker(vararg senders: Pair<String, ActionSender>) =
@@ -250,5 +235,39 @@ class DeliveryWorkerTest {
 
         worker("PUSH" to RecordingSender()).runOnce()
         assertEquals(null, repo.oldestPendingAgeMs(now), "drained queue, no age again")
+    }
+
+    /**
+     * Deux livreurs, en meme temps, sur le meme lot.
+     *
+     * Le bail existe pour ca : plusieurs livreurs, chacun prenant sa part.
+     * La version d'avant faisait un `SELECT` puis un `UPDATE` en s'appuyant
+     * sur l'ecrivain unique du moteur de fichier — que PostgreSQL n'a pas.
+     * Les deux lisaient les memes lignes, les deux les marquaient, et les
+     * deux livraient : la meme alerte partait deux fois.
+     *
+     * Ici, chaque action doit etre prise par UN SEUL des deux.
+     */
+    @Test
+    fun `deux livreurs simultanes ne prennent jamais la meme action`() {
+        repeat(20) { enqueue("k$it") }
+
+        val prises = java.util.concurrent.ConcurrentLinkedQueue<String>()
+        val depart = java.util.concurrent.CountDownLatch(1)
+        val fils = (1..2).map {
+            Thread {
+                depart.await()
+                repo.lease(now, leaseMs = 300_000, limit = 20).forEach { a -> prises += a.idempotencyKey }
+            }.apply { start() }
+        }
+        depart.countDown()
+        fils.forEach { it.join(30_000) }
+
+        val toutes = prises.toList()
+        assertEquals(
+            toutes.size, toutes.toSet().size,
+            "une action prise deux fois est une alerte livree deux fois : $toutes"
+        )
+        assertEquals(20, toutes.size, "et les vingt doivent bien avoir ete prises")
     }
 }

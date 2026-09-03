@@ -1,0 +1,31 @@
+meta {
+  name: 4. Connexion
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/login
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "username": "admin",
+    "password": "admin"
+  }
+}
+
+docs {
+  Ce serveur EST l'autorite : il frappe et verifie ses propres jetons.
+
+  `passwordChanged: false` signifie que le panneau forcera le changement
+  avant de laisser entrer.
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("token", res.body.token);
+  }
+}

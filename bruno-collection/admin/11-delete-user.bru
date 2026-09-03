@@ -1,0 +1,22 @@
+meta {
+  name: Supprimer un compte
+  type: http
+  seq: 11
+}
+
+delete {
+  url: {{baseUrl}}/api/admin/users/{{userId}}
+  body: none
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  Efface tout ce que le compte possede, `users` comprise : ici
+  l'autorite est ce serveur, donc le jeton meurt avec la ligne.
+
+  Le dernier administrateur ne peut pas se supprimer lui-meme.
+}
