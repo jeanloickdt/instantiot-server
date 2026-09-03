@@ -117,8 +117,8 @@ class RuleRoutesTest {
     ): HttpResponse = post("/api/rules") {
         header(HttpHeaders.Authorization, "Bearer $token")
         contentType(ContentType.Application.Json)
-        val widget = widgetId?.let { """"triggerWidgetId":"$it",""" } ?: ""
-        setBody("""{"name":"$name",$widget"definition":${Json.encodeToString(kotlinx.serialization.json.JsonPrimitive.serializer(), kotlinx.serialization.json.JsonPrimitive(definition))}}""")
+        val signalKey = widgetId?.let { """"triggerSignalKey":"$it",""" } ?: ""
+        setBody("""{"name":"$name",$signalKey"definition":${Json.encodeToString(kotlinx.serialization.json.JsonPrimitive.serializer(), kotlinx.serialization.json.JsonPrimitive(definition))}}""")
     }
 
     private fun pushDef(above: Double = 90.0) =
