@@ -106,8 +106,26 @@ data class UpdateRuleRequest(
  *    pourquoi.
  */
 class RulePolicies(
+    /**
+     * Le defaut EXCLUT `PUSH`, et c'est le point.
+     *
+     * L'appelant de ce depot le dit deja explicitement — voir `Application.kt`.
+     * Mais le defaut, lui, listait les trois canaux : un appelant qui l'oublie
+     * herite d'une permission qu'aucun expediteur ne peut honorer, et le
+     * livreur ne peut alors que marquer DEAD, en silence.
+     *
+     * Ce n'est pas theorique : le depot du nuage a exactement fait cette faute.
+     * Il avait perdu le parametre en recopiant ce cablage, et une regle
+     * « previens-moi par notification » y etait acceptee (201), declenchee,
+     * mise en file — puis jetee sans que l'utilisateur en sache rien. Pour une
+     * alerte, c'est le pire mode de panne : on decouvre le silence apres
+     * l'incident qu'on voulait eviter.
+     *
+     * Un defaut permissif se paie toujours du meme cote. Celui-ci echoue
+     * desormais du cote sur.
+     */
     val allowedActionTypes: Set<String> = setOf(
-        RuleDefinition.TYPE_PUSH, RuleDefinition.TYPE_EMAIL, RuleDefinition.TYPE_COMMAND
+        RuleDefinition.TYPE_EMAIL, RuleDefinition.TYPE_COMMAND
     ),
     val quotaGate: suspend (call: ApplicationCall, ownerId: String, isAutomation: Boolean, current: () -> Int) -> Boolean =
         { _, _, _, _ -> true }
