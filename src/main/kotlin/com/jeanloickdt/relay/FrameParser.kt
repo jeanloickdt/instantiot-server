@@ -24,7 +24,7 @@ import java.security.MessageDigest
 import java.util.Base64
 
 /**
- * Parser of iWidgets v1 binary frames
+ * Lecteur des trames binaires du protocole
  *
  * Complete frame format :
  * AA | VER(01) | LEN(2B LE) | DEV_COUNT | [DEV_LEN|DEV_ID]×N | WID_LEN | WID | TYPE | EVENT | PAYLOAD... | CRC8
@@ -34,7 +34,7 @@ import java.util.Base64
  *
  * Two directions :
  *   App → Server → Device : frame with DEV_COUNT + device UUIDs → trim → TCP relay
- *   Device → Server → App : frame with DEV_COUNT=0 → extract widgetId + payload → WebSocket broadcast
+ *   Carte → serveur → app : trame a DEV_COUNT=0, la carte est estampillee, diffusion WebSocket
  */
 object FrameParser {
 
@@ -106,7 +106,7 @@ object FrameParser {
      *
      * Position : after AA | VER | LEN | DEV_COUNT(0) | WID_LEN | WID
      *
-     * Used to distinguish application frames (widget updates)
+     * Sert a distinguer les trames applicatives
      * from service frames such as the heartbeat (`TYPE = 0xFE`).
      */
     fun extractType(frame: ByteArray): Int? {
@@ -132,7 +132,7 @@ object FrameParser {
     // STREAMING CLASSIFICATION — backpressure DeviceOutbox
     // ================================================================
 
-    // iWidgets v1 codes — synchronized with the app `BinaryProtocolCodes.kt`.
+    // Codes du protocole — synchronises avec `BinaryProtocolCodes.kt` cote app.
     // If these values change on the app side, they must be updated here.
     private const val TYPE_GAUGE: Int    = 0x03
     private const val TYPE_JOYSTICK: Int = 0x04

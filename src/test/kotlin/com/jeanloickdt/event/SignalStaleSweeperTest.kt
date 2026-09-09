@@ -32,7 +32,7 @@ private const val MIN = 60_000L
  * one more if it speaks and goes silent again. Everything else is a cache
  * read.
  */
-class WidgetStaleSweeperTest {
+class SignalStaleSweeperTest {
 
     private val T0 = 10_000_000L
     private val cache = InMemoryLastValueCache()

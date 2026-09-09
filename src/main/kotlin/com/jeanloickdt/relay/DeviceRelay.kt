@@ -341,15 +341,16 @@ private suspend fun handleDeviceConnection(
 }
 
 /**
- * Processes one validated binary frame. Pure RAM/CPU on the read path:
- *   - heartbeat → return early
- *   - strict model: drop the frame if (ownerId, widgetId) is not a declared widget
- *   - extract widgetId + payload → LastValueCache (RAM) + history buffer (RAM)
- *   - numeric value (validated finite) → 3 RAM aggregators (+ opt-in raw buffer)
- *   - broadcast the intact frame to the apps
- * No DB write here at all: last_payload is coalesced into the 5s flush, and a
- * frame for an undeclared widget is dropped by the strict-model guard before any
- * RAM write.
+ * Traite une trame binaire validee. RAM et CPU seulement, sur le chemin de
+ * lecture :
+ *   - battement de coeur : on rend la main tout de suite
+ *   - modele strict : la trame tombe si (proprietaire, adresse) n'est pas un
+ *     signal declare
+ *   - valeur numerique finie : agregateur minute en RAM, tampon brut en option
+ *   - diffusion de la trame aux apps
+ * Aucune ecriture en base ici : la derniere valeur part au vidage des cinq
+ * secondes, et une trame pour une adresse non declaree tombe avant toute
+ * ecriture, meme en RAM.
  *
  * Wrapped in try/catch: a single malformed/aberrant frame logs and is skipped —
  * it never tears down the connection (that isolation is per-frame, complementing
