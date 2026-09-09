@@ -255,7 +255,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // everywhere. No global singleton: tests build their own instances.
     //   connections : live sockets/WS sessions (local by nature)
     //   buffers     : RAM staging of the ingest pipeline (5s flush)
-    //   lastValues  : real-time last value per widget (DB coalesced)
+    //   lastValues  : la derniere valeur de chaque signal (ecrite en differe)
     //   presence    : device online/offline (DB-backed mono-node impl;
     //                 multi-node = swap the impl, never the call sites)
     // ============================================================
@@ -274,9 +274,9 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // plus d'occasion de le laisser deriver.
 
     // final flush at shutdown — no buffer data lost
-    // iWidgets rework: we ALSO flush all RAM buckets (including
-    // in-progress buckets not yet closed) → zero loss on a controlled
-    // restart. On a hard crash, we lose at worst 1 min/h/24h per tier.
+    // On vide AUSSI les seaux en RAM, y compris ceux qui ne sont pas encore
+    // fermes : zero perte sur un redemarrage propre. Sur un arret brutal, on
+    // perd au pire une minute, une heure, un jour, selon le palier.
     //
     // Registered on BOTH paths because they don't overlap:
     //   - Ktor ApplicationStopping → fires on a graceful engine stop (SIGTERM,
@@ -479,11 +479,6 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 // palier minute s'écrit ici ; heure et jour sont dérivées
                 // séparément, sur leur propre boucle plus lente — voir plus
                 // bas.
-                //
-                // Pas de diffusion `bucket_updated` ici : l'app s'y abonne
-                // toujours (`subscribe_history`), mais l'émission est partie
-                // avec les agrégateurs widget. La remettre demande de la
-                // reformuler sur les signaux — une décision, pas un oubli.
                 signalHistoryRepository.insertMinuteBatch(
                     com.jeanloickdt.signal.data.SignalAggregators.minute
                         .extractClosedBuckets(System.currentTimeMillis())

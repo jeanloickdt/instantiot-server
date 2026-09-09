@@ -79,7 +79,7 @@ private fun ProjectSummary.toResponse() = ProjectSummaryResponse(
  * protège — même nature que le fusible de dix messages par seconde. Elle vit
  * donc à côté du code plutôt que dans la grille tarifaire.
  *
- * Pourquoi 256 Ko : un tableau de bord de cinquante widgets avec positions,
+ * Pourquoi 256 Ko : un tableau de bord de cinquante afficheurs avec positions,
  * tailles, styles et liaisons pèse une dizaine de kilo-octets. Vingt-cinq fois
  * au-dessus du gros tableau réaliste — personne ne la touche par accident, et
  * elle arrête net l'accident.
@@ -256,7 +256,7 @@ fun Route.projectRoutes(
         }
 
         // ============================================================
-        // DELETE /api/projects/{id} — delete project + cascade widgets
+        // DELETE /api/projects/{id} — le projet et tout ce qui en depend
         // ============================================================
         delete("/api/projects/{id}") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
@@ -328,12 +328,12 @@ fun Route.projectRoutes(
             }
 
             // ─── Step 3 : cascade delete DB (atomic) ──────────────────
-            // order : history (all tiers) → widgets → devices → project
+            // ordre : historique (tous paliers) → signaux → cartes → projet
             //
             // One transaction wraps all 8 deletes: Exposed joins each repo's
             // own transaction{} into this outer one, so the cascade is
             // all-or-nothing. Without it, a crash mid-cascade (e.g. after the
-            // history but before the widgets) would leave a project that still
+            // history but before the signals) would leave a project that still
             // exists — it is deleted last — but has lost part of its data. The
             // kicks above stay outside on purpose: they are I/O effects
             // (socket/WS close), not DB, and must not be rolled back.

@@ -51,12 +51,7 @@ data class AppSession(
      * the same project.
      */
     val connectionInstanceId: String,
-    var activeProjectId: String? = null,  // currently open project — changes dynamically
-    // History subscriptions: map widgetId → granularity ("minute" | "hour" | "day").
-    // Set by the app via {"type":"subscribe_history","widgets":[...]}, read by the
-    // bucket_updated broadcaster. ConcurrentHashMap: written by the WS read loop,
-    // read by the broadcaster.
-    val historySubs: ConcurrentHashMap<String, String> = ConcurrentHashMap()
+    var activeProjectId: String? = null  // currently open project — changes dynamically
 )
 
 // Device session — one TCP session per connected device.

@@ -104,7 +104,7 @@ class AppOutboxTest {
         withTimeout(5_000) {
             repeat(32) { i ->
                 assertTrue(
-                    outbox.trySendControl("""{"type":"bucket_updated","n":$i}"""),
+                    outbox.trySendControl("""{"type":"device_online","n":$i}"""),
                     "a healthy session must not be evicted by a burst"
                 )
             }

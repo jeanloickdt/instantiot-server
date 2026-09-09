@@ -109,58 +109,6 @@ class ControlEventBroadcaster(
         sendEventToSession(session, event)
     }
 
-    /**
-     * An aggregation bucket has just closed on the server side (RAM aggregator
-     * → DB). Broadcast to the apps that have **explicitly subscribed** to the
-     * widget via the inbound "subscribe_history" message.
-     *
-     * Filtering at 2 levels :
-     *  1. Project match : the session must have activeProjectId == projectId.
-     *  2. Subscription match : the session must have (widgetId → granularity)
-     *     in its `historySubs` set.
-     *
-     * → An app that has no active chart for this widget does not receive
-     *   this message. Zero bandwidth when useless.
-     *
-     * Nominal volume (10 subscribed widgets, 3 tiers) :
-     *  - ~10 msg/min on the minute side
-     *  - ~10 msg/h on the hour side
-     *  - ~10 msg/day on the day side
-     */
-    fun bucketClosed(
-        projectId: String,
-        widgetId: String,
-        seriesId: String?,
-        bucketAt: Long,
-        avg: Double,
-        min: Double,
-        max: Double,
-        count: Int,
-        granularity: String
-    ) {
-        val event = ControlEvent(
-            type        = ControlEventType.BUCKET_UPDATED,
-            widgetId    = widgetId,
-            seriesId    = seriesId,
-            bucketAt    = bucketAt,
-            avg         = avg,
-            min         = min,
-            max         = max,
-            count       = count,
-            granularity = granularity
-        )
-        val jsonText = json.encodeToString(event)
-        val targetSessions = connections.getAppSessionsForProject(projectId)
-            .filter { it.historySubs[widgetId] == granularity }
-        if (targetSessions.isEmpty()) return
-
-        targetSessions.forEach { appSession ->
-            if (!appSession.outbox.trySendControl(jsonText)) {
-                connections.unregisterApp(appSession.userId, appSession.session)
-            }
-        }
-    }
-
     // ────────────────────────────────────────────────────────────
     // Internal helpers
     // ────────────────────────────────────────────────────────────
