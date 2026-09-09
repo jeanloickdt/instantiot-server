@@ -479,11 +479,6 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 // palier minute s'écrit ici ; heure et jour sont dérivées
                 // séparément, sur leur propre boucle plus lente — voir plus
                 // bas.
-                //
-                // Pas de diffusion `bucket_updated` ici : l'app s'y abonne
-                // toujours (`subscribe_history`), mais l'émission est partie
-                // avec les agrégateurs widget. La remettre demande de la
-                // reformuler sur les signaux — une décision, pas un oubli.
                 signalHistoryRepository.insertMinuteBatch(
                     com.jeanloickdt.signal.data.SignalAggregators.minute
                         .extractClosedBuckets(System.currentTimeMillis())

@@ -35,37 +35,16 @@ import kotlin.time.Duration.Companion.seconds
 private val logger = LoggerFactory.getLogger("AppRelay")
 
 /**
- * Inbound app → server message to subscribe to the bucket_updated of a set
- * of widgets. The app sends the COMPLETE set on each change (chart
- * mount/dispose, bottom sheet open/close, "Enable history" toggle). No
- * delta — the server replaces the set on each message received.
- *
- * Example :
- * ```json
- * {"type":"subscribe_history","widgets":[
- *   {"widgetId":"gauge1","granularity":"minute"},
- *   {"widgetId":"level1","granularity":"minute"}
- * ]}
- * ```
- *
- * Empty array = unsubscribe from everything (= the server no longer emits
- * bucket_updated to this session).
+ * Inbound app → server message on the app socket.
  */
 @Serializable
 private data class AppInboundMessage(
     val type: String,
-    val widgets: List<HistorySubscriptionDto>? = null,
     // ── write_signal ──────────────────────────────────────────────────
     val deviceId: String? = null,
     val address: Int? = null,
     val value: Double? = null,
     val text: String? = null
-)
-
-@Serializable
-private data class HistorySubscriptionDto(
-    val widgetId: String,
-    val granularity: String   // "minute" | "hour" | "day"
 )
 
 private val appInboundJson = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -206,7 +185,7 @@ fun Application.configureAppRelay(
                     //
                     // Two types of frames accepted after the handshake :
                     //   - Frame.Binary : iWidgets v1 frames (app → device commands)
-                    //   - Frame.Text   : control messages (subscribe_history, ...)
+                    //   - Frame.Text   : control messages (hello, write_signal)
                     for (incomingFrame in incoming) {
 
                         when (incomingFrame) {
@@ -240,7 +219,7 @@ fun Application.configureAppRelay(
 /**
  * Parse and apply an inbound text message from the app.
  *
- * Two types : `subscribe_history`, et `write_signal`.
+ * Deux types : `hello`, et `write_signal`.
  *
  * ## Pourquoi l'ecriture est passee par ici
  *
@@ -270,13 +249,6 @@ private suspend fun handleAppTextMessage(
     }
 
     when (msg.type) {
-        "subscribe_history" -> {
-            val newSubs = msg.widgets.orEmpty()
-                .associate { it.widgetId to it.granularity }
-            appSession.historySubs.clear()
-            appSession.historySubs.putAll(newSubs)
-            logger.info("History subscriptions updated — userId=${appSession.userId} count=${newSubs.size}")
-        }
         "hello" -> {
             // L'app demande, le relais repond. C'est le seul ordre sans
             // course : elle envoie quand elle ecoute deja.

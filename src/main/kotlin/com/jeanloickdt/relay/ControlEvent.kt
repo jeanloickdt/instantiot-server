@@ -36,10 +36,6 @@ import kotlinx.serialization.Serializable
  *   - "device_online"   : an ESP device has just connected over TCP
  *   - "device_offline"  : an ESP device has disconnected (disconnect / token_renewed / deleted)
  *   - "command_failed"  : an App->Device command has failed (device_offline / forbidden / relay_error)
- *   - "bucket_updated"  : an aggregation bucket has just closed (min/hour/day),
- *                         emitted when the RAM aggregator flushes to DB. Lets charts
- *                         in historical preset mode update their window without
- *                         re-fetching over HTTP (live-chart pattern).
  */
 @Serializable
 data class ControlEvent(
@@ -47,15 +43,6 @@ data class ControlEvent(
     val deviceId: String? = null,
     val deviceName: String? = null,
     val reason: String? = null,           // reason for device_offline and command_failed
-    // ─── BUCKET_UPDATED fields ─────────────────────────────
-    val widgetId: String? = null,
-    val seriesId: String? = null,
-    val bucketAt: Long? = null,           // ms epoch, start of the bucket
-    val avg: Double? = null,              // weighted average of the bucket
-    val min: Double? = null,              // min value of the bucket
-    val max: Double? = null,              // max value of the bucket
-    val count: Int? = null,               // number of aggregated samples
-    val granularity: String? = null,      // "minute" | "hour" | "day"
     // ─── LAYOUT_CHANGED fields ─────────────────────────────
     /**
      * The version the dashboard now holds.
@@ -74,17 +61,7 @@ object ControlEventType {
     const val DEVICE_ONLINE   = "device_online"
     const val DEVICE_OFFLINE  = "device_offline"
     const val COMMAND_FAILED  = "command_failed"
-    const val BUCKET_UPDATED  = "bucket_updated"
     const val LAYOUT_CHANGED  = "layout_changed"
-}
-
-/**
- * Bucket granularities — aligned with the HistoryAggregators tiers.
- */
-object BucketGranularity {
-    const val MINUTE = "minute"
-    const val HOUR   = "hour"
-    const val DAY    = "day"
 }
 
 /**
