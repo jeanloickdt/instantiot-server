@@ -1,0 +1,22 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "timeOfDay",
+    "from": 1320,
+    "to": 360
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Nuit",
+      "body": "Mouvement detecte"
+    }
+  ]
+}

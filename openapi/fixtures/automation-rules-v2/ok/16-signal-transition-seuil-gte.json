@@ -1,0 +1,22 @@
+{
+  "trigger": {
+    "kind": "signalTransition",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-sonde",
+      "address": 0
+    },
+    "to": {
+      "type": "float",
+      "value": 30.0
+    },
+    "op": "gte"
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Il fait chaud",
+      "body": "La serre a franchi 30 degres"
+    }
+  ]
+}

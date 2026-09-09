@@ -1,0 +1,25 @@
+{
+  "expectedError": "type-mismatch",
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-serre",
+        "deviceId": "dev-ventilo",
+        "address": 0
+      },
+      "value": {
+        "type": "float",
+        "value": 21.7
+      }
+    }
+  ]
+}

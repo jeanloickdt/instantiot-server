@@ -1,0 +1,23 @@
+{
+  "expectedError": "unknown-variant:approche",
+  "trigger": {
+    "kind": "signalTransition",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-sonde",
+      "address": 0
+    },
+    "to": {
+      "type": "float",
+      "value": 30.0
+    },
+    "op": "approche"
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}

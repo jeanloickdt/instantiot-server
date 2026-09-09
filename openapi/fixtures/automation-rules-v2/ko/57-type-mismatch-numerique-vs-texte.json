@@ -1,0 +1,32 @@
+{
+  "expectedError": "type-mismatch",
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "compare",
+    "left": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    },
+    "op": "eq",
+    "right": {
+      "kind": "literal",
+      "type": "string",
+      "value": "chaud"
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}

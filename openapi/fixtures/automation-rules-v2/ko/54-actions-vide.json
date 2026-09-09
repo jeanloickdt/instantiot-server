@@ -1,0 +1,12 @@
+{
+  "expectedError": "empty-actions",
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "actions": []
+}

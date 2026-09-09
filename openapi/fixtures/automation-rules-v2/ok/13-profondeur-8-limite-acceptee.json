@@ -1,0 +1,101 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "all",
+    "children": [
+      {
+        "kind": "all",
+        "children": [
+          {
+            "kind": "all",
+            "children": [
+              {
+                "kind": "all",
+                "children": [
+                  {
+                    "kind": "all",
+                    "children": [
+                      {
+                        "kind": "all",
+                        "children": [
+                          {
+                            "kind": "all",
+                            "children": [
+                              {
+                                "kind": "compare",
+                                "left": {
+                                  "projectId": "proj-serre",
+                                  "deviceId": "dev-capteur",
+                                  "address": 0
+                                },
+                                "op": "gt",
+                                "right": {
+                                  "kind": "literal",
+                                  "type": "float",
+                                  "value": 30.0
+                                }
+                              },
+                              {
+                                "kind": "timeOfDay",
+                                "from": 0,
+                                "to": 720
+                              }
+                            ]
+                          },
+                          {
+                            "kind": "timeOfDay",
+                            "from": 0,
+                            "to": 720
+                          }
+                        ]
+                      },
+                      {
+                        "kind": "timeOfDay",
+                        "from": 0,
+                        "to": 720
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "timeOfDay",
+                    "from": 0,
+                    "to": 720
+                  }
+                ]
+              },
+              {
+                "kind": "timeOfDay",
+                "from": 0,
+                "to": 720
+              }
+            ]
+          },
+          {
+            "kind": "timeOfDay",
+            "from": 0,
+            "to": 720
+          }
+        ]
+      },
+      {
+        "kind": "timeOfDay",
+        "from": 0,
+        "to": 720
+      }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Profond",
+      "body": "ok"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "compare",
+    "left": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    },
+    "op": "gt",
+    "right": {
+      "kind": "signal",
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 7
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Seuil",
+      "body": "Temperature au-dessus de la consigne"
+    }
+  ]
+}

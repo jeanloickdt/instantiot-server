@@ -1,0 +1,27 @@
+{
+  "trigger": {
+    "kind": "schedule",
+    "minuteOfDay": 1320,
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ]
+  },
+  "actions": [
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-chalet",
+        "deviceId": "dev-chauffage",
+        "address": 0
+      },
+      "value": {
+        "type": "float",
+        "value": 18.0
+      }
+    }
+  ]
+}

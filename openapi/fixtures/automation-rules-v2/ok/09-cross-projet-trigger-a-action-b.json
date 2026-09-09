@@ -1,0 +1,31 @@
+{
+  "trigger": {
+    "kind": "deviceDisconnected",
+    "device": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur"
+    }
+  },
+  "condition": {
+    "kind": "deviceState",
+    "device": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-secours"
+    },
+    "state": "online"
+  },
+  "actions": [
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-atelier",
+        "deviceId": "dev-secours",
+        "address": 0
+      },
+      "value": {
+        "type": "int",
+        "value": 1
+      }
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "any",
+    "children": [
+      {
+        "kind": "compare",
+        "left": {
+          "projectId": "proj-serre",
+          "deviceId": "dev-capteur",
+          "address": 0
+        },
+        "op": "gt",
+        "right": {
+          "kind": "literal",
+          "type": "float",
+          "value": 35.0
+        }
+      },
+      {
+        "kind": "compare",
+        "left": {
+          "projectId": "proj-serre",
+          "deviceId": "dev-capteur",
+          "address": 1
+        },
+        "op": "lt",
+        "right": {
+          "kind": "literal",
+          "type": "float",
+          "value": 20.0
+        }
+      },
+      {
+        "kind": "deviceState",
+        "device": {
+          "projectId": "proj-serre",
+          "deviceId": "dev-ventilo"
+        },
+        "state": "offline"
+      }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Serre",
+      "body": "Conditions anormales"
+    }
+  ]
+}

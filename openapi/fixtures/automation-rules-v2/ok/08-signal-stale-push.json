@@ -1,0 +1,18 @@
+{
+  "trigger": {
+    "kind": "signalStale",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    },
+    "afterMs": 600000
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Silence",
+      "body": "Temperature ne rapporte plus"
+    }
+  ]
+}

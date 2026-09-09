@@ -1,0 +1,53 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "all",
+    "children": [
+      {
+        "kind": "compare",
+        "left": {
+          "projectId": "proj-serre",
+          "deviceId": "dev-capteur",
+          "address": 0
+        },
+        "op": "gt",
+        "right": {
+          "kind": "literal",
+          "type": "float",
+          "value": 30.0
+        }
+      },
+      {
+        "kind": "timeOfDay",
+        "from": 480,
+        "to": 1200
+      }
+    ]
+  },
+  "actions": [
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-serre",
+        "deviceId": "dev-ventilo",
+        "address": 0
+      },
+      "value": {
+        "type": "int",
+        "value": 1
+      }
+    },
+    {
+      "kind": "push",
+      "title": "Serre",
+      "body": "Ventilateur allume"
+    }
+  ]
+}

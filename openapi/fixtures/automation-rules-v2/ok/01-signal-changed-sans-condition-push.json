@@ -1,0 +1,17 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Serre",
+      "body": "Temperature a atteint {{value}}"
+    }
+  ]
+}

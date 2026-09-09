@@ -1,0 +1,23 @@
+{
+  "expectedError": "malformed",
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "p",
+      "deviceId": "d",
+      "address": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "wait",
+      "seconds": 30,
+      "untilMinuteOfDay": 1380
+    },
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}
