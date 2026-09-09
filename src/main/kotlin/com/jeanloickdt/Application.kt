@@ -287,6 +287,22 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     //     bucket — breaking the "zero loss on controlled restart" guarantee.
     // The flush is idempotent (drains queues/buckets), so running it twice on
     // a path where both fire is harmless — the second pass finds nothing.
+    // Le videur d'historique — UNE instance pour les deux chemins.
+    //
+    // La boucle de fond l'appelle toutes les cinq secondes, l'arret l'appelle
+    // une derniere fois. Les deux doivent compter leurs echecs ensemble : un
+    // arret qui suit trois echecs d'ecriture ne repart pas de zero, et le
+    // journal dit la meme chose des deux cotes.
+    val videurHistorique = com.jeanloickdt.relay.HistoryFlusher(
+        buffers = buffers,
+        minutes = com.jeanloickdt.signal.data.SignalAggregators.minute,
+        write = { raw, minutes ->
+            signalHistoryRepository.insertMinuteBatch(minutes)
+            signalHistoryRepository.insertRawBatch(raw)
+        },
+        periodMs = com.jeanloickdt.common.ServerConfig.historyFlushPeriodMs
+    )
+
     val finalFlush: () -> Unit = {
         kotlinx.coroutines.runBlocking {
             // Meme promesse que les tampons ci-dessus : zero perte sur un
@@ -295,10 +311,11 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             // n'attend jamais ici.
             signalRepository.flushPendingValues()
             (presence as? com.jeanloickdt.relay.DbBackedPresenceStore)?.flushPending()
-            signalHistoryRepository.insertMinuteBatch(
-                com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets()
-            )
-            signalHistoryRepository.insertRawBatch(buffers.signalRawBuffer.drain())
+            // Tout, y compris le seau minute EN COURS, qui part comme un
+            // delta partiel. Un echec ici ne se reessaie pas — le processus
+            // s'en va — mais il est DIT, au lieu de remonter en exception
+            // depuis un crochet d'arret ou personne ne la lira.
+            videurHistorique.flushAll()
         }
     }
 
@@ -446,11 +463,21 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         // Only the DELTA is worth a line: a queue that refused once and
         // recovered must not warn on every round for the rest of the day.
         var lastRefusedTotal = 0L
+
+        // Le videur tient la garantie qui manquait : un lot que la base
+        // refuse retourne dans sa file au lieu de disparaitre. Voir
+        // [HistoryFlusher] — le `drain()` d'avant vidait AVANT d'ecrire.
+        val videur = videurHistorique
+
         while (true) {
-            delay(FLUSH_PERIOD_MS)
+            // Le delai vient du videur : la periode en temps normal, un
+            // repli croissant tant que la base refuse. Marteler une base qui
+            // ne repond pas toutes les cinq secondes n'aide personne.
+            delay(videur.nextDelayMs)
             val startedAt = System.nanoTime()
             var signalRows = 0
             var rawRows = 0
+            var minuteRows = 0
             try {
 
                 // messages.perMonth ledger — a handful of rows per cycle, one
@@ -479,18 +506,25 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 // palier minute s'écrit ici ; heure et jour sont dérivées
                 // séparément, sur leur propre boucle plus lente — voir plus
                 // bas.
-                signalHistoryRepository.insertMinuteBatch(
-                    com.jeanloickdt.signal.data.SignalAggregators.minute
-                        .extractClosedBuckets(System.currentTimeMillis())
-                )
-                rawRows = buffers.signalRawBuffer.drain()
-                    .also { signalHistoryRepository.insertRawBatch(it) }.size
+                //
+                // Le videur dit lui-meme ce qui s'est passe : il n'y a rien a
+                // rattraper ici, et surtout rien a journaliser une seconde
+                // fois. Un echec a deja remis le lot en file et annonce son
+                // prochain essai.
+                when (val issue = videur.flushOnce()) {
+                    is com.jeanloickdt.relay.HistoryFlusher.Outcome.Written -> {
+                        rawRows = issue.rawRows
+                        minuteRows = issue.minuteRows
+                    }
+                    is com.jeanloickdt.relay.HistoryFlusher.Outcome.Failed -> Unit
+                }
             } catch (e: Exception) {
                 bgLog.error("History flush round failed — retrying in 5s", e)
             }
             val tookMs = (System.nanoTime() - startedAt) / 1_000_000
             round++
-            val summary = "flush took ${tookMs}ms — signals=$signalRows raw=$rawRows"
+            val summary = "flush took ${tookMs}ms — signals=$signalRows raw=$rawRows minute=$minuteRows" +
+                if (videur.failures > 0) " · base MUETTE depuis ${videur.failures} tour(s)" else ""
 
             // A saturation nobody reports is worse than a low ceiling. The
             // queues refuse silently by design — this is the one place that

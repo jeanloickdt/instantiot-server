@@ -51,6 +51,24 @@ class HistoryBuffers(
         BoundedIngestQueue<com.jeanloickdt.signal.data.SignalRawEntry>("signal-raw", capacity)
 
     /**
+     * Les seaux minute FERMES qui attendent d'etre ecrits.
+     *
+     * Ils n'avaient pas de file : l'agregateur les rendait et la boucle les
+     * ecrivait dans la foulee. Entre les deux gestes il n'y avait rien, donc
+     * une ecriture qui echouait les emportait — ils avaient deja quitte
+     * l'agregateur, et n'existaient plus nulle part.
+     *
+     * La file leur donne un endroit ou attendre le prochain essai. Sa borne
+     * est petite parce qu'un seau minute par signal et par minute est un
+     * debit lent : mille places tiennent plus de deux heures de panne pour
+     * huit signaux.
+     */
+    val minutePending =
+        BoundedIngestQueue<com.jeanloickdt.signal.data.SignalBucketAccumulator.Snapshot>(
+            "signal-minute-pending", MINUTE_PENDING_CAPACITY
+        )
+
+    /**
      * Qui souffre quand l'ecrivain ne suit plus — voir [IngestBackPressure].
      *
      * Elle vit ici, avec la file qu'elle protege : l'objet qui detient le
@@ -65,9 +83,16 @@ class HistoryBuffers(
      * Lue par la boucle de vidage, seule à pouvoir le dire à voix haute : une
      * saturation que personne ne signale est pire qu'un plafond bas.
      */
-    fun refusedTotal(): Long = signalRawBuffer.refusedCount + backPressure.droppedRaw
+    fun refusedTotal(): Long =
+        signalRawBuffer.refusedCount + minutePending.refusedCount + backPressure.droppedRaw
 
     /** Pour la ligne de log du vidage — l'état de la pression, pas juste le débit. */
     fun pressure(): String =
         "$signalRawBuffer" + if (backPressure.isRawSuspended) " raw=SUSPENDU" else ""
+
+    companion object {
+        /** Assez pour tenir une longue panne d'ecriture sans grossir sans borne. */
+        const val MINUTE_PENDING_CAPACITY = 10_000
+    }
+
 }

@@ -20,7 +20,7 @@
 // relay/BoundedIngestQueue.kt
 package com.jeanloickdt.relay
 
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
@@ -67,7 +67,7 @@ class BoundedIngestQueue<T>(
     val name: String,
     val capacity: Int
 ) {
-    private val queue = ConcurrentLinkedQueue<T>()
+    private val queue = ConcurrentLinkedDeque<T>()
 
     /** Tracked separately: `size` on a ConcurrentLinkedQueue walks the list. */
     private val count = AtomicInteger(0)
@@ -111,6 +111,46 @@ class BoundedIngestQueue<T>(
         }
         count.addAndGet(-batch.size)
         return batch
+    }
+
+    /**
+     * Remet en tete un lot que l'aval n'a pas pris.
+     *
+     * ## Pourquoi ce n'est pas un `offer` en boucle
+     *
+     * Le lot rendu est plus ANCIEN que tout ce qui est entre pendant l'essai
+     * d'ecriture. Le remettre par la queue melangerait les instants, et la
+     * table d'historique porterait des lignes dans le desordre.
+     *
+     * ## Pourquoi les plus anciennes partent ici, alors que [offer] refuse les plus recentes
+     *
+     * Les deux repondent a des questions differentes, et la contradiction
+     * n'est qu'apparente.
+     *
+     * [offer] protege un AGREGAT en cours : une moyenne minute amputee de ses
+     * premiers echantillons reste une moyenne d'apparence normale, donc un
+     * chiffre faux qui a l'air vrai. Refuser la trame qui arrive laisse le
+     * seau incomplet mais HONNETE.
+     *
+     * Ici, rien n'est en cours : ce sont des lignes brutes entieres et des
+     * seaux deja fermes. La question n'est plus « quel chiffre reste juste »
+     * mais « d'un lot qui ne tient pas, quelle moitie garde-t-on ». Le passe
+     * recent vaut mieux que le passe lointain, et il n'y a pas d'agregat a
+     * fausser.
+     *
+     * Ce qui ne tient pas est **compte**, dans le meme compteur que les refus.
+     */
+    fun restore(items: List<T>) {
+        if (items.isEmpty()) return
+        val room = (capacity - count.get()).coerceAtLeast(0)
+        val gardes = items.takeLast(room)
+        val perdus = items.size - gardes.size
+        if (perdus > 0) refused.addAndGet(perdus.toLong())
+        // A l'envers : chaque `addFirst` passe devant le precedent, donc
+        // parcourir a rebours restitue l'ordre d'origine.
+        for (item in gardes.asReversed()) queue.addFirst(item)
+        val now = count.addAndGet(gardes.size)
+        highWaterMark.updateAndGet { if (now > it) now else it }
     }
 
     val size: Int get() = count.get()
