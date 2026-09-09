@@ -51,23 +51,6 @@ class DemarrageCompletTest {
             .also { bases += it }
 
     /**
-     * Monte le module REEL, sur une base neuve et un port libre.
-     *
-     * Le port compte : `module()` ouvre le relais TCP des cartes. Deux
-     * epreuves qui montent le module dans le meme travailleur se disputeraient
-     * le 9001 par defaut, et la seconde tomberait sur « Address already in
-     * use » — un echec qui ne dit rien de ce qu'elle eprouvait.
-     */
-    private fun ApplicationTestBuilder.monterLeVraiModule() {
-        val libre = ServerSocket(0).use { it.localPort }
-        com.jeanloickdt.common.ServerConfig.markRunningPorts(
-            http = com.jeanloickdt.common.ServerConfig.runningHttpPort,
-            tcp = libre
-        )
-        application { module(dbFile = baseJetable()) }
-    }
-
-    /**
      * Un jeton que le serveur accepte VRAIMENT.
      *
      * Pas celui de `LocalTestAuth` : le module signe avec le secret qu'il
@@ -97,7 +80,7 @@ class DemarrageCompletTest {
 
     @Test
     fun `le module se monte en entier sur une base neuve`() = testApplication {
-        monterLeVraiModule()
+        monterLeVraiModule(baseJetable("demarrage").also { bases += it })
 
         // La preuve la plus simple qu'il est debout : il repond.
         val status = client.get("/api/status")
@@ -106,7 +89,7 @@ class DemarrageCompletTest {
 
     @Test
     fun `le schema du moteur 2 est cree au demarrage`() = testApplication {
-        monterLeVraiModule()
+        monterLeVraiModule(baseJetable("demarrage").also { bases += it })
         client.get("/api/status")   // force le montage avant de lire la base
 
         // Les deux tables que le portage a ajoutees. Si le registre `ALL` les
@@ -123,7 +106,7 @@ class DemarrageCompletTest {
 
     @Test
     fun `les colonnes du moteur 2 sont posees`() = testApplication {
-        monterLeVraiModule()
+        monterLeVraiModule(baseJetable("demarrage").also { bases += it })
         client.get("/api/status")
 
         val colonnes = transaction {
@@ -141,7 +124,7 @@ class DemarrageCompletTest {
 
     @Test
     fun `le fil des alertes est cable, et il est garde`() = testApplication {
-        monterLeVraiModule()
+        monterLeVraiModule(baseJetable("demarrage").also { bases += it })
 
         // Sans jeton : 401, et surtout PAS 404. La distinction est tout ce
         // que ce test verifie — un 404 signifierait que la route n'est pas
@@ -155,7 +138,7 @@ class DemarrageCompletTest {
 
     @Test
     fun `le fil des alertes rend une page vide sur un serveur neuf`() = testApplication {
-        monterLeVraiModule()
+        monterLeVraiModule(baseJetable("demarrage").also { bases += it })
 
         val jeton = jetonDeLAdmin()
         val reponse = client.get("/api/notifications") {
@@ -179,7 +162,7 @@ class DemarrageCompletTest {
 
     @Test
     fun `les routes de regles repondent, moteur cable`() = testApplication {
-        monterLeVraiModule()
+        monterLeVraiModule(baseJetable("demarrage").also { bases += it })
 
         val jeton = jetonDeLAdmin()
         val liste = client.get("/api/rules") {

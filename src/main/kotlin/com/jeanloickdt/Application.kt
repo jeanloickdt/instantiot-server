@@ -835,13 +835,23 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
         }
     )
-    val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(
-        pendingActions,
-        senders = mapOf(
-            com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
-            com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
-        )
+    /**
+     * Les canaux que ce serveur porte VRAIMENT.
+     *
+     * `PUSH` n'y est pas : la livraison passe par FCM, qui demande un projet
+     * Firebase et une cle de compte de service. Aucune des deux ne peut voyager
+     * dans un depot public, et un serveur chez soi n'en a pas.
+     *
+     * Cette carte est la SOURCE UNIQUE. Ce que le livreur sait livrer et ce
+     * que les routes acceptent de creer sortent d'elle, et pas de deux listes
+     * qui se ressemblent — voir son usage dans `ruleRoutes`.
+     */
+    val actionSenders = mapOf(
+        com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
+        com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
     )
+
+    val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(pendingActions, senders = actionSenders)
 
     launch(Dispatchers.IO) {
         while (true) {
@@ -969,17 +979,19 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             resolver = ruleResolver,
             runs = automationRuns,
             policies = com.jeanloickdt.automation.RulePolicies(
-                // The OFFRE boundary: no Firebase credentials can ship in a
-                // public repo, so PUSH rules are refused at creation with a
-                // message that says why — not enqueued into DEAD rows.
+                // LES TYPES CREABLES SONT LES CLES DE LA CARTE D'EXPEDITEURS.
                 //
-                // Les types creables sont ceux qu'un EXPEDITEUR porte. Le
-                // nuage lit sa carte d'expediteurs ; ici la liste est fixe,
-                // parce que le jumeau n'en enregistre que deux.
-                allowedActionTypes = setOf(
-                    com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL,
-                    com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND
-                )
+                // Recopier la liste ici en ferait une SECONDE source, et deux
+                // sources finissent par diverger. Les deux facons de diverger
+                // sont mauvaises, et la premiere est la pire : une regle
+                // acceptee que personne ne peut livrer part en DEAD, en
+                // silence, et l'utilisateur decouvre le trou APRES l'incident
+                // qu'il voulait eviter.
+                //
+                // Le nuage a paye cette lecon ; il n'y a aucune raison de la
+                // repayer ici. Le jour ou un expediteur PUSH sera enregistre,
+                // la route s'ouvrira d'elle-meme.
+                allowedActionTypes = actionSenders.keys
             ),
             // « Run actions now » depuis la fiche d'une regle. Nul, le bouton
             // rendrait 503 : un noeud sans moteur doit le DIRE, pas repondre

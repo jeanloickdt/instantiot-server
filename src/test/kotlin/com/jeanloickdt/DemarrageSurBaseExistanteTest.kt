@@ -104,15 +104,6 @@ class DemarrageSurBaseExistanteTest {
         return f
     }
 
-    private fun ApplicationTestBuilder.monterSur(base: File) {
-        val libre = ServerSocket(0).use { it.localPort }
-        com.jeanloickdt.common.ServerConfig.markRunningPorts(
-            http = com.jeanloickdt.common.ServerConfig.runningHttpPort,
-            tcp = libre
-        )
-        application { module(dbFile = base) }
-    }
-
     private fun colonnes(table: String): List<String> = transaction {
         exec("PRAGMA table_info($table)") { rs ->
             buildList { while (rs.next()) add(rs.getString("name")) }
@@ -123,7 +114,7 @@ class DemarrageSurBaseExistanteTest {
 
     @Test
     fun `le serveur demarre sur une base de l ancienne version`() = testApplication {
-        monterSur(baseDeLAncienneVersion())
+        monterLeVraiModule(baseDeLAncienneVersion())
 
         val status = client.get("/api/status")
         assertEquals(
@@ -134,7 +125,7 @@ class DemarrageSurBaseExistanteTest {
 
     @Test
     fun `les colonnes du langage sont ajoutees a une table qui existait`() = testApplication {
-        monterSur(baseDeLAncienneVersion())
+        monterLeVraiModule(baseDeLAncienneVersion())
         client.get("/api/status")
 
         val c = colonnes("automation_rules")
@@ -149,7 +140,7 @@ class DemarrageSurBaseExistanteTest {
 
     @Test
     fun `les compteurs d observabilite sont ajoutes a l etat`() = testApplication {
-        monterSur(baseDeLAncienneVersion())
+        monterLeVraiModule(baseDeLAncienneVersion())
         client.get("/api/status")
 
         val c = colonnes("automation_state")
@@ -159,7 +150,7 @@ class DemarrageSurBaseExistanteTest {
 
     @Test
     fun `les deux tables neuves sont creees a cote des anciennes`() = testApplication {
-        monterSur(baseDeLAncienneVersion())
+        monterLeVraiModule(baseDeLAncienneVersion())
         client.get("/api/status")
 
         val tables = transaction {
@@ -175,7 +166,7 @@ class DemarrageSurBaseExistanteTest {
 
     @Test
     fun `la regle d hier survit a la mise a jour`() = testApplication {
-        monterSur(baseDeLAncienneVersion())
+        monterLeVraiModule(baseDeLAncienneVersion())
         client.get("/api/status")
 
         val noms = transaction {
@@ -191,7 +182,7 @@ class DemarrageSurBaseExistanteTest {
 
     @Test
     fun `les colonnes mortes restent, et ne genent personne`() = testApplication {
-        monterSur(baseDeLAncienneVersion())
+        monterLeVraiModule(baseDeLAncienneVersion())
         client.get("/api/status")
 
         // Rien ne les retire : `createMissingTablesAndColumns` ne sait
