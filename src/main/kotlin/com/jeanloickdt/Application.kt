@@ -23,6 +23,7 @@ import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.automation.automationHealthRoutes
 import com.jeanloickdt.automation.emailConfigRoutes
 import com.jeanloickdt.signal.signalRoutes
+import com.jeanloickdt.automation.notificationsRoutes
 import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
@@ -985,6 +986,14 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             // 200 sur une action qui n'est jamais partie.
             engine = automationEngine
         )
+        // Le fil des alertes — ce que l'onglet Notifications de l'app lit.
+        //
+        // Il n'existait pas ici : l'app interrogeait `/api/notifications` et
+        // recevait 404, donc une liste vide, sans rien qui explique pourquoi.
+        // Les lignes existaient pourtant depuis toujours — c'est
+        // `pending_actions`, relue par proprietaire et par instant.
+        notificationsRoutes(com.jeanloickdt.automation.ExposedNotificationRepository())
+
         // Les routes des widgets sont parties avec la table. Une adresse se
         // declare desormais dans `signalRoutes`, cable plus haut.
 
