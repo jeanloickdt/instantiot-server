@@ -139,6 +139,10 @@ object DatabaseFactory {
             exec("CREATE INDEX IF NOT EXISTS idx_scheduled_due ON scheduled_jobs (next_run_at)")
             // Delivery fans out per owner: all their tokens in one read
             exec("CREATE INDEX IF NOT EXISTS idx_push_tokens_owner ON push_tokens (owner_id)")
+            // Le compte des cartes d'un proprietaire, lu par la garde de quota
+            // et par la liste. `devices` n'avait que sa cle primaire : ce
+            // compte balayait la table entiere pour en compter quelques-unes.
+            exec("CREATE INDEX IF NOT EXISTS idx_devices_owner ON devices (owner_id)")
         }
 
         // Switch the file to incremental auto-vacuum so the recurring reclaim is
