@@ -66,7 +66,9 @@ interface PendingActionRepository {
      */
     fun enqueue(
         idempotencyKey: String, ownerId: String, ruleId: String?,
-        type: String, payload: String, occurredAt: Long, nowMs: Long
+        type: String, payload: String, occurredAt: Long, nowMs: Long,
+        /** Le niveau de la regle qui tire — voir PendingActionTable.severity. */
+        severity: String = "info"
     ): Boolean
 
     /**
@@ -102,7 +104,8 @@ class ExposedPendingActionRepository : PendingActionRepository {
 
     override fun enqueue(
         idempotencyKey: String, ownerId: String, ruleId: String?,
-        type: String, payload: String, occurredAt: Long, nowMs: Long
+        type: String, payload: String, occurredAt: Long, nowMs: Long,
+        severity: String
     ): Boolean = try {
         transaction {
             PendingActionTable.insert {
@@ -116,6 +119,7 @@ class ExposedPendingActionRepository : PendingActionRepository {
                 it[nextAttemptAt]                     = nowMs
                 it[PendingActionTable.occurredAt]     = occurredAt
                 it[createdAt]                         = nowMs
+                it[PendingActionTable.severity]       = severity
             }
         }
         true
