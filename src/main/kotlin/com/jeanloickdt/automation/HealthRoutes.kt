@@ -21,6 +21,7 @@ package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.domain.UserRepository
 import com.jeanloickdt.auth.requireAdmin
+import com.jeanloickdt.automation.v2.AutomationEngine
 import com.jeanloickdt.event.EventSinks
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.auth.authenticate

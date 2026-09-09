@@ -49,6 +49,18 @@ data class PendingAction(
         const val PENDING = "PENDING"
         const val SENT    = "SENT"
         const val DEAD    = "DEAD"
+
+        /**
+         * Un plafond a REFUSE l'action : elle n'est jamais partie, et ce
+         * n'est pas une panne.
+         *
+         * `DEAD` dit « on a essaye et on renonce » ; celui-ci dit « on n'a
+         * meme pas essaye, et voici pourquoi ». Les confondre ferait
+         * ressembler une limite annoncee a une defaillance, et pousserait a
+         * chercher un probleme la ou il n'y en a pas. Le motif vit dans
+         * `PendingActionTable.refusedReason`.
+         */
+        const val REFUSED = "REFUSED"
     }
 }
 

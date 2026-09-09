@@ -1,28 +1,16 @@
-/*
- * InstantIoT Server — self-hosted IoT relay for makers.
- * Copyright (C) 2026 Djoufack Tsobeng Jean Loick (InstantIoT)
- * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published
- * by the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
+import com.jeanloickdt.automation.v2.AutomationEngine
+import com.jeanloickdt.automation.v2.AutomationRuns
+import com.jeanloickdt.automation.v2.InventoryResolver
+import com.jeanloickdt.automation.v2.RuleCache
+import com.jeanloickdt.automation.v2.SignalValueCache
+import com.jeanloickdt.automation.v2.Trigger
+import com.jeanloickdt.signalRepository
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
 import com.jeanloickdt.project.data.ProjectTable
@@ -46,10 +34,16 @@ class SchedulerWorkerTest {
     private lateinit var sinks: EventSinks
     private var now = 0L
 
-    private fun schedule(at: String = "07:00", days: Set<DayOfWeek> = emptySet(), tz: ZoneId = TORONTO) =
+    /**
+     * Le fuseau ne vient PLUS d'ici : il appartient a la regle.
+     *
+     * Un `Schedule` et un `TimeOfDay` portant chacun le leur rendraient legale
+     * une regle programmee a Toronto qui teste les heures de Teheran.
+     */
+    private fun schedule(at: String = "07:00", days: Set<Trigger.Day> = emptySet()) =
         Trigger.Schedule(
             minuteOfDay = at.substringBefore(':').toInt() * 60 + at.substringAfter(':').toInt(),
-            days = days, zone = tz
+            days = days
         )
 
     private fun msOf(y: Int, mo: Int, d: Int, h: Int, mi: Int, zone: ZoneId = TORONTO): Long =
@@ -57,7 +51,7 @@ class SchedulerWorkerTest {
 
     @BeforeTest
     fun setup() {
-        com.jeanloickdt.database.TestDatabase.fresh()
+        com.jeanloickdt.database.TestDatabase.connectAndClean()
         sinks = EventSinks()
     }
 
@@ -66,10 +60,10 @@ class SchedulerWorkerTest {
     @Test
     fun `seven means seven in the rule's zone, tomorrow when today's has passed`() {
         val afterNoon = msOf(2026, 6, 10, 12, 0)
-        assertEquals(msOf(2026, 6, 11, 7, 0), ScheduleMath.nextRunAfter(afterNoon, schedule()))
+        assertEquals(msOf(2026, 6, 11, 7, 0), ScheduleMath.nextRunAfter(afterNoon, schedule(), TORONTO))
 
         val beforeDawn = msOf(2026, 6, 10, 5, 0)
-        assertEquals(msOf(2026, 6, 10, 7, 0), ScheduleMath.nextRunAfter(beforeDawn, schedule()))
+        assertEquals(msOf(2026, 6, 10, 7, 0), ScheduleMath.nextRunAfter(beforeDawn, schedule(), TORONTO))
     }
 
     @Test
@@ -78,7 +72,7 @@ class SchedulerWorkerTest {
         val wednesday = msOf(2026, 6, 10, 12, 0)
         assertEquals(
             msOf(2026, 6, 15, 7, 0),
-            ScheduleMath.nextRunAfter(wednesday, schedule(days = setOf(DayOfWeek.MONDAY)))
+            ScheduleMath.nextRunAfter(wednesday, schedule(days = setOf(Trigger.Day.MON)), TORONTO)
         )
     }
 
@@ -88,7 +82,7 @@ class SchedulerWorkerTest {
         // schedule must still fire that day (java.time shifts it into 03:30),
         // not silently skip to tomorrow.
         val beforeGap = msOf(2026, 3, 8, 1, 0)
-        val next = ScheduleMath.nextRunAfter(beforeGap, schedule(at = "02:30"))
+        val next = ScheduleMath.nextRunAfter(beforeGap, schedule(at = "02:30"), TORONTO)
         val local = java.time.Instant.ofEpochMilli(next).atZone(TORONTO)
         assertEquals(8, local.dayOfMonth, "the run must stay on DST day, shifted — not skipped")
         assertEquals(3, local.hour)
@@ -98,8 +92,8 @@ class SchedulerWorkerTest {
     fun `fall back — the repeated hour fires once, on the first occurrence`() {
         // 2026-11-01, America/Toronto: 01:30 happens twice. One run, the first.
         val beforeMidnight = msOf(2026, 11, 1, 0, 0)
-        val next = ScheduleMath.nextRunAfter(beforeMidnight, schedule(at = "01:30"))
-        val following = ScheduleMath.nextRunAfter(next, schedule(at = "01:30"))
+        val next = ScheduleMath.nextRunAfter(beforeMidnight, schedule(at = "01:30"), TORONTO)
+        val following = ScheduleMath.nextRunAfter(next, schedule(at = "01:30"), TORONTO)
         val followingLocal = java.time.Instant.ofEpochMilli(following).atZone(TORONTO)
         assertEquals(2, followingLocal.dayOfMonth,
             "after the first 01:30, the NEXT run is tomorrow — the repeated hour must not double-fire")
@@ -107,11 +101,13 @@ class SchedulerWorkerTest {
 
     @Test
     fun `the hour is the user's, not the server's`() {
-        val paris = schedule(at = "07:00", tz = ZoneId.of("Europe/Paris"))
-        val toronto = schedule(at = "07:00", tz = TORONTO)
+        // Le meme horaire, deux fuseaux — portes par la REGLE, plus par le
+        // declencheur. C'est ce que « 7 h veut dire 7 h chez celui qui a ecrit
+        // la regle » signifie concretement.
+        val at7 = schedule(at = "07:00")
         val after = msOf(2026, 6, 10, 0, 0, ZoneId.of("UTC"))
-        val parisRun = ScheduleMath.nextRunAfter(after, paris)
-        val torontoRun = ScheduleMath.nextRunAfter(after, toronto)
+        val parisRun = ScheduleMath.nextRunAfter(after, at7, ZoneId.of("Europe/Paris"))
+        val torontoRun = ScheduleMath.nextRunAfter(after, at7, TORONTO)
         assertEquals(6 * 3600_000L, torontoRun - parisRun,
             "same wall-clock time, six hours apart in June — the zone is the rule's")
     }
@@ -124,9 +120,14 @@ class SchedulerWorkerTest {
         org.jetbrains.exposed.sql.transactions.transaction { exec(sql) }
 
     private fun seedScheduleRule(id: String, dueAt: Long, enabled: Boolean = true) {
-        exec("""INSERT INTO automation_rules (id, owner_id, name, enabled, trigger_kind, trigger_signal_key, definition, created_at, updated_at)
+        // Le fuseau est en COLONNE, plus dans la definition : c'est la
+        // revision ① — tout ce qui n'est pas l'arbre logique sort du JSON.
+        exec("""INSERT INTO automation_rules
+                (id, owner_id, name, enabled, trigger_kind, trigger_signal_key, definition,
+                 time_zone_id, schema_version, created_at, updated_at)
                 VALUES ('$id','u1','$id',$enabled,'schedule',NULL,
-                '{"when":{"kind":"schedule","at":"07:00","tz":"America/Toronto"},"cooldownS":0,"actions":[{"type":"EMAIL","body":"b"}]}',0,0)""")
+                '{"trigger":{"kind":"schedule","minuteOfDay":420},"actions":[{"kind":"email","subject":"s","body":"b"}]}',
+                'America/Toronto','v2',0,0)""")
         exec("INSERT INTO scheduled_jobs (rule_id, next_run_at, timezone) VALUES ('$id',$dueAt,'America/Toronto')")
     }
 
@@ -207,10 +208,15 @@ class SchedulerWorkerTest {
         now = due + 5_000
         seedScheduleRule("r1", due)
 
-        val cache = RuleCache().apply { reload() }
+        val cache = RuleCache(InventoryResolver(signalRepository, deviceRepository)).apply { reload() }
         val engine = AutomationEngine(
-            sinks, cache, ExposedPendingActionRepository(), ExposedAutomationStateStore(),
-            deviceRepository, clock = { now }
+            sinks = sinks,
+            cache = cache,
+            values = SignalValueCache(signalRepository),
+            actions = ExposedPendingActionRepository(),
+            runs = AutomationRuns(),
+            devices = deviceRepository,
+            clock = { now }
         )
         SchedulerWorker(sinks, clock = { now }).pollOnce()
         drained().forEach { engine.handle(it) }

@@ -57,6 +57,22 @@ object TestDatabase {
         *SignalTables.ALL, *AutomationTables.ALL
     )
 
+    /**
+     * Le meme geste que `PostgresTestBase.connectAndClean()` du nuage.
+     *
+     * Il porte le meme nom EXPRES. Les epreuves du moteur de regles sont
+     * portees d'un depot a l'autre, et elles doivent rester lisibles cote a
+     * cote : un `diff` entre les deux versions d'un test ne doit montrer que
+     * ce qui differe VRAIMENT, jamais la ceremonie de montage de la base.
+     *
+     * Ce que le nom cache est une vraie difference, et elle joue en notre
+     * faveur : Postgres n'aime pas qu'on le rouvre, donc le nuage partage un
+     * pool et NETTOIE ses tables entre deux tests. SQLite offre un fichier
+     * neuf pour rien — il n'y a donc rien a nettoyer, et aucun ordre
+     * d'execution a respecter.
+     */
+    fun connectAndClean(nom: String = "test") { fresh(nom) }
+
     /** Une base jetable, initialisee, et rendue au cas ou le test la lise. */
     fun fresh(nom: String = "test"): File {
         val db = File.createTempFile("instantiot-$nom-", ".db").apply { delete(); deleteOnExit() }

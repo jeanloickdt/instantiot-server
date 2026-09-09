@@ -266,20 +266,49 @@ class DeviceRelayIntegrationTest {
         // test: a rule INSERTED IN SQL (the REST API is étape 9), a frame over
         // the real socket, and a durable action row at the other end. The full
         // path: parse → strict guard → producer gate → sink → engine → enqueue.
+        // La regle, dans le langage 2.0 : un declencheur qui NOMME son
+        // signal, une condition qui compare, une action typee. La v1 disait
+        // `{"when":{"kind":"value","above":20.0}}` et une cle plate ; le
+        // triplet remplace la cle, et la comparaison n'est plus enfouie dans
+        // le declencheur.
+        val definition = """
+            {"trigger":{"kind":"signalChanged",
+                        "signal":{"projectId":"$projectId","deviceId":"$deviceId","address":$address}},
+             "condition":{"kind":"compare",
+                          "left":{"projectId":"$projectId","deviceId":"$deviceId","address":$address},
+                          "op":"gt",
+                          "right":{"kind":"literal","type":"float","value":20.0}},
+             "actions":[{"kind":"email","subject":"seuil","body":"{{value}}"}]}
+        """.trimIndent().replace("\n", " ")
+
         org.jetbrains.exposed.sql.transactions.transaction {
-            exec("""INSERT INTO automation_rules
-                (id, owner_id, name, enabled, trigger_kind, trigger_signal_key, definition, created_at, updated_at)
-                VALUES ('r-e2e', '$ownerId', 'e2e', true, 'value', '$signalKey',
-                '{"when":{"kind":"value","above":20.0},"cooldownS":0,"actions":[{"type":"PUSH","title":"seuil","body":"{{value}}"}]}', 0, 0)""")
+            exec(
+                """INSERT INTO automation_rules
+                (id, owner_id, name, enabled, trigger_kind, trigger_signal_key, definition,
+                 created_at, updated_at, severity, time_zone_id, schema_version)
+                VALUES ('r-e2e', '$ownerId', 'e2e', true, 'signalChanged', '$signalKey',
+                '$definition', 0, 0, 'info', 'UTC', 'v2')"""
+            )
         }
-        val cache = com.jeanloickdt.automation.RuleCache().apply { reload() }
+        val resolver = com.jeanloickdt.automation.v2.InventoryResolver(signalRepository, deviceRepository)
+        val cache = com.jeanloickdt.automation.v2.RuleCache(resolver).apply { reload() }
         val sinks = com.jeanloickdt.event.EventSinks()
-        val engine = com.jeanloickdt.automation.AutomationEngine(
-            sinks, cache, com.jeanloickdt.automation.ExposedPendingActionRepository(),
-            com.jeanloickdt.automation.ExposedAutomationStateStore(), deviceRepository
+        val engine = com.jeanloickdt.automation.v2.AutomationEngine(
+            sinks = sinks,
+            cache = cache,
+            values = com.jeanloickdt.automation.v2.SignalValueCache(signalRepository),
+            actions = com.jeanloickdt.automation.ExposedPendingActionRepository(),
+            runs = com.jeanloickdt.automation.v2.AutomationRuns(),
+            devices = deviceRepository,
+            continuations = com.jeanloickdt.automation.v2.ExposedContinuationRepository(),
+            isDeviceOnline = { _, _ -> true }
         )
         val tcpPort = reserveFreePort()
-        wireRelay(tcpPort, sinks = sinks, watched = cache::watches)
+        wireRelay(tcpPort, sinks = sinks, watched = { ref ->
+            val i = ref.key.lastIndexOf(':')
+            val a = if (i > 0) ref.key.substring(i + 1).toIntOrNull() else null
+            a != null && cache.watches(ref.ownerId, ref.key.substring(0, i), a)
+        })
 
         val ws = createClient { install(WebSockets) }
         ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
@@ -309,7 +338,7 @@ class DeviceRelayIntegrationTest {
                        it[com.jeanloickdt.automation.data.PendingActionTable.payload] }
         }
         assertEquals(1, rows.size, "the frame crossed the threshold — one durable action expected")
-        assertEquals("PUSH", rows.single().first)
+        assertEquals("EMAIL", rows.single().first)
         assertTrue("42.5" in rows.single().second, "the value must be rendered into the payload")
     }
 
