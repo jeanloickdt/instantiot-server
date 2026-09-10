@@ -160,7 +160,7 @@
 <!-- ============================================================ -->
 <div class="app-shell"
      :class="{ 'sidebar-collapsed': sidebarCollapsed, 'mobile-menu-open': mobileMenuOpen }"
-     x-show="['dashboard','devices','users','settings','retention','backups','email'].includes(view)">
+     x-show="['dashboard','devices','users','settings','retention','backups','email','ntfy'].includes(view)">
 
   <header class="mobile-topbar">
     <button class="burger-btn" @click="mobileMenuOpen = true" :title="t('a11y.openMenu')" :aria-label="t('a11y.openMenu')">
@@ -224,6 +224,11 @@
          @click.prevent="navigate('email'); mobileMenuOpen = false" :title="t('nav.email')">
         <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-mail"/></svg>
         <span class="sidebar-link-label" x-text="t('nav.email')"></span>
+      </a>
+      <a href="#" class="sidebar-link" :class="{ active: view === 'ntfy' }"
+         @click.prevent="navigate('ntfy'); mobileMenuOpen = false" :title="t('nav.ntfy')">
+        <svg class="sidebar-link-icon" aria-hidden="true"><use href="#icon-phone"/></svg>
+        <span class="sidebar-link-label" x-text="t('nav.ntfy')"></span>
       </a>
     </nav>
 
@@ -677,6 +682,74 @@
         <p class="page-note">
           <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
           <span x-text="t('email.brevoHint')"></span>
+        </p>
+      </div>
+    </div>
+
+    <!-- NOTIFICATIONS (ntfy) -->
+    <div class="page" x-show="view === 'ntfy'">
+      <div class="container container-narrow">
+        <div class="page-header">
+          <h1 x-text="t('ntfy.title')"></h1>
+          <p class="page-header-desc" x-text="t('ntfy.intro')"></p>
+        </div>
+
+        <p class="page-note" x-show="ntfyForm.managedByEnv">
+          <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
+          <span x-text="t('ntfy.managedByEnv')"></span>
+        </p>
+
+        <form class="form-card" @submit.prevent="saveNtfyConfig()">
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('ntfy.server')"></span>
+            </label>
+            <input type="text" class="form-input" x-model="ntfyForm.server"
+                   placeholder="https://ntfy.sh"
+                   :disabled="ntfyForm.managedByEnv" autocomplete="off">
+            <p class="config-note" x-text="t('ntfy.serverHint')"></p>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('ntfy.topic')"></span>
+            </label>
+            <input type="text" class="form-input" x-model="ntfyForm.topic"
+                   placeholder="instantiot-9f3cf50e092aedf5"
+                   :disabled="ntfyForm.managedByEnv" autocomplete="off">
+            <p class="config-note" x-text="t('ntfy.topicHint')"></p>
+          </div>
+
+          <div class="form-row">
+            <label class="form-label">
+              <span class="form-label-text" x-text="t('ntfy.token')"></span>
+            </label>
+            <input type="password" class="form-input" x-model="ntfyForm.token"
+                   :placeholder="ntfyForm.hasToken ? t('ntfy.tokenSet') : ''"
+                   :disabled="ntfyForm.managedByEnv" autocomplete="off">
+            <p class="config-note" x-text="t('ntfy.tokenHint')"></p>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn-primary" x-text="t('ntfy.save')"
+                    :disabled="ntfyForm.managedByEnv || ntfyForm.busy"></button>
+            <button type="button" class="btn-secondary"
+                    @click="sendTestNtfy()" :disabled="ntfyForm.busy || !ntfyForm.configured">
+              <svg class="icon" aria-hidden="true"><use href="#icon-phone"/></svg>
+              <span x-text="ntfyForm.busy ? t('ntfy.testing') : t('ntfy.test')"></span>
+            </button>
+            <p class="form-msg" :class="ntfyForm.msgType" x-text="ntfyForm.msg"></p>
+          </div>
+        </form>
+
+        <p class="page-note">
+          <svg class="icon" aria-hidden="true"><use href="#icon-phone"/></svg>
+          <span x-text="t('ntfy.subscribeHint')"></span>
+        </p>
+
+        <p class="page-note">
+          <svg class="icon" aria-hidden="true"><use href="#icon-info"/></svg>
+          <span x-text="t('ntfy.why')"></span>
         </p>
       </div>
     </div>
