@@ -20,6 +20,8 @@
 package com.jeanloickdt.automation
 
 import java.util.Base64
+import com.jeanloickdt.signal.domain.SignalRepository
+import com.jeanloickdt.signal.domain.SignalRow
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -130,20 +132,89 @@ class SendersTest {
 
     // ── COMMAND ───────────────────────────────────────────────────────────
 
-    private val frame = Base64.getEncoder().encodeToString(byteArrayOf(0xAA.toByte(), 1, 2, 3))
+    /**
+     * Le registre, reduit a la seule question que l'expediteur pose.
+     *
+     * Un objet anonyme et non une fausse classe complete : l'expediteur
+     * n'appelle que `find`, et declarer les vingt autres methodes ferait
+     * croire qu'elles comptent.
+     */
+    private fun registre(signal: SignalRow?) = object : SignalRepository {
+        override fun find(ownerId: String, deviceId: String, address: Int) = signal
+        override fun findById(ownerId: String, id: Long) = signal
+        override fun listByDevice(ownerId: String, deviceId: String) = listOfNotNull(signal)
+        override fun listByOwner(ownerId: String) = listOfNotNull(signal)
+        override fun create(
+            ownerId: String, deviceId: String, address: Int, label: String, type: String,
+            unit: String, decimals: Int, minValue: Double?, maxValue: Double?,
+            historised: Boolean, replayOnConnect: Boolean, automationVisible: Boolean, nowMs: Long
+        ) = true
+        override fun nextFreeAddress(ownerId: String, deviceId: String): Int? = null
+        override fun update(
+            ownerId: String, deviceId: String, address: Int, label: String?, unit: String?,
+            decimals: Int?, minValue: Double?, maxValue: Double?, historised: Boolean?,
+            replayOnConnect: Boolean?, automationVisible: Boolean?, type: String?, nowMs: Long
+        ) = true
+        override fun delete(ownerId: String, deviceId: String, address: Int) = false
+        override fun deleteByDevice(ownerId: String, deviceId: String) = 0
+        override fun deleteByDevices(ownerId: String, deviceIds: List<String>) = 0
+        override fun deleteByOwner(ownerId: String) = 0
+        override fun touch(ownerId: String, deviceId: String, address: Int, payloadB64: String, atMs: Long) = true
+    }
+
+    private val ventilateur = SignalRow(
+        id = 1L, ownerId = "u1", deviceId = "d1", address = 1, label = "Ventilateur",
+        type = "int", unit = "", decimals = 0, minValue = null, maxValue = null,
+        historised = false, lastPayload = null, lastSeenAt = null
+    )
+
+    /**
+     * LA CHARGE QUE LE MOTEUR ECRIT, et pas une inventee.
+     *
+     * Les epreuves d'avant fabriquaient un `payloadB64` a la main — un champ
+     * que `commandPayload` n'a jamais produit. Elles passaient donc toutes,
+     * pendant que la couture entre le moteur et l'expediteur etait cassee :
+     * la commande partait en « empty command frame », une regle entiere
+     * perdue. C'est un demarrage reel qui l'a trouve, pas elles.
+     *
+     * Elles appellent desormais `commandPayload` : si le moteur change sa
+     * charge, ces epreuves cassent, ce qui est exactement leur travail.
+     */
+    private fun chargeDuMoteur(address: Int = 1, valeur: Long = 1L): String =
+        com.jeanloickdt.automation.v2.commandPayload(
+            com.jeanloickdt.automation.v2.SignalRef("p1", "d1", address),
+            com.jeanloickdt.automation.v2.TypedValue.Int(valeur)
+        )
 
     @Test
     fun `a COMMAND reaches the board through the outbox seam`() = runBlocking {
         var delivered: Pair<String, ByteArray>? = null
         val sender = CommandActionSender(
             ownsDevice = { owner, _ -> owner == "u1" },
-            sendToDevice = { id, f -> delivered = id to f; true }
+            sendToDevice = { id, f -> delivered = id to f; true },
+            signals = registre(ventilateur)
         )
-        val r = sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"$frame"}"""))
+        val r = sender.send(action("COMMAND", chargeDuMoteur()))
 
-        assertTrue(r is SendResult.Ok)
+        assertTrue(r is SendResult.Ok, "recu : $r")
         assertEquals("d1", delivered!!.first)
-        assertEquals(0xAA.toByte(), delivered!!.second[0])
+        // La trame est ENCODEE par le serveur, a partir du type declare du
+        // signal — elle n'arrive pas toute faite dans la charge.
+        assertEquals(0xAA.toByte(), delivered!!.second[0], "l'entete du protocole")
+        assertTrue(delivered!!.second.size > 5, "une trame de commande n'est jamais vide")
+    }
+
+    @Test
+    fun `un signal absent du registre ne produit aucune trame`() = runBlocking {
+        var called = false
+        val sender = CommandActionSender(
+            ownsDevice = { _, _ -> true },
+            sendToDevice = { _, _ -> called = true; true },
+            signals = registre(null)
+        )
+        val r = sender.send(action("COMMAND", chargeDuMoteur(address = 7)))
+        assertTrue(r is SendResult.Fatal && "no signal" in r.reason, "recu : $r")
+        assertTrue(!called, "rien ne doit partir vers la carte")
     }
 
     @Test
@@ -153,9 +224,10 @@ class SendersTest {
         var called = false
         val sender = CommandActionSender(
             ownsDevice = { owner, _ -> owner == "somebody-else" },
-            sendToDevice = { _, _ -> called = true; true }
+            sendToDevice = { _, _ -> called = true; true },
+            signals = registre(ventilateur)
         )
-        val r = sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"$frame"}""", owner = "u1"))
+        val r = sender.send(action("COMMAND", chargeDuMoteur(), owner = "u1"))
 
         assertTrue(r is SendResult.Fatal && "cross-tenant" in r.reason)
         assertTrue(!called, "the frame must never leave")
@@ -165,18 +237,21 @@ class SendersTest {
     fun `a board offline at delivery is a LOST command, said loudly — never a retry`() = runBlocking {
         val sender = CommandActionSender(
             ownsDevice = { owner, _ -> owner == "u1" },
-            sendToDevice = { _, _ -> false }   // no outbox = offline
+            sendToDevice = { _, _ -> false },   // no outbox = offline
+            signals = registre(ventilateur)
         )
-        val r = sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"$frame"}"""))
+        val r = sender.send(action("COMMAND", chargeDuMoteur()))
         assertTrue(r is SendResult.Fatal && "offline" in r.reason,
             "at-most-once already marked the row SENT — a retry would reopen the double-execution window")
     }
 
     @Test
     fun `garbage payloads die cleanly`() = runBlocking {
-        val sender = CommandActionSender({ _, _ -> true }, { _, _ -> true })
+        val sender = CommandActionSender({ _, _ -> true }, { _, _ -> true }, registre(ventilateur))
         assertTrue(sender.send(action("COMMAND", "not json")) is SendResult.Fatal)
-        assertTrue(sender.send(action("COMMAND", """{"payloadB64":"$frame"}""")) is SendResult.Fatal)
-        assertTrue(sender.send(action("COMMAND", """{"deviceId":"d1","payloadB64":"!!!"}""")) is SendResult.Fatal)
+        assertTrue(sender.send(action("COMMAND", """{"address":1,"value":1}""")) is SendResult.Fatal,
+            "sans deviceId")
+        assertTrue(sender.send(action("COMMAND", """{"deviceId":"d1","value":1}""")) is SendResult.Fatal,
+            "sans adresse — c'est elle qui manquait au contrat d'avant")
     }
 }

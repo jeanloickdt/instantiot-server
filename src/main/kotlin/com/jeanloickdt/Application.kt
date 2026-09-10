@@ -833,7 +833,10 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         sendToDevice = { deviceId, frame ->
             // discret, jamais streaming : une commande de règle ne se jette pas
             connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
-        }
+        },
+        // Le type DECLARE du signal decide du tag sur le fil — un seul
+        // encodeur, celui des consignes.
+        signals = signalRepository
     )
     /**
      * Les canaux que ce serveur porte VRAIMENT.
