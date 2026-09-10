@@ -22,6 +22,7 @@ package com.jeanloickdt.signal
 import com.jeanloickdt.common.ApiError
 import com.jeanloickdt.device.domain.DeviceRepository
 import com.jeanloickdt.signal.data.SignalTable
+import com.jeanloickdt.signal.domain.SignalContext
 import com.jeanloickdt.signal.domain.SignalRepository
 import com.jeanloickdt.signal.domain.SignalRow
 import io.ktor.http.HttpStatusCode
@@ -46,6 +47,26 @@ data class SignalDto(
     /** `I5` — what the sketch writes. Rendered here so no client re-implements it. */
     val ref: String,
     val label: String,
+    /**
+     * Ou vit ce signal — le projet et l'appareil qui le portent.
+     *
+     * Non nullables : un signal appartient TOUJOURS a un appareil, qui
+     * appartient toujours a un projet. Les rendre optionnels aurait laisse
+     * croire le contraire, et l'editeur de regles n'aurait aucun moyen de
+     * distinguer trois « Temp » dans trois projets differents.
+     *
+     * Libelles issus d'une jointure VIVANTE a chaque lecture, jamais d'une
+     * copie stockee : un projet renomme apparait renomme au rafraichissement
+     * suivant.
+     *
+     * Ils manquaient. Le contrat de l'app les marque `@Required` : leur
+     * absence faisait echouer la deserialisation de la reponse ENTIERE, et le
+     * selecteur de regles restait vide — sans message, sans erreur, sans
+     * qu'aucune trace serveur ne le laisse deviner.
+     */
+    val projectId: String,
+    val projectLabel: String,
+    val deviceLabel: String,
     val type: String,
     val unit: String,
     val decimals: Int,
@@ -163,9 +184,13 @@ class SignalPolicies(
         { _, _, _ -> true }
 )
 
-private fun SignalRow.toDto() = SignalDto(
+private fun SignalRow.toDto(context: SignalContext) = SignalDto(
     deviceId = deviceId, address = address, ref = SignalTable.render(address),
-    label = label, type = type, unit = unit, decimals = decimals,
+    label = label,
+    projectId = context.projectId,
+    projectLabel = context.projectLabel,
+    deviceLabel = context.deviceLabel,
+    type = type, unit = unit, decimals = decimals,
     minValue = minValue, maxValue = maxValue,
     historised = historised,
     replayOnConnect = replayOnConnect,
@@ -214,6 +239,14 @@ private val KNOWN_TYPES = setOf(
 fun Route.signalRoutes(
     signals: SignalRepository,
     devices: DeviceRepository,
+    /**
+     * Ou vit chaque signal — le projet et l'appareil, par une jointure vivante.
+     *
+     * Separe du depot des signaux parce que ce sont deux questions : « quels
+     * signaux existent » et « ou vivent-ils ». La seconde traverse trois
+     * tables, et l'editeur de regles est le seul a la poser.
+     */
+    contexts: com.jeanloickdt.signal.domain.SignalContextReader,
     policies: SignalPolicies = SignalPolicies(),
     clock: () -> Long = System::currentTimeMillis,
     /**
@@ -244,14 +277,22 @@ fun Route.signalRoutes(
         get("/api/signals") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
-            call.respond(HttpStatusCode.OK, signals.listByOwner(ownerId).map { it.toDto() })
+            call.respond(
+                HttpStatusCode.OK,
+                contexts.listByOwnerWithContext(ownerId).map { it.signal.toDto(it.context) }
+            )
         }
 
         get("/api/devices/{deviceId}/signals") {
             val ownerId = call.principal<JWTPrincipal>()?.subject
                 ?: return@get call.respond(HttpStatusCode.Unauthorized)
             val deviceId = call.ownedDevice(devices, ownerId) ?: return@get
-            call.respond(HttpStatusCode.OK, signals.listByDevice(ownerId, deviceId).map { it.toDto() })
+            val context = contexts.contextOf(ownerId, deviceId)
+                ?: return@get call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
+            call.respond(
+                HttpStatusCode.OK,
+                signals.listByDevice(ownerId, deviceId).map { it.toDto(context) }
+            )
         }
 
         post("/api/devices/{deviceId}/signals") {
@@ -321,7 +362,15 @@ fun Route.signalRoutes(
                 return@post call.respond(HttpStatusCode.Conflict,
                     ApiError("${SignalTable.render(address)} is already taken on this board"))
             }
-            call.respond(HttpStatusCode.Created, signals.find(ownerId, deviceId, address)!!.toDto())
+            // Le contexte est relu ici plutot que devine : la carte vient
+            // d'etre validee comme appartenant au compte, donc la jointure
+            // rend forcement une ligne.
+            val context = contexts.contextOf(ownerId, deviceId)
+                ?: return@post call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
+            call.respond(
+                HttpStatusCode.Created,
+                signals.find(ownerId, deviceId, address)!!.toDto(context)
+            )
         }
 
         patch("/api/devices/{deviceId}/signals/{address}") {
@@ -381,7 +430,12 @@ fun Route.signalRoutes(
                 TypeMismatches.clear(deviceId, address)
             }
 
-            call.respond(HttpStatusCode.OK, signals.find(ownerId, deviceId, address)!!.toDto())
+            val context = contexts.contextOf(ownerId, deviceId)
+                ?: return@patch call.respond(HttpStatusCode.NotFound, ApiError("Device not found"))
+            call.respond(
+                HttpStatusCode.OK,
+                signals.find(ownerId, deviceId, address)!!.toDto(context)
+            )
         }
 
         /**

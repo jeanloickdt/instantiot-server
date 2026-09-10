@@ -1012,6 +1012,7 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         signalRoutes(
             signals = signalRepository,
             devices = deviceRepository,
+            contexts = com.jeanloickdt.signal.data.ExposedSignalContextReader(),
             sendToDevice = { deviceId, frame ->
                 connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
             },
