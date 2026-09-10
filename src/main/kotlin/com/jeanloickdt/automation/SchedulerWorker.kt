@@ -1,25 +1,8 @@
-/*
- * InstantIoT Server — self-hosted IoT relay for makers.
- * Copyright (C) 2026 Djoufack Tsobeng Jean Loick (InstantIoT)
- * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published
- * by the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 package com.jeanloickdt.automation
 
 import com.jeanloickdt.automation.data.AutomationRuleTable
+import com.jeanloickdt.automation.v2.RuleCodec
+import com.jeanloickdt.automation.v2.Trigger
 import com.jeanloickdt.automation.data.ScheduledJobTable
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.event.RelayEvent
@@ -27,6 +10,7 @@ import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import org.jetbrains.exposed.sql.JoinType
 import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
@@ -52,14 +36,22 @@ object ScheduleMath {
      * forward gap shifts forward by the gap, a time repeated at fall-back
      * fires on the FIRST occurrence.
      */
-    fun nextRunAfter(afterMs: Long, schedule: Trigger.Schedule): Long {
-        val zone = schedule.zone
+    /**
+     * Le fuseau vient de la REGLE, plus du declencheur.
+     *
+     * En v1 chaque `Schedule` portait le sien ; en v2 il n'y en a qu'un par
+     * regle, et une feuille qui en porte un est refusee (`tz-in-leaf`). Deux
+     * fuseaux dans une meme regle rendraient legale une regle programmee a
+     * Toronto qui teste les heures de Teheran.
+     */
+    fun nextRunAfter(afterMs: Long, schedule: Trigger.Schedule, zone: ZoneId): Long {
         val after = Instant.ofEpochMilli(afterMs).atZone(zone)
         val at = LocalTime.of(schedule.minuteOfDay / 60, schedule.minuteOfDay % 60)
+        val mask = schedule.days.map { DAYS.getValue(it) }.toSet()
 
         var day: LocalDate = after.toLocalDate()
         repeat(8) {   // 8 covers every day-mask, including "only Mondays"
-            if (dayAllowed(day.dayOfWeek, schedule.days)) {
+            if (dayAllowed(day.dayOfWeek, mask)) {
                 val candidate = day.atTime(at).atZone(zone)   // DST-resolved here
                 if (candidate.toInstant().toEpochMilli() > afterMs) {
                     return candidate.toInstant().toEpochMilli()
@@ -72,6 +64,14 @@ object ScheduleMath {
 
     private fun dayAllowed(day: DayOfWeek, mask: Set<DayOfWeek>): Boolean =
         mask.isEmpty() || day in mask
+
+    /** Le vocabulaire du fil vers celui de java.time — une seule table. */
+    private val DAYS = mapOf(
+        Trigger.Day.MON to DayOfWeek.MONDAY, Trigger.Day.TUE to DayOfWeek.TUESDAY,
+        Trigger.Day.WED to DayOfWeek.WEDNESDAY, Trigger.Day.THU to DayOfWeek.THURSDAY,
+        Trigger.Day.FRI to DayOfWeek.FRIDAY, Trigger.Day.SAT to DayOfWeek.SATURDAY,
+        Trigger.Day.SUN to DayOfWeek.SUNDAY
+    )
 }
 
 /**
@@ -105,7 +105,11 @@ class SchedulerWorker(
         val now = clock()
         var fired = 0
 
-        data class Due(val ruleId: String, val ownerId: String, val enabled: Boolean, val definition: String, val dueAt: Long)
+        data class Due(
+            val ruleId: String, val ownerId: String, val enabled: Boolean,
+            val definition: String, val timeZoneId: String,
+            val invalidReason: String?, val dueAt: Long
+        )
 
         val due = transaction {
             ScheduledJobTable
@@ -118,24 +122,30 @@ class SchedulerWorker(
                         ownerId    = it[AutomationRuleTable.ownerId],
                         enabled    = it[AutomationRuleTable.enabled],
                         definition = it[AutomationRuleTable.definition],
+                        timeZoneId = it[AutomationRuleTable.timeZoneId],
+                        invalidReason = it[AutomationRuleTable.invalidReason],
                         dueAt      = it[ScheduledJobTable.nextRunAt]
                     )
                 }
         }
 
         due.forEach { job ->
-            val schedule = RuleDefinition.parseOrNull(job.ruleId, job.definition)
-                ?.trigger as? Trigger.Schedule
+            val schedule = (RuleCodec.decode(job.definition) as? RuleCodec.Outcome.Ok)
+                ?.logic?.trigger as? Trigger.Schedule
             if (schedule == null) {
                 // The rule changed kind or broke under the job's feet — the
                 // orphan row must not be re-polled every 10 s forever.
                 transaction { ScheduledJobTable.deleteWhere { ScheduledJobTable.ruleId eq job.ruleId } }
                 return@forEach
             }
+            val zone = runCatching { ZoneId.of(job.timeZoneId) }.getOrDefault(ZoneId.of("UTC"))
 
             val late = now - job.dueAt
             when {
-                !job.enabled -> Unit   // advance silently below — no event
+                // Une regle eteinte ou invalide avance en silence : sa ligne
+                // doit rester en phase avec l'horloge pour que la reactivation
+                // reprenne a la bonne occurrence, mais rien ne se publie.
+                !job.enabled || job.invalidReason != null -> Unit
 
                 late > MISSED_GRACE_MS ->
                     // The server was off (or stuck) at the appointed hour.
@@ -159,7 +169,7 @@ class SchedulerWorker(
 
             // Advance from the DUE time, not from now: a poll 25 s late must
             // not shift tomorrow's 07:00 to 07:00:25 forever.
-            val next = ScheduleMath.nextRunAfter(maxOf(job.dueAt, now - MISSED_GRACE_MS), schedule)
+            val next = ScheduleMath.nextRunAfter(maxOf(job.dueAt, now - MISSED_GRACE_MS), schedule, zone)
             transaction {
                 ScheduledJobTable.update({ ScheduledJobTable.ruleId eq job.ruleId }) {
                     it[nextRunAt] = next

@@ -34,10 +34,9 @@ class ApplicationTest {
         // production ~/.instantiot/instantiot.db. module() runs migrations, marks
         // devices offline, etc.; without an injected dbFile this test would
         // mutate (and could one day delete) real data.
-        val tmpDb = File.createTempFile("instantiot-apptest-", ".db").apply { deleteOnExit() }
-        application {
-            module(dbFile = tmpDb)
-        }
+        // Le port du relais est un global mutable, et plusieurs epreuves
+        // montent le module dans la meme JVM — voir `monterLeVraiModule`.
+        monterLeVraiModule(baseJetable("apptest"))
         client.get("/").apply {
             assertEquals(HttpStatusCode.OK, status)
         }

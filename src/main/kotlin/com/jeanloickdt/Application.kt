@@ -23,6 +23,7 @@ import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.automation.automationHealthRoutes
 import com.jeanloickdt.automation.emailConfigRoutes
 import com.jeanloickdt.signal.signalRoutes
+import com.jeanloickdt.automation.notificationsRoutes
 import com.jeanloickdt.automation.ruleRoutes
 import com.jeanloickdt.auth.configureAuth
 import com.jeanloickdt.auth.defaultTokenService
@@ -175,9 +176,38 @@ val messageUsageRepo: com.jeanloickdt.automation.MessageUsageRepository =
 val pendingActions: com.jeanloickdt.automation.PendingActionRepository =
     com.jeanloickdt.automation.ExposedPendingActionRepository()
 
+// ── Le moteur de regles 2.0 ────────────────────────────────────────────
+//
+// Le v1 evaluait A NIVEAU : une regle se verrouillait en franchissant un
+// seuil et ne se rearmait qu'en repassant une ligne d'hysteresis. Le v2 est
+// IMPULSIONNEL — chaque evenement re-evalue entierement. Les deux paquets ont
+// coexiste le temps du portage ; c'est le v2 qui tourne desormais.
+
+/**
+ * Ce qui dit a une regle si sa cible existe encore.
+ *
+ * Une regle nomme un signal et une carte. Ils peuvent disparaitre apres
+ * qu'elle a ete ecrite, et une regle qui vise le vide doit se declarer
+ * INVALIDE plutot que de ne rien faire en silence.
+ */
+val ruleResolver: com.jeanloickdt.automation.v2.RuleValidation.Resolver =
+    com.jeanloickdt.automation.v2.InventoryResolver(signalRepository, deviceRepository)
+
 // The rules, in RAM — reloaded in module() once the DB is up, and after every
 // rule mutation (the CRUD's single coupling point).
-val ruleCache = com.jeanloickdt.automation.RuleCache()
+val ruleCache = com.jeanloickdt.automation.v2.RuleCache(ruleResolver)
+
+/**
+ * Les valeurs que les conditions comparent, lues une fois puis tenues.
+ *
+ * Une condition composee interroge plusieurs signaux a chaque evenement.
+ * Sans ce cache, chacun coutait une lecture en base sur le chemin d'un
+ * capteur qui parle a 1 Hz.
+ */
+val signalValues = com.jeanloickdt.automation.v2.SignalValueCache(signalRepository)
+
+/** Les vingt derniers passages de chaque regle — ce que la fiche affiche. */
+val automationRuns = com.jeanloickdt.automation.v2.AutomationRuns()
 
 private val logger = LoggerFactory.getLogger("Application")
 
@@ -287,6 +317,22 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     //     bucket — breaking the "zero loss on controlled restart" guarantee.
     // The flush is idempotent (drains queues/buckets), so running it twice on
     // a path where both fire is harmless — the second pass finds nothing.
+    // Le videur d'historique — UNE instance pour les deux chemins.
+    //
+    // La boucle de fond l'appelle toutes les cinq secondes, l'arret l'appelle
+    // une derniere fois. Les deux doivent compter leurs echecs ensemble : un
+    // arret qui suit trois echecs d'ecriture ne repart pas de zero, et le
+    // journal dit la meme chose des deux cotes.
+    val videurHistorique = com.jeanloickdt.relay.HistoryFlusher(
+        buffers = buffers,
+        minutes = com.jeanloickdt.signal.data.SignalAggregators.minute,
+        write = { raw, minutes ->
+            signalHistoryRepository.insertMinuteBatch(minutes)
+            signalHistoryRepository.insertRawBatch(raw)
+        },
+        periodMs = com.jeanloickdt.common.ServerConfig.historyFlushPeriodMs
+    )
+
     val finalFlush: () -> Unit = {
         kotlinx.coroutines.runBlocking {
             // Meme promesse que les tampons ci-dessus : zero perte sur un
@@ -295,10 +341,11 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             // n'attend jamais ici.
             signalRepository.flushPendingValues()
             (presence as? com.jeanloickdt.relay.DbBackedPresenceStore)?.flushPending()
-            signalHistoryRepository.insertMinuteBatch(
-                com.jeanloickdt.signal.data.SignalAggregators.minute.extractAllBuckets()
-            )
-            signalHistoryRepository.insertRawBatch(buffers.signalRawBuffer.drain())
+            // Tout, y compris le seau minute EN COURS, qui part comme un
+            // delta partiel. Un echec ici ne se reessaie pas — le processus
+            // s'en va — mais il est DIT, au lieu de remonter en exception
+            // depuis un crochet d'arret ou personne ne la lira.
+            videurHistorique.flushAll()
         }
     }
 
@@ -446,11 +493,21 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         // Only the DELTA is worth a line: a queue that refused once and
         // recovered must not warn on every round for the rest of the day.
         var lastRefusedTotal = 0L
+
+        // Le videur tient la garantie qui manquait : un lot que la base
+        // refuse retourne dans sa file au lieu de disparaitre. Voir
+        // [HistoryFlusher] — le `drain()` d'avant vidait AVANT d'ecrire.
+        val videur = videurHistorique
+
         while (true) {
-            delay(FLUSH_PERIOD_MS)
+            // Le delai vient du videur : la periode en temps normal, un
+            // repli croissant tant que la base refuse. Marteler une base qui
+            // ne repond pas toutes les cinq secondes n'aide personne.
+            delay(videur.nextDelayMs)
             val startedAt = System.nanoTime()
             var signalRows = 0
             var rawRows = 0
+            var minuteRows = 0
             try {
 
                 // messages.perMonth ledger — a handful of rows per cycle, one
@@ -479,18 +536,25 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 // palier minute s'écrit ici ; heure et jour sont dérivées
                 // séparément, sur leur propre boucle plus lente — voir plus
                 // bas.
-                signalHistoryRepository.insertMinuteBatch(
-                    com.jeanloickdt.signal.data.SignalAggregators.minute
-                        .extractClosedBuckets(System.currentTimeMillis())
-                )
-                rawRows = buffers.signalRawBuffer.drain()
-                    .also { signalHistoryRepository.insertRawBatch(it) }.size
+                //
+                // Le videur dit lui-meme ce qui s'est passe : il n'y a rien a
+                // rattraper ici, et surtout rien a journaliser une seconde
+                // fois. Un echec a deja remis le lot en file et annonce son
+                // prochain essai.
+                when (val issue = videur.flushOnce()) {
+                    is com.jeanloickdt.relay.HistoryFlusher.Outcome.Written -> {
+                        rawRows = issue.rawRows
+                        minuteRows = issue.minuteRows
+                    }
+                    is com.jeanloickdt.relay.HistoryFlusher.Outcome.Failed -> Unit
+                }
             } catch (e: Exception) {
                 bgLog.error("History flush round failed — retrying in 5s", e)
             }
             val tookMs = (System.nanoTime() - startedAt) / 1_000_000
             round++
-            val summary = "flush took ${tookMs}ms — signals=$signalRows raw=$rawRows"
+            val summary = "flush took ${tookMs}ms — signals=$signalRows raw=$rawRows minute=$minuteRows" +
+                if (videur.failures > 0) " · base MUETTE depuis ${videur.failures} tour(s)" else ""
 
             // A saturation nobody reports is worse than a low ceiling. The
             // queues refuse silently by design — this is the one place that
@@ -635,12 +699,64 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // empty, watches() is false everywhere, and NOTHING changes.
     // ============================================================
     ruleCache.reload()
-    watchedSignals = { ref -> ruleCache.watches(ref) }
-    val automationEngine = com.jeanloickdt.automation.AutomationEngine(
-        eventSinks, ruleCache, pendingActions,
-        com.jeanloickdt.automation.ExposedAutomationStateStore(), deviceRepository
+    watchedSignals = { ref ->
+        // `SignalRef` du relais porte « ownerId » et « deviceId:adresse » ; le
+        // cache v2 indexe sur le triplet. La conversion est ici et pas dans le
+        // cache : le relais n'a aucune raison de connaitre la forme interne de
+        // l'index, et l'index aucune raison de connaitre celle du relais.
+        val i = ref.key.lastIndexOf(':')
+        val address = if (i > 0) ref.key.substring(i + 1).toIntOrNull() else null
+        address != null && ruleCache.watches(ref.ownerId, ref.key.substring(0, i), address)
+    }
+
+    /**
+     * Les attentes en vol.
+     *
+     * Une ligne par sequence arretee sur un `Wait`, jamais un fil endormi : un
+     * redemarrage a 21 h ne doit pas laisser le chauffage allume toute la
+     * nuit.
+     */
+    val continuations = com.jeanloickdt.automation.v2.ExposedContinuationRepository()
+
+    val automationEngine = com.jeanloickdt.automation.v2.AutomationEngine(
+        sinks = eventSinks,
+        cache = ruleCache,
+        values = signalValues,
+        actions = pendingActions,
+        runs = automationRuns,
+        devices = deviceRepository,
+        continuations = continuations,
+        // Une commande est « au plus une fois » : une carte injoignable fait
+        // ABANDONNER l'action, jamais attendre. La presence se lit sur les
+        // connexions vivantes, pas sur une colonne qui peut avoir vieilli.
+        isDeviceOnline = { _, deviceId -> connections.deviceOutboxes.containsKey(deviceId) }
     )
     launch(Dispatchers.Default) { automationEngine.run() }
+
+    /*
+     * Le reveil des attentes.
+     *
+     * Une seconde, comme le livreur : c'est la granularite d'une attente
+     * exprimee en secondes, et une echeance ne merite pas mieux qu'une
+     * seconde de retard.
+     *
+     * La ligne est supprimee MEME quand la reprise est abandonnee — regle
+     * eteinte, supprimee, devenue invalide. La garder ferait revenir la meme
+     * echeance a chaque tour, pour toujours.
+     */
+    launch(com.jeanloickdt.common.ServerDispatchers.storage) {
+        while (true) {
+            delay(1_000)
+            try {
+                for (c in continuations.due(System.currentTimeMillis(), limit = 100)) {
+                    automationEngine.resume(c)
+                    continuations.delete(c.id)
+                }
+            } catch (e: Exception) {
+                bgLog.error("Continuation pass failed — retrying next second", e)
+            }
+        }
+    }
 
     // The health watch (étape 8) — the server is the only party that can see
     // a silent delivery outage. 30 s cadence, warnings past the thresholds.
@@ -672,7 +788,12 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
                 automationEngine.tick(System.currentTimeMillis())
                 schedulerWorker.pollOnce()
                 if (++i % 6 == 0) {
-                    staleSweeper.sweep(ruleCache.watchedStaleKeys(), System.currentTimeMillis())
+                    staleSweeper.sweep(
+                        ruleCache.watchedStaleKeys().mapTo(mutableSetOf()) { k ->
+                            com.jeanloickdt.relay.SignalRef(k.ownerId, "${k.deviceId}:${k.address}")
+                        },
+                        System.currentTimeMillis()
+                    )
                 }
             } catch (e: Exception) {
                 bgLog.error("Automation tick failed — retrying next tick", e)
@@ -714,13 +835,23 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
         }
     )
-    val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(
-        pendingActions,
-        senders = mapOf(
-            com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
-            com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
-        )
+    /**
+     * Les canaux que ce serveur porte VRAIMENT.
+     *
+     * `PUSH` n'y est pas : la livraison passe par FCM, qui demande un projet
+     * Firebase et une cle de compte de service. Aucune des deux ne peut voyager
+     * dans un depot public, et un serveur chez soi n'en a pas.
+     *
+     * Cette carte est la SOURCE UNIQUE. Ce que le livreur sait livrer et ce
+     * que les routes acceptent de creer sortent d'elle, et pas de deux listes
+     * qui se ressemblent — voir son usage dans `ruleRoutes`.
+     */
+    val actionSenders = mapOf(
+        com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
+        com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
     )
+
+    val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(pendingActions, senders = actionSenders)
 
     launch(Dispatchers.IO) {
         while (true) {
@@ -844,17 +975,37 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         )
         automationHealthRoutes(userRepository, pendingActions, eventSinks, automationEngine)
         ruleRoutes(
-            ruleCache, signalRepository, deviceRepository,
-            com.jeanloickdt.automation.RulePolicies(
-                // The OFFRE boundary: no Firebase credentials can ship in a
-                // public repo, so PUSH rules are refused at creation with a
-                // message that says why — not enqueued into DEAD rows.
-                allowedActionTypes = setOf(
-                    com.jeanloickdt.automation.RuleDefinition.TYPE_EMAIL,
-                    com.jeanloickdt.automation.RuleDefinition.TYPE_COMMAND
-                )
-            )
+            cache = ruleCache,
+            resolver = ruleResolver,
+            runs = automationRuns,
+            policies = com.jeanloickdt.automation.RulePolicies(
+                // LES TYPES CREABLES SONT LES CLES DE LA CARTE D'EXPEDITEURS.
+                //
+                // Recopier la liste ici en ferait une SECONDE source, et deux
+                // sources finissent par diverger. Les deux facons de diverger
+                // sont mauvaises, et la premiere est la pire : une regle
+                // acceptee que personne ne peut livrer part en DEAD, en
+                // silence, et l'utilisateur decouvre le trou APRES l'incident
+                // qu'il voulait eviter.
+                //
+                // Le nuage a paye cette lecon ; il n'y a aucune raison de la
+                // repayer ici. Le jour ou un expediteur PUSH sera enregistre,
+                // la route s'ouvrira d'elle-meme.
+                allowedActionTypes = actionSenders.keys
+            ),
+            // « Run actions now » depuis la fiche d'une regle. Nul, le bouton
+            // rendrait 503 : un noeud sans moteur doit le DIRE, pas repondre
+            // 200 sur une action qui n'est jamais partie.
+            engine = automationEngine
         )
+        // Le fil des alertes — ce que l'onglet Notifications de l'app lit.
+        //
+        // Il n'existait pas ici : l'app interrogeait `/api/notifications` et
+        // recevait 404, donc une liste vide, sans rien qui explique pourquoi.
+        // Les lignes existaient pourtant depuis toujours — c'est
+        // `pending_actions`, relue par proprietaire et par instant.
+        notificationsRoutes(com.jeanloickdt.automation.ExposedNotificationRepository())
+
         // Les routes des widgets sont parties avec la table. Une adresse se
         // declare desormais dans `signalRoutes`, cable plus haut.
 

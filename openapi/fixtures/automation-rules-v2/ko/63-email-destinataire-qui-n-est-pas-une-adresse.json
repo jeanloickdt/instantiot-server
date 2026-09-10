@@ -1,0 +1,19 @@
+{
+  "expectedError": "malformed",
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "email",
+      "subject": "Serre",
+      "body": "Il fait chaud",
+      "to": "le voisin"
+    }
+  ]
+}

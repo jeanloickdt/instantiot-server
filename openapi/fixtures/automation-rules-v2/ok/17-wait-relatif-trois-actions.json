@@ -1,0 +1,44 @@
+{
+  "trigger": {
+    "kind": "signalTransition",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-panneau",
+      "address": 3
+    },
+    "to": {
+      "type": "int",
+      "value": 1
+    }
+  },
+  "actions": [
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-serre",
+        "deviceId": "dev-ventilo",
+        "address": 0
+      },
+      "value": {
+        "type": "int",
+        "value": 1
+      }
+    },
+    {
+      "kind": "wait",
+      "seconds": 30
+    },
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-serre",
+        "deviceId": "dev-ventilo",
+        "address": 0
+      },
+      "value": {
+        "type": "int",
+        "value": 0
+      }
+    }
+  ]
+}

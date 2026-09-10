@@ -1,22 +1,3 @@
-/*
- * InstantIoT Server — self-hosted IoT relay for makers.
- * Copyright (C) 2026 Djoufack Tsobeng Jean Loick (InstantIoT)
- * Author: Djoufack Tsobeng Jean Loick (@jeanloick_dt)
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published
- * by the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Affero General Public License for more details.
- *
- * You should have received a copy of the GNU Affero General Public License
- * along with this program. If not, see <https://www.gnu.org/licenses/>.
- */
-
 package com.jeanloickdt.automation
 
 import com.jeanloickdt.auth.configureAuth
@@ -24,6 +5,12 @@ import com.jeanloickdt.auth.data.UserTable
 import com.jeanloickdt.automation.data.AutomationTables
 import com.jeanloickdt.device.data.DeviceTable
 import com.jeanloickdt.deviceRepository
+import com.jeanloickdt.signalRepository
+import com.jeanloickdt.automation.v2.AutomationEngine
+import com.jeanloickdt.automation.v2.AutomationRuns
+import com.jeanloickdt.automation.v2.InventoryResolver
+import com.jeanloickdt.automation.v2.RuleCache
+import com.jeanloickdt.automation.v2.SignalValueCache
 import com.jeanloickdt.event.EventSinks
 import com.jeanloickdt.project.data.ProjectTable
 import com.jeanloickdt.userRepository
@@ -60,11 +47,17 @@ class AutomationHealthTest {
 
     @BeforeTest
     fun setup() {
-        com.jeanloickdt.database.TestDatabase.fresh()
+        com.jeanloickdt.database.TestDatabase.connectAndClean()
     }
 
     private fun engine(sinks: EventSinks = EventSinks()) = AutomationEngine(
-        sinks, RuleCache(), repo, ExposedAutomationStateStore(), deviceRepository, clock = { now }
+        sinks = sinks,
+        cache = RuleCache(InventoryResolver(signalRepository, deviceRepository)),
+        values = SignalValueCache(signalRepository),
+        actions = repo,
+        runs = AutomationRuns(),
+        devices = deviceRepository,
+        clock = { now }
     )
 
     // ── Les seuils de la veille ───────────────────────────────────────────

@@ -1,0 +1,17 @@
+{
+  "trigger": {
+    "kind": "deviceDisconnected",
+    "device": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur"
+    },
+    "afterMs": 300000
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Contact perdu",
+      "body": "Le capteur ne repond plus"
+    }
+  ]
+}

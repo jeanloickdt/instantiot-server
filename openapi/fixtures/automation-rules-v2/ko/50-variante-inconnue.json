@@ -1,0 +1,18 @@
+{
+  "expectedError": "unknown-variant:signalWobbled",
+  "trigger": {
+    "kind": "signalWobbled",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "expectedError": "type-mismatch",
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-panneau",
+      "address": 9
+    }
+  },
+  "condition": {
+    "kind": "compare",
+    "left": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-panneau",
+      "address": 9
+    },
+    "op": "gt",
+    "right": {
+      "kind": "literal",
+      "type": "string",
+      "value": "auto"
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ package com.jeanloickdt.event
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.selects.select
 import org.slf4j.LoggerFactory
 
 private val logger = LoggerFactory.getLogger("EventSinks")
@@ -80,6 +81,26 @@ class EventSinks(
     /** Observability hooks — the future "oldest PENDING" metric reads these. */
     val droppedValueCount: Long get() = droppedValues.get()
     val droppedDiscreteCount: Long get() = droppedDiscrete.get()
+
+    /**
+     * Le prochain evenement pour le moteur — le DISCRET d'abord, toujours :
+     * une carte tombee passe avant une mesure de plus.
+     *
+     * La regle vivait dans la boucle du moteur, qui piochait ses deux canaux
+     * a la main. Elle appartient aux canaux : c'est leur nature qui la dicte,
+     * et un second consommateur ecrirait autrement sans que rien ne le dise.
+     *
+     * `select` est biaise vers sa premiere clause. Les deux `tryReceive`
+     * d'abord evitent d'y entrer quand quelque chose attend deja, et l'ordre
+     * des clauses fait le reste sous deluge.
+     */
+    suspend fun next(): RelayEvent =
+        discrete.tryReceive().getOrNull()
+            ?: values.tryReceive().getOrNull()
+            ?: select {
+                discrete.onReceive { it }   // premiere clause = priorite
+                values.onReceive { it }
+            }
 
     /**
      * Route by nature, hand over, return. Never suspends, never throws.

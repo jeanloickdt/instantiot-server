@@ -1,0 +1,16 @@
+{
+  "trigger": {
+    "kind": "deviceConnected",
+    "device": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-panneau"
+    }
+  },
+  "actions": [
+    {
+      "kind": "email",
+      "subject": "Panneau en ligne",
+      "body": "La carte vient de se connecter"
+    }
+  ]
+}

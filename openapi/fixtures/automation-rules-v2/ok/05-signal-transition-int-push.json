@@ -1,0 +1,25 @@
+{
+  "trigger": {
+    "kind": "signalTransition",
+    "signal": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-panneau",
+      "address": 3
+    },
+    "to": {
+      "type": "int",
+      "value": 1
+    },
+    "from": {
+      "type": "int",
+      "value": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Arret d'urgence",
+      "body": "Le bouton a ete presse"
+    }
+  ]
+}

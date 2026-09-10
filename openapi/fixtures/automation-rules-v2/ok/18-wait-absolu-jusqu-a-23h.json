@@ -1,0 +1,26 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-sonde",
+      "address": 0
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Chauffage allume",
+      "body": "Il s'eteindra a 23 h"
+    },
+    {
+      "kind": "wait",
+      "untilMinuteOfDay": 1380
+    },
+    {
+      "kind": "push",
+      "title": "Chauffage eteint",
+      "body": "Bonne nuit"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "expectedError": "type-mismatch",
+  "trigger": {
+    "kind": "signalTransition",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-panneau",
+      "address": 9
+    },
+    "to": {
+      "type": "string",
+      "value": "on"
+    },
+    "op": "gt"
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-serre",
+      "deviceId": "dev-capteur",
+      "address": 0
+    }
+  },
+  "condition": {
+    "kind": "not",
+    "child": {
+      "kind": "compare",
+      "left": {
+        "projectId": "proj-serre",
+        "deviceId": "dev-capteur",
+        "address": 0
+      },
+      "op": "gt",
+      "right": {
+        "kind": "literal",
+        "type": "float",
+        "value": 30.0
+      }
+    }
+  },
+  "actions": [
+    {
+      "kind": "setSignal",
+      "target": {
+        "projectId": "proj-chalet",
+        "deviceId": "dev-chauffage",
+        "address": 1
+      },
+      "value": {
+        "type": "int",
+        "value": 1
+      }
+    }
+  ]
+}

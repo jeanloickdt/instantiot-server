@@ -1,0 +1,16 @@
+{
+  "expectedError": "tz-in-leaf",
+  "trigger": {
+    "kind": "schedule",
+    "minuteOfDay": 420,
+    "days": [],
+    "tz": "America/Toronto"
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "x",
+      "body": "y"
+    }
+  ]
+}

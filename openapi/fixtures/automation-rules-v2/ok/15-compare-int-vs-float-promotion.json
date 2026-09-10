@@ -1,0 +1,31 @@
+{
+  "trigger": {
+    "kind": "signalChanged",
+    "signal": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-compteur",
+      "address": 2
+    }
+  },
+  "condition": {
+    "kind": "compare",
+    "left": {
+      "projectId": "proj-atelier",
+      "deviceId": "dev-compteur",
+      "address": 2
+    },
+    "op": "gte",
+    "right": {
+      "kind": "literal",
+      "type": "float",
+      "value": 1000.5
+    }
+  },
+  "actions": [
+    {
+      "kind": "push",
+      "title": "Compteur",
+      "body": "Seuil franchi"
+    }
+  ]
+}

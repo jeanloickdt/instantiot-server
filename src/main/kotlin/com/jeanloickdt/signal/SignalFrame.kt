@@ -148,6 +148,33 @@ object SignalFrame {
         }
     }
 
+    /**
+     * La derniere valeur STOCKEE, relue depuis `SignalTable.lastPayload`.
+     *
+     * `lastPayload` ne contient que la charge utile, pas une trame entiere :
+     * l'etiquette de type n'y est pas, c'est le type DECLARE du signal qui la
+     * donne — exactement ce que fait `SignalSetpoint.restoreOnConnect` pour
+     * reconstruire une trame de rappel.
+     *
+     * Ce decodeur vit ici et pas chez son appelant : le format du fil fait
+     * autorite dans ce fichier, et un second lecteur ailleurs finirait par
+     * diverger de celui-la sans que rien ne le signale.
+     *
+     * `null` quand les octets ne portent pas ce que le type annonce — une
+     * carte reflashee, une declaration changee. Une valeur absente, jamais une
+     * valeur inventee.
+     */
+    fun storedNumeric(declaredType: String, payload: ByteArray): Double? = when (declaredType) {
+        com.jeanloickdt.signal.data.SignalTable.TYPE_INT   -> readInt32(payload)?.toDouble()
+        com.jeanloickdt.signal.data.SignalTable.TYPE_FLOAT -> readFloat(payload)?.toDouble()
+        else -> null
+    }
+
+    /** Le pendant textuel — `null` des que le type declare n'est pas du texte. */
+    fun storedText(declaredType: String, payload: ByteArray): String? =
+        if (declaredType == com.jeanloickdt.signal.data.SignalTable.TYPE_STRING)
+            String(payload, Charsets.UTF_8) else null
+
     private fun readInt32(b: ByteArray): Int? {
         if (b.size < 4) return null
         return (b[0].toInt() and 0xFF) or
