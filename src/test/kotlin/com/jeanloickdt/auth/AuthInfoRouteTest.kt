@@ -53,41 +53,50 @@ class AuthInfoRouteTest {
         assertTrue("instantiot-server" in corps, "l'emetteur des jetons doit etre nomme — recu : $corps")
     }
 
+    /**
+     * DEUX QUESTIONS QUI SE RESSEMBLAIENT, ET QUE ntfy A SEPAREES.
+     *
+     * Ce serveur sait desormais livrer une action PUSH : ntfy s'en charge.
+     * Mais `push` dans cette reponse ne demande pas ca. L'app n'appelle
+     * `/api/auth/info` que pour decider d'envoyer son jeton FCM a
+     * `/api/push-tokens` — une route que ce serveur n'a pas et ne veut pas,
+     * puisque ntfy ne passe pas par l'app mais par l'app ntfy.
+     *
+     * Repondre `true` ferait envoyer un jeton inutilisable a chaque
+     * connexion, et demanderait la permission d'afficher des notifications
+     * qui n'arriveraient jamais par ce chemin.
+     */
     @Test
-    fun `elle dit NON au push, parce qu'aucun expediteur ne le porte`() = testApplication {
+    fun `elle dit NON au jeton d'appareil, meme depuis que ntfy livre le push`() = testApplication {
         monterLeVraiModule(baseJetable("authinfo-push"))
 
         val corps = client.get("/api/auth/info").bodyAsText()
         assertTrue(
             "\"push\":false" in corps,
-            "le jumeau n'a pas les cles du projet Firebase — recu : $corps"
+            "ce serveur ne prend pas de jeton FCM — recu : $corps"
         )
     }
 
     /**
-     * L'invariant qui rend l'annonce digne de confiance.
+     * L'annonce ne parle pas de ce qu'on croit.
      *
-     * `push` ne se lit pas dans une configuration : il vaut ce que la carte
-     * d'expediteurs contient. Le meme fait decide de la LIVRAISON, des regles
-     * CREABLES, et de cette ANNONCE.
-     *
-     * Le jour ou quelqu'un enregistrera un expediteur PUSH, les trois
-     * basculeront ensemble. Le jour ou quelqu'un ecrirait `push = true` en
-     * dur ici, cette epreuve tomberait — et c'est son travail.
+     * `push` a longtemps voulu dire « je sais notifier », parce que FCM etait
+     * le seul canal et qu'il passe par l'app. Avec ntfy, le serveur sait
+     * notifier SANS rien vouloir de l'app : les deux faits se separent.
      */
     @Test
-    fun `l'annonce et les regles creables disent la meme chose`() = testApplication {
+    fun `l'annonce parle du jeton, pas de la capacite a notifier`() = testApplication {
         monterLeVraiModule(baseJetable("authinfo-coherence"))
 
         val annonce = client.get("/api/auth/info").bodyAsText()
-        val annoncePush = "\"push\":true" in annonce
 
-        // La creation d'une regle PUSH est refusee par `allowedActionTypes`,
-        // qui est LUI AUSSI `actionSenders.keys`. Les deux doivent donc
-        // toujours s'accorder — c'est tout l'interet de la source unique.
-        assertEquals(
-            annoncePush, false,
-            "tant qu'aucun expediteur PUSH n'est enregistre, l'annonce et la porte disent NON ensemble"
-        )
+        // `push` ici ne parle QUE du jeton d'appareil. La livraison d'une
+        // action PUSH, elle, est ouverte par ntfy — et c'est
+        // `allowedActionTypes = actionSenders.keys` qui en decide.
+        //
+        // Les deux ne disent donc plus la meme chose, et c'est voulu : ce sont
+        // deux questions differentes que FCM confondait tant qu'il etait le
+        // seul canal.
+        assertTrue("\"push\":false" in annonce, "aucun jeton d'appareil ici")
     }
 }

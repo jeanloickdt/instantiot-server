@@ -660,9 +660,21 @@ class AutomationEngine(
             is TypedValue.Int -> value.value.toString()
             // Un entier reste un entier a l'affichage : « 31.0 °C » se lit
             // moins bien que « 31 », et le fil rend tout numerique en double.
+            // Rendu comme un FLOAT32, parce que c'est ce que le fil porte.
+            //
+            // Une trame numerique transporte quatre octets. Elargis en
+            // `Double`, ils portent l'ecart de la representation :
+            // `37.4f` devient `37.400001525878906`, et c'est ce que
+            // l'utilisateur lisait dans sa notification — vu en production le
+            // 9 septembre 2026, « Current value: 37.379913330078125 ».
+            //
+            // `toFloat().toString()` rend la plus COURTE chaine qui revient
+            // exactement au meme float32, donc « 37.4 ». Ce n'est pas un
+            // arrondi d'affichage : c'est la valeur telle que la carte l'a
+            // envoyee, sans les chiffres que l'elargissement a inventes.
             is TypedValue.Float ->
                 if (value.value % 1.0 == 0.0) value.value.toLong().toString()
-                else value.value.toString()
+                else value.value.toFloat().toString()
             is TypedValue.Text -> value.value
         }
         return text.replace(TEMPLATE_VALUE, rendered)
