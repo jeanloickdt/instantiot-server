@@ -192,6 +192,34 @@ object ServerConfig {
     var emailFromName: String = "InstantIoT"
     var emailAlertTo: String = ""
 
+    // ── ntfy : la notification de l'auto-heberge ─────────────────────────
+    //
+    // FCM lie la notification au binaire de l'app, via le projet Firebase
+    // avec lequel elle a ete compilee — celui de l'editeur. Un serveur chez
+    // soi ne peut donc pas y atteindre cette app. ntfy n'a pas ce lien :
+    // c'est du HTTP, l'utilisateur installe l'app ntfy, et ca marche aussi
+    // avec une instance qu'on heberge soi-meme.
+    //
+    // Comme pour l'e-mail, l'environnement gagne sur le fichier : un
+    // exploitant qui monte son serveur par compose ne veut pas qu'un clic
+    // dans le panneau soit ecrase au redemarrage suivant.
+    val ntfyManagedByEnv: Boolean get() = !System.getenv("NTFY_TOPIC").isNullOrBlank()
+
+    var ntfyServer: String = "https://ntfy.sh"
+        get() = System.getenv("NTFY_SERVER")?.takeIf { it.isNotBlank() } ?: field
+
+    /**
+     * Le SUJET, et c'est lui le secret sur `ntfy.sh` public : quiconque le
+     * connait recoit les notifications, et peut en publier. Long et
+     * imprevisible, donc — jamais `serre`.
+     */
+    var ntfyTopic: String = ""
+        get() = System.getenv("NTFY_TOPIC")?.takeIf { it.isNotBlank() } ?: field
+
+    /** Pour une instance privee. Vide sur ntfy.sh public. */
+    var ntfyToken: String = ""
+        get() = System.getenv("NTFY_TOKEN")?.takeIf { it.isNotBlank() } ?: field
+
     var historyRawEnabled: Boolean = true
         private set
 
@@ -390,6 +418,9 @@ object ServerConfig {
             emailFrom        = props.getProperty("email.from", "")
             emailFromName    = props.getProperty("email.from.name", "InstantIoT")
             emailAlertTo     = props.getProperty("email.alert.to", "")
+            ntfyServer       = props.getProperty("ntfy.server", "https://ntfy.sh")
+            ntfyTopic        = props.getProperty("ntfy.topic", "")
+            ntfyToken        = props.getProperty("ntfy.token", "")
             historyRawEnabled = props.getProperty("history.raw.enabled", "true")
                 .toBooleanStrictOrNull() ?: true
             historyFlushPeriodMs = props.getProperty("history.flush.period.ms", "5000")
@@ -453,6 +484,14 @@ object ServerConfig {
         writeProperties()
     }
 
+    /** Enregistre ntfy. Tout `null` est ignore — mise a jour partielle. */
+    fun saveNtfyConfig(server: String?, topic: String?, token: String?) {
+        if (server != null) ntfyServer = server.ifBlank { "https://ntfy.sh" }
+        if (topic != null)  ntfyTopic = topic
+        if (token != null)  ntfyToken = token
+        writeProperties()
+    }
+
     fun saveHistoryConfig(
         rawEnabled: Boolean? = null,
         retentionRawDays: Int? = null,
@@ -475,6 +514,9 @@ object ServerConfig {
         val props = Properties()
         props.setProperty("http.port", httpPort.toString())
         props.setProperty("tcp.port", tcpPort.toString())
+        props.setProperty("ntfy.server", if (ntfyManagedByEnv) "https://ntfy.sh" else ntfyServer)
+        props.setProperty("ntfy.topic", if (ntfyManagedByEnv) "" else ntfyTopic)
+        props.setProperty("ntfy.token", if (ntfyManagedByEnv) "" else ntfyToken)
         props.setProperty("email.brevo.api_key", if (emailManagedByEnv) "" else emailBrevoApiKey)
         props.setProperty("email.from", emailFrom)
         props.setProperty("email.from.name", emailFromName)

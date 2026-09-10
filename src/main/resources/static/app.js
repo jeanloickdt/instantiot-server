@@ -75,6 +75,17 @@ document.addEventListener('alpine:init', () => {
       msg: '', msgType: ''
     },
 
+    ntfyForm: {
+      server: 'https://ntfy.sh',
+      topic: '',
+      token: '',             // jamais pre-rempli : le serveur ne rend que sa presence
+      hasToken: false,
+      configured: false,
+      managedByEnv: false,   // NTFY_TOPIC dans l'environnement
+      busy: false,
+      msg: '', msgType: ''
+    },
+
     // ── Data ───────────────────────────────────────────────
     stats: {
       users: '-', projects: '-', devicesTotal: '-',
@@ -494,6 +505,71 @@ document.addEventListener('alpine:init', () => {
       }
     },
 
+    async loadNtfyConfig() {
+      const res = await this.api('/api/admin/ntfy-config');
+      if (!res || !res.ok) return;
+      const data = await res.json();
+      this.ntfyForm.server       = data.server || 'https://ntfy.sh';
+      this.ntfyForm.topic        = data.topic || '';
+      this.ntfyForm.token        = '';        // le secret ne revient jamais
+      this.ntfyForm.hasToken     = !!data.hasToken;
+      this.ntfyForm.configured   = data.configured;
+      this.ntfyForm.managedByEnv = data.managedByEnv;
+    },
+
+    async saveNtfyConfig() {
+      this.ntfyForm.msg = '';
+      this.ntfyForm.msgType = '';
+      const body = {
+        server: this.ntfyForm.server.trim(),
+        topic:  this.ntfyForm.topic.trim()
+      };
+      // Vide veut dire « garde celui qui est deja la », jamais « efface-le ».
+      // Sans cette garde, ouvrir la page et enregistrer effacerait le jeton.
+      if (this.ntfyForm.token) body.token = this.ntfyForm.token;
+      const res = await this.api('/api/admin/ntfy-config', {
+        method: 'PATCH',
+        body: JSON.stringify(body)
+      });
+      if (res && res.ok) {
+        this.ntfyForm.msg = this.t('ntfy.saved');
+        this.ntfyForm.msgType = 'success';
+        this.ntfyForm.token = '';
+        await this.loadNtfyConfig();
+      } else if (res) {
+        const data = await res.json().catch(() => null);
+        // La raison du serveur EST l'information utile : une barre dans le
+        // sujet, une adresse sans schema, une configuration par
+        // l'environnement. Ne jamais l'avaler derriere un message generique.
+        this.ntfyForm.msg = data?.error || this.t('ntfy.saveFail');
+        this.ntfyForm.msgType = 'error';
+      }
+    },
+
+    /**
+     * Le bouton d'essai. Une notification qui n'arrive pas ne laisse aucune
+     * trace chez celui qui l'attendait — il ne s'en apercoit qu'a l'incident
+     * qu'elle devait annoncer.
+     */
+    async sendTestNtfy() {
+      if (this.ntfyForm.busy) return;
+      this.ntfyForm.busy = true;
+      this.ntfyForm.msg = this.t('ntfy.testing');
+      this.ntfyForm.msgType = 'success';
+      try {
+        const res = await this.api('/api/admin/ntfy-config/test', { method: 'POST' });
+        const data = res ? await res.json().catch(() => null) : null;
+        if (res && res.ok) {
+          this.ntfyForm.msg = data?.message || this.t('ntfy.testOk');
+        } else if (res) {
+          this.ntfyForm.msg = data?.error || this.t('ntfy.testFail');
+          this.ntfyForm.msgType = 'error';
+        }
+      } finally {
+        this.ntfyForm.busy = false;
+      }
+    },
+
     async loadBackupConfig() {
       const res = await this.api('/api/admin/backup/config');
       if (!res || !res.ok) return;
@@ -650,6 +726,9 @@ document.addEventListener('alpine:init', () => {
           break;
         case 'email':
           this.loadEmailConfig();
+          break;
+        case 'ntfy':
+          this.loadNtfyConfig();
           break;
         case 'backups':
           this.loadBackupConfig();

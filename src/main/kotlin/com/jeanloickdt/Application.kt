@@ -22,6 +22,7 @@ package com.jeanloickdt
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.automation.automationHealthRoutes
 import com.jeanloickdt.automation.emailConfigRoutes
+import com.jeanloickdt.automation.ntfyConfigRoutes
 import com.jeanloickdt.signal.signalRoutes
 import com.jeanloickdt.automation.notificationsRoutes
 import com.jeanloickdt.automation.ruleRoutes
@@ -839,11 +840,38 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         signals = signalRepository
     )
     /**
+     * La notification de l'auto-heberge, par ntfy et non par FCM.
+     *
+     * Une notification FCM n'atteint l'app que si elle est envoyee par un
+     * compte de service du projet Firebase avec lequel l'app a ete compilee —
+     * celui de l'editeur. Un serveur chez soi n'a donc que de mauvaises
+     * portes : sa propre cle n'atteint pas cet APK, celle de l'editeur ne peut
+     * pas voyager dans un depot public, et relayer par le nuage contredirait
+     * la raison de s'auto-heberger.
+     *
+     * ntfy n'a aucun de ces problemes. Voir [NtfyActionSender].
+     */
+    val ntfySender = com.jeanloickdt.automation.NtfyActionSender(
+        config = {
+            com.jeanloickdt.automation.NtfyConfig(
+                server = com.jeanloickdt.common.ServerConfig.ntfyServer,
+                topic  = com.jeanloickdt.common.ServerConfig.ntfyTopic,
+                token  = com.jeanloickdt.common.ServerConfig.ntfyToken
+            )
+        }
+    )
+
+    /**
      * Les canaux que ce serveur porte VRAIMENT.
      *
-     * `PUSH` n'y est pas : la livraison passe par FCM, qui demande un projet
-     * Firebase et une cle de compte de service. Aucune des deux ne peut voyager
-     * dans un depot public, et un serveur chez soi n'en a pas.
+     * `PUSH` y est desormais, servi par ntfy. L'ACTION ne change pas : une
+     * regle dit « previens-moi », et COMMENT est une capacite du serveur, pas
+     * un detail de la regle. Le nuage la sert par FCM, le jumeau par ntfy, et
+     * le langage des regles reste le meme des deux cotes — c'est ce qui garde
+     * les trente-quatre fixtures partagees valables ici.
+     *
+     * Comme l'e-mail, il est enregistre MEME NON CONFIGURE : la regle reste
+     * creable, et l'echec explique quoi faire au lieu de disparaitre.
      *
      * Cette carte est la SOURCE UNIQUE. Ce que le livreur sait livrer et ce
      * que les routes acceptent de creer sortent d'elle, et pas de deux listes
@@ -851,7 +879,8 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
      */
     val actionSenders = mapOf(
         com.jeanloickdt.automation.DeliveryWorker.TYPE_EMAIL to emailSender,
-        com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender
+        com.jeanloickdt.automation.DeliveryWorker.TYPE_COMMAND to commandSender,
+        com.jeanloickdt.automation.DeliveryWorker.TYPE_PUSH to ntfySender
     )
 
     val deliveryWorker = com.jeanloickdt.automation.DeliveryWorker(pendingActions, senders = actionSenders)
@@ -952,15 +981,22 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         authRoutes(
             userRepository, projectRepository, deviceRepository, connections,
             tokenService, accountPurge,
-            // LE MEME REGISTRE QUE PARTOUT AILLEURS.
+            // DEUX QUESTIONS QUI SE RESSEMBLAIENT, ET QUE ntfy SEPARE.
             //
-            // Ce qui decide de la livraison, ce qui decide des regles
-            // creables, et ce qui est ANNONCE a l'app sortent tous de la
-            // carte d'expediteurs. Une variable d'environnement lue trois
-            // fois pourrait se contredire ; une carte lue trois fois, non.
-            pushAvailable = {
-                actionSenders.containsKey(com.jeanloickdt.automation.DeliveryWorker.TYPE_PUSH)
-            }
+            // « Sais-tu livrer une action PUSH ? » — oui desormais, et c'est
+            // la carte d'expediteurs qui le dit, pour la livraison comme pour
+            // les regles creables.
+            //
+            // « Veux-tu mon jeton d'appareil ? » — non, et c'est CETTE
+            // question-la que l'app pose ici. Elle n'appelle
+            // `/api/auth/info` que pour decider d'envoyer son jeton FCM a
+            // `/api/push-tokens`. Ce serveur n'a pas cette route et n'en veut
+            // pas : ntfy ne passe pas par l'app, il passe par l'app ntfy.
+            //
+            // Repondre `true` ferait envoyer un jeton inutilisable a chaque
+            // connexion, et demanderait la permission d'afficher des
+            // notifications qui n'arriveraient jamais par ce chemin.
+            pushAvailable = { false }
         )
         projectRoutes(
             projectRepository, deviceRepository,
@@ -969,12 +1005,14 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         )
         deviceRoutes(deviceRepository, projectRepository, connections, controlEvents)
         emailConfigRoutes(userRepository, emailSender)
+        ntfyConfigRoutes(userRepository, ntfySender)
         // No policies: a self-hosted node's limit is its own disk, so the
         // default gate — which always allows — is the honest one. The cloud
         // edition passes a SignalPolicies with its quota there.
         signalRoutes(
             signals = signalRepository,
             devices = deviceRepository,
+            contexts = com.jeanloickdt.signal.data.ExposedSignalContextReader(),
             sendToDevice = { deviceId, frame ->
                 connections.deviceOutboxes[deviceId]?.send(frame, isStreaming = false) ?: false
             },

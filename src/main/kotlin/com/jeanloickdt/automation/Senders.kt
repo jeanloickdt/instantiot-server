@@ -131,6 +131,113 @@ class EmailActionSender(
 }
 
 /**
+ * Ce dont ntfy a besoin — relu a CHAQUE envoi, comme la configuration
+ * e-mail : un sujet colle dans le panneau marche a la livraison suivante,
+ * sans redemarrage.
+ */
+data class NtfyConfig(
+    /** L'instance. `https://ntfy.sh` par defaut, ou celle qu'on heberge. */
+    val server: String,
+    /** Le SUJET. C'est lui le secret sur ntfy.sh — voir [NtfyActionSender]. */
+    val topic: String,
+    /** Jeton d'acces, pour une instance privee. Vide sur ntfy.sh public. */
+    val token: String
+) {
+    val configured: Boolean get() = server.isNotBlank() && topic.isNotBlank()
+
+    /** L'adresse complete, sans double barre si l'instance en porte une. */
+    val url: String get() = server.trimEnd('/') + "/" + topic.trim('/')
+}
+
+/**
+ * Une notification, par ntfy.
+ *
+ * ## Pourquoi ntfy et pas FCM ici
+ *
+ * FCM lie la notification au BINAIRE de l'app : une notification n'atteint
+ * cet APK que si elle est envoyee par un compte de service du projet Firebase
+ * avec lequel il a ete compile. Ce projet est celui de l'editeur.
+ *
+ * Un serveur auto-heberge n'a donc que de mauvaises portes : livrer sa propre
+ * cle Firebase ne marcherait pas (elle n'atteint pas cet APK), livrer celle
+ * de l'editeur dans un depot public serait une fuite, et relayer par le nuage
+ * contredirait la raison de s'auto-heberger.
+ *
+ * ntfy n'a aucun de ces problemes : c'est du HTTP, sans compte, et
+ * l'utilisateur installe l'app ntfy. C'est la convention du monde
+ * auto-heberge, et elle marche aussi avec une instance qu'on heberge soi-meme.
+ *
+ * ## Le sujet EST le secret
+ *
+ * Sur `ntfy.sh` public, quiconque connait le nom du sujet recoit ses
+ * notifications — et peut en publier. C'est le modele de ntfy, pas un defaut,
+ * mais il se dit : un sujet doit etre long et imprevisible, pas `serre`. Le
+ * panneau le rappelle, et une instance privee avec jeton existe pour qui veut
+ * mieux.
+ *
+ * ## Ce qui se retente et ce qui meurt
+ *
+ * Meme regle que l'e-mail. Un 4xx est une configuration fausse : le sujet
+ * n'existe pas, le jeton est refuse. Reessayer ne changerait rien, et la
+ * ligne mourrait quand meme apres avoir occupe le livreur. Un 5xx ou une
+ * panne reseau, c'est ntfy injoignable — l'alerte, elle, reste envoyable.
+ */
+class NtfyActionSender(
+    private val config: () -> NtfyConfig,
+    /** (url, jeton, titre, corps) → statut HTTP. Injectable : les tests ne sortent pas. */
+    private val transport: (String, String, String, String) -> Int = ::ntfyHttp
+) : ActionSender {
+
+    override suspend fun send(action: PendingAction): SendResult {
+        val cfg = config()
+        if (!cfg.configured) {
+            return SendResult.Fatal(
+                "ntfy is not configured — set the server and topic in the admin panel"
+            )
+        }
+
+        val params = runCatching { Json.parseToJsonElement(action.payload).jsonObject }
+            .getOrElse { return SendResult.Fatal("unparseable payload") }
+        val titre = params["title"]?.jsonPrimitive?.content
+            ?: params["subject"]?.jsonPrimitive?.content
+            ?: "InstantIoT"
+        val corps = params["body"]?.jsonPrimitive?.content ?: ""
+
+        val status = try {
+            transport(cfg.url, cfg.token, titre, corps)
+        } catch (e: Exception) {
+            return SendResult.Retry(e.message ?: "network error")
+        }
+        return when (status) {
+            in 200..299 -> SendResult.Ok
+            401, 403    -> SendResult.Fatal("ntfy refused the token ($status) — check it in the panel")
+            in 400..499 -> SendResult.Fatal("ntfy rejected the notification ($status) — check the topic")
+            else        -> SendResult.Retry("ntfy answered $status")
+        }
+    }
+
+    companion object {
+        private val http = HttpClient.newHttpClient()
+
+        /**
+         * Le titre voyage en EN-TETE, pas dans le corps.
+         *
+         * C'est le protocole de ntfy : le corps de la requete EST le message,
+         * et `Title` l'accompagne. Poster un JSON mettrait le JSON lui-meme
+         * dans la notification.
+         */
+        fun ntfyHttp(url: String, token: String, title: String, body: String): Int {
+            val req = HttpRequest.newBuilder(URI(url))
+                .header("Title", title)
+                .apply { if (token.isNotBlank()) header("Authorization", "Bearer $token") }
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build()
+            return http.send(req, HttpResponse.BodyHandlers.discarding()).statusCode()
+        }
+    }
+}
+
+/**
  * COMMAND to the board, through the same outbox every app command rides.
  *
  * The narrow [sendToDevice] seam keeps this testable and keeps the sender

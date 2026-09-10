@@ -95,6 +95,7 @@ class SignalHistoryRouteTest {
             routing {
                 signalRoutes(
                     signals, deviceRepository,
+                    contexts = com.jeanloickdt.signal.data.ExposedSignalContextReader(),
                     clock = { NOW },
                     historyWindows = { _, _ -> windows },
                     readHistory = { _, _, _, _, resolution ->

@@ -85,7 +85,11 @@ class SignalRoutesTest {
             install(ContentNegotiation) { json(com.jeanloickdt.common.apiJson) }
             configureAuth(userRepository, com.jeanloickdt.auth.LocalTestAuth.service)
             routing {
-                signalRoutes(signals, deviceRepository, policies, sendToDevice = sendToDevice)
+                signalRoutes(
+                    signals, deviceRepository,
+                    contexts = com.jeanloickdt.signal.data.ExposedSignalContextReader(),
+                    policies = policies, sendToDevice = sendToDevice
+                )
             }
         }
     }
