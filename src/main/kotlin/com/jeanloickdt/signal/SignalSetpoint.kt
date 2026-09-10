@@ -171,6 +171,22 @@ object SignalSetpoint {
         else                    -> SignalFrame.TAG_FLOAT
     }
 
+    /**
+     * La trame qu'une CONSIGNE produit, pour qui doit en poser une.
+     *
+     * Publique parce qu'une regle en a besoin AUSSI. L'expediteur des
+     * commandes construisait la sienne a partir d'un champ `payloadB64` que
+     * personne n'ecrit : il decodait la chaine vide, obtenait une trame de
+     * zero octet, et abandonnait avec « empty command frame ». Deux moities
+     * qui ne parlaient pas le meme langage, chacune eprouvee sans l'autre.
+     *
+     * Un seul encodeur, donc, et c'est celui-ci : le type DECLARE du signal
+     * decide du tag, les bornes s'appliquent, et une regle ne peut pas
+     * inventer un encodage que l'app n'utiliserait pas.
+     */
+    fun frameFor(signal: SignalRow, raw: Double?, text: String?): ByteArray? =
+        encode(signal, raw, text)
+
     private fun encode(signal: SignalRow, raw: Double?, text: String?): ByteArray? {
         val addr = signal.address
         return when (signal.type) {

@@ -157,7 +157,16 @@ class CommandActionSender(
      * apprendre sur la carte d'un autre, meme si l'appelant se trompe.
      */
     private val ownsDevice: (ownerId: String, deviceId: String) -> Boolean,
-    private val sendToDevice: suspend (deviceId: String, frame: ByteArray) -> Boolean
+    private val sendToDevice: suspend (deviceId: String, frame: ByteArray) -> Boolean,
+    /**
+     * Le registre des signaux, pour encoder la trame.
+     *
+     * C'est le TYPE DECLARE du signal qui decide du tag sur le fil, pas celui
+     * que la regle a saisi. Les deux peuvent differer — on change un signal
+     * en `float` apres avoir ecrit une regle qui y pose un entier — et c'est
+     * la declaration qui fait foi, comme partout ailleurs.
+     */
+    private val signals: com.jeanloickdt.signal.domain.SignalRepository
 ) : ActionSender {
 
     override suspend fun send(action: PendingAction): SendResult {
@@ -165,10 +174,24 @@ class CommandActionSender(
             .getOrElse { return SendResult.Fatal("unparseable payload") }
         val deviceId = params["deviceId"]?.jsonPrimitive?.content
             ?: return SendResult.Fatal("COMMAND without deviceId")
-        val frame = runCatching {
-            Base64.getDecoder().decode(params["payloadB64"]?.jsonPrimitive?.content ?: "")
-        }.getOrElse { return SendResult.Fatal("payloadB64 is not base64") }
-        if (frame.isEmpty()) return SendResult.Fatal("empty command frame")
+
+        // ── La charge que le MOTEUR ecrit, et pas une autre ───────────────
+        //
+        // Ce code lisait `payloadB64`, un champ que personne n'ecrit :
+        // `AutomationEngine.commandPayload` produit
+        // `{deviceId, address, value, type}`. Il decodait donc la chaine vide,
+        // obtenait une trame de zero octet, et abandonnait la commande avec
+        // « empty command frame » — une regle entiere perdue, bruyamment
+        // journalisee et jamais livree.
+        //
+        // Les deux moities etaient eprouvees, chacune de son cote : le test de
+        // l'expediteur fabriquait un `payloadB64` a la main. La COUTURE entre
+        // elles ne l'etait pas, et c'est un demarrage reel qui l'a trouvee.
+        val address = params["address"]?.jsonPrimitive?.content?.toIntOrNull()
+            ?: return SendResult.Fatal("COMMAND without address")
+        val brut = params["value"]?.jsonPrimitive
+        val texte = brut?.let { if (it.isString) it.content else null }
+        val nombre = brut?.let { if (it.isString) null else it.content.toDoubleOrNull() }
 
         if (!ownsDevice(action.ownerId, deviceId)) {
             logger.error(
@@ -176,6 +199,13 @@ class CommandActionSender(
             )
             return SendResult.Fatal("cross-tenant command refused")
         }
+
+        // Le proprietaire d'abord, la lecture ensuite : on ne va pas chercher
+        // la declaration d'un signal dont on vient de refuser la carte.
+        val signal = signals.find(action.ownerId, deviceId, address)
+            ?: return SendResult.Fatal("no signal at I$address on this board")
+        val frame = com.jeanloickdt.signal.SignalSetpoint.frameFor(signal, nombre, texte)
+            ?: return SendResult.Fatal("value does not fit type '${signal.type}'")
 
         return if (sendToDevice(deviceId, frame)) SendResult.Ok
         else SendResult.Fatal("device offline — command lost (at-most-once)")
