@@ -35,6 +35,7 @@ import io.ktor.server.plugins.ratelimit.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
+import kotlinx.serialization.Serializable
 import org.mindrot.jbcrypt.BCrypt
 import org.slf4j.LoggerFactory
 
@@ -741,8 +742,15 @@ fun Route.authRoutes(
     deviceRepository: DeviceRepository,
     connections: ConnectionRegistry,
     tokenService: TokenService,
-    purge: AccountPurge
+    purge: AccountPurge,
+    /** Ce serveur sait-il notifier — voir [AuthInfoResponse.push]. */
+    pushAvailable: () -> Boolean = { false }
 ) {
+    // Decouverte PUBLIQUE : l'app demande quel mode d'auth utiliser, et si ce
+    // serveur sait notifier. Hors `authenticate` a dessein — elle sert avant
+    // qu'un jeton existe.
+    authInfoRoute(pushAvailable)
+
     rateLimit(RateLimitName("auth")) {
         loginRoute(userRepository, tokenService)
         registerRoute(userRepository, tokenService)
@@ -760,3 +768,67 @@ fun Route.authRoutes(
         adminRestartRoute(userRepository)
     }
 }
+
+/**
+ * Ce que ce serveur sait faire, demande plutot que devine.
+ *
+ * ## Pourquoi une route, et pas une constante dans l'app
+ *
+ * L'app est MULTI-SERVEURS : un meme telephone peut etre connecte au nuage
+ * ET a un serveur auto-heberge. Les deux ne portent pas les memes canaux, et
+ * l'app n'a aucun moyen de le savoir en regardant une adresse.
+ *
+ * Sans cette reponse, elle enverrait son jeton de notification aux deux. Le
+ * jumeau accumulerait des jetons qu'il ne peut pas utiliser, faute des cles
+ * du projet Firebase — inoffensif, mais celui qui regarderait cette table un
+ * jour se demanderait pourquoi elle se remplit de lignes mortes. Pire : il
+ * demanderait la permission d'afficher des notifications qui ne viendront
+ * jamais.
+ *
+ * Elle repond `false` aujourd'hui, et c'est deja utile : l'app n'enregistre
+ * rien et ne demande rien.
+ *
+ * ## `auth = "local"`
+ *
+ * Le nuage repond `"iia"` et donne l'adresse ou s'authentifier. Ce serveur
+ * frappe ses propres jetons : `/api/login` suffit, et il n'y a aucune tierce
+ * partie a nommer. C'est la difference que l'app doit connaitre pour
+ * dessiner le bon ecran de connexion.
+ */
+fun Route.authInfoRoute(
+    /**
+     * Vrai quand un expediteur PUSH est REELLEMENT enregistre.
+     *
+     * Une couture, et non une lecture de configuration : c'est le MEME fait
+     * qui decide de la livraison, de la creation des regles PUSH, et de cette
+     * annonce. Trois lectures d'un meme registre ne peuvent pas se
+     * contredire ; trois lectures d'une variable d'environnement, si.
+     */
+    pushAvailable: () -> Boolean = { false }
+) {
+    get("/api/auth/info") {
+        call.respond(
+            AuthInfoResponse(
+                auth = "local",
+                issuer = JWT_ISSUER,
+                push = pushAvailable()
+            )
+        )
+    }
+}
+
+/**
+ * La reponse de decouverte. Meme forme que celle du nuage, a l'octet : c'est
+ * le MEME `AuthInfoDto` que l'app deserialise, quel que soit le serveur.
+ *
+ * `iiaUrl` n'est jamais rempli ici — il n'y a pas de tierce partie — mais le
+ * champ reste dans la forme, parce que c'est l'app qui decide quoi en faire
+ * et qu'un champ absent et un champ nul ne se deserialisent pas pareil.
+ */
+@Serializable
+data class AuthInfoResponse(
+    val auth: String,
+    val iiaUrl: String? = null,
+    val issuer: String? = null,
+    val push: Boolean = false
+)

@@ -949,7 +949,19 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
             signalRepository, signalHistoryRepository,
             connections, controlEvents
         )
-        authRoutes(userRepository, projectRepository, deviceRepository, connections, tokenService, accountPurge)
+        authRoutes(
+            userRepository, projectRepository, deviceRepository, connections,
+            tokenService, accountPurge,
+            // LE MEME REGISTRE QUE PARTOUT AILLEURS.
+            //
+            // Ce qui decide de la livraison, ce qui decide des regles
+            // creables, et ce qui est ANNONCE a l'app sortent tous de la
+            // carte d'expediteurs. Une variable d'environnement lue trois
+            // fois pourrait se contredire ; une carte lue trois fois, non.
+            pushAvailable = {
+                actionSenders.containsKey(com.jeanloickdt.automation.DeliveryWorker.TYPE_PUSH)
+            }
+        )
         projectRoutes(
             projectRepository, deviceRepository,
             signalRepository, signalHistoryRepository,
