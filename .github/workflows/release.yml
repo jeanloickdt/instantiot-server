@@ -70,7 +70,7 @@ jobs:
         shell: bash
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer-${{ matrix.label }}
           path: build/jpackage/${{ matrix.artifact }}
@@ -115,7 +115,7 @@ jobs:
         run: sudo chown -R "$USER" build
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: installer-linux-deb-arm64
           path: build/jpackage/*.deb
