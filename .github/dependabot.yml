@@ -1,0 +1,25 @@
+# Les dependances montent toutes seules, en proposition, jamais en silence.
+#
+# L'audit du nuage du 9 septembre a trouve des bibliotheques avec des CVE
+# connues (logback 1.4.14 en fin de vie, ici aussi) et aucun mecanisme pour
+# le savoir : personne ne regarde un catalogue de versions. Dependabot ouvre
+# une proposition par mise a jour, chaque lundi, et la suite la juge ; les
+# alertes de securite du depot arrivent des qu'une CVE tombe.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      ktor:
+        patterns: ["io.ktor:*"]
+      kotlin:
+        patterns: ["org.jetbrains.kotlin:*", "org.jetbrains.kotlinx:*"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

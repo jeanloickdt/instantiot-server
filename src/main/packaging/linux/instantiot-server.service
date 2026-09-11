@@ -35,8 +35,14 @@ Restart=on-failure
 RestartSec=5s
 
 # Resource limits — generous but bounded to avoid sinking a Pi.
-# 512 MB RAM = plenty (typical: ~150-200 MB)
+# 512 MB RAM = plenty (typical: ~150-200 MB, heap capped at 256 MB by jpackage)
 MemoryMax=512M
+
+# One file descriptor per connected board, plus the app sessions and the
+# database. The systemd default (1024) would stop the relay at roughly a
+# thousand boards with "too many open files", far below the connection cap
+# the relay enforces itself (RELAY_MAX_DEVICES, 10 000 by default).
+LimitNOFILE=65536
 
 # Logging to journald — accessible via `journalctl -u instantiot-server`
 StandardOutput=journal
@@ -48,6 +54,16 @@ PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
 ReadWritePaths=/var/lib/instantiot
+# The same idea as the cloud's containers running with minimal rights: no
+# kernel tunables, no device nodes, no new address families beyond what a
+# TCP/UDP relay with mDNS needs, no setuid anywhere.
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target
