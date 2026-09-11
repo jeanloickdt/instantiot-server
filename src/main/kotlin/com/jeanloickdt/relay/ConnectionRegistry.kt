@@ -81,25 +81,48 @@ class ConnectionRegistry {
     // deviceId → serialization outbox for TCP writes (see DeviceOutbox)
     val deviceOutboxes = ConcurrentHashMap<DeviceId, DeviceOutbox>()
 
-    // register an app session — supports multiple connections per user
+    /**
+     * Les sessions app par projet regarde.
+     *
+     * `getAppSessionsForProject` parcourait TOUTES les sessions du noeud a
+     * chaque trame de carte acceptee et a chaque evenement de controle : N
+     * sessions faisaient de chaque trame un balayage en O(N). Un compte
+     * pouvait en ouvrir sans limite (l'identifiant d'installation est choisi
+     * par le client), et des milliers de sessions parquees ralentissaient
+     * toutes les cartes. L'index est tenu a l'enregistrement, au changement
+     * de projet et au depart.
+     */
+    private val byProject = ConcurrentHashMap<String, CopyOnWriteArrayList<AppSession>>()
+
+    /** La porte des sessions app, le pendant de celle des cartes. */
+    val appGate = ConnectionGate(MAX_APP_SESSIONS)
+
+    /**
+     * Register an app session. Several per user, but not without limit:
+     * `null` when this account already holds [MAX_SESSIONS_PER_USER].
+     */
     fun registerApp(
         userId: UserId,
         session: WebSocketSession,
         connectionInstanceId: String
-    ): AppSession {
+    ): AppSession? {
+        val mine = appSessions.computeIfAbsent(userId) { CopyOnWriteArrayList() }
+        if (mine.size >= MAX_SESSIONS_PER_USER) return null
         val appSession = AppSession(
             userId = userId,
             session = session,
             outbox = AppOutbox(userId, session),
             connectionInstanceId = connectionInstanceId
         )
-        appSessions.computeIfAbsent(userId) { CopyOnWriteArrayList() }.add(appSession)
+        mine.add(appSession)
         return appSession
     }
 
-    // change the active project of a specific session
+    // change the active project of a specific session, and keep the index with it
     fun setActiveProject(appSession: AppSession, projectId: String) {
+        appSession.activeProjectId?.let { previous -> byProject[previous]?.remove(appSession) }
         appSession.activeProjectId = projectId
+        byProject.computeIfAbsent(projectId) { CopyOnWriteArrayList() }.add(appSession)
     }
 
     // remove a specific app session — by WebSocketSession reference
@@ -108,7 +131,14 @@ class ConnectionRegistry {
         // Close the outbox before dropping the session: its consumers end with
         // the session scope anyway, but this releases the channels and logs the
         // drop count for that session.
-        sessions.firstOrNull { it.session === session }?.outbox?.close()
+        val gone = sessions.firstOrNull { it.session === session }
+        gone?.outbox?.close()
+        gone?.activeProjectId?.let { projectId ->
+            byProject[projectId]?.let { list ->
+                list.remove(gone)
+                if (list.isEmpty()) byProject.remove(projectId, list)
+            }
+        }
         sessions.removeIf { it.session === session }
         if (sessions.isEmpty()) {
             appSessions.remove(userId)
@@ -125,12 +155,9 @@ class ConnectionRegistry {
             sessions.firstOrNull { it.session === session }
         }
 
-    // all apps watching a given project — iterates over every session
-    fun getAppSessionsForProject(projectId: String): List<AppSession> {
-        return appSessions.values.flatMap { sessions ->
-            sessions.filter { it.activeProjectId == projectId }
-        }
-    }
+    /** Les apps qui regardent ce projet : par l'index, plus par balayage. */
+    fun getAppSessionsForProject(projectId: String): List<AppSession> =
+        byProject[projectId]?.toList().orEmpty()
 
     // register a device session + create its outbox.
     // The provided `scope` governs the outbox's consumer coroutine —
@@ -192,5 +219,12 @@ class ConnectionRegistry {
     // find a device's session by its ID
     fun getDeviceSession(deviceId: DeviceId): DeviceSession? {
         return deviceSessions[deviceId]
+    }
+
+    companion object {
+        /** Huit sessions par compte : un telephone, une tablette, deux navigateurs, et de la marge. Pas un script. */
+        const val MAX_SESSIONS_PER_USER = 8
+        /** Toutes sessions app confondues sur ce noeud ; chacune tient trois coroutines et ses tampons. */
+        const val MAX_APP_SESSIONS = 5_000
     }
 }

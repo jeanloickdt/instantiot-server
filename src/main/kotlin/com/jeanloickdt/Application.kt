@@ -424,7 +424,18 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         watchedSignals = { ref -> watchedSignals(ref) },
         usage       = messageUsage,
         signals     = signalRepository,
-        tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort
+        tcpPort     = com.jeanloickdt.common.ServerConfig.runningTcpPort,
+        // Les deux portes se reglent par l'environnement, comme sur le nuage :
+        // elles protegent LA MACHINE, et seul celui qui la fait tourner sait
+        // ce qu'elle tient. Le LAN est exempte de la seconde.
+        connectionGate = com.jeanloickdt.relay.ConnectionGate(
+            System.getenv("RELAY_MAX_DEVICES")?.toIntOrNull()?.takeIf { it > 0 }
+                ?: com.jeanloickdt.relay.ConnectionGate.DEFAULT_LIMIT
+        ),
+        handshakeGate = com.jeanloickdt.relay.HandshakeGate(
+            System.getenv("RELAY_MAX_HANDSHAKES_PER_IP")?.toIntOrNull()?.takeIf { it > 0 }
+                ?: com.jeanloickdt.relay.HandshakeGate.DEFAULT_PER_ADDRESS
+        )
     )
 
     // ============================================================

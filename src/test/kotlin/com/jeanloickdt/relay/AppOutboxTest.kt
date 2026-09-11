@@ -1,6 +1,7 @@
 package com.jeanloickdt.relay
 
 import io.ktor.websocket.Frame
+import io.ktor.websocket.readText
 import io.ktor.websocket.WebSocketExtension
 import io.ktor.websocket.WebSocketSession
 import kotlinx.coroutines.SupervisorJob
@@ -131,3 +132,68 @@ private class DrainingSession : WebSocketSession {
     }
 }
 
+
+/**
+ * Une session qui lit, et dont on peut relire ce qu'elle a recu.
+ */
+private class ReadableSession : WebSocketSession {
+    private val job = SupervisorJob()
+    override val coroutineContext: CoroutineContext = job
+    override val incoming: ReceiveChannel<Frame> = Channel()
+    val received = Channel<Frame>(Channel.UNLIMITED)
+    override val outgoing: SendChannel<Frame> = received
+    override val extensions: List<WebSocketExtension<*>> = emptyList()
+    override var masking: Boolean = false
+    override var maxFrameSize: Long = Long.MAX_VALUE
+    override suspend fun flush() = Unit
+
+    @Deprecated("Use cancel().", level = DeprecationLevel.ERROR)
+    override fun terminate() {
+        job.cancel()
+    }
+}
+
+/**
+ * Une deconnexion massive, mille cartes qui tombent ensemble, n'est plus une
+ * raison de fermer la session : la presence se coalesce par carte, et la
+ * derniere annonce de chaque carte finit par partir.
+ */
+class AppOutboxPresenceTest {
+    @Test
+    fun `a mass offline never evicts, even a stalled session`() = runBlocking {
+        val session = StalledSession()
+        val outbox = AppOutbox("u1", session)
+        repeat(2_000) { i ->
+            assertTrue(
+                outbox.trySendControl("""{"type":"device_offline","deviceId":"d$i"}""", coalesceKey = "presence:d$i"),
+                "la presence de la carte $i ne doit jamais expulser la session"
+            )
+        }
+        assertTrue(outbox.coalescedPresence > 0, "au-dela de la file, la presence attend dans sa case par carte")
+        outbox.close()
+        session.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        Unit
+    }
+
+    @Test
+    fun `the latest state per board is what finally reaches the app`() = runBlocking {
+        val session = ReadableSession()
+        val outbox = AppOutbox("u1", session)
+        // Une rafale bien au-dela de la file : tout le monde tombe, puis d7 revient.
+        repeat(500) { i -> outbox.trySendControl("""{"type":"device_offline","deviceId":"d$i"}""", coalesceKey = "presence:d$i") }
+        outbox.trySendControl("""{"type":"device_online","deviceId":"d7"}""", coalesceKey = "presence:d7")
+
+        val seen = mutableListOf<String>()
+        withTimeout(5_000) {
+            while (seen.count { it.contains("\"d7\"") } < 1 || outbox.coalescedPresence > 0 || seen.size < 500) {
+                val f = session.received.receive() as Frame.Text
+                seen += f.readText()
+            }
+        }
+        val lastForD7 = seen.last { it.contains("\"deviceId\":\"d7\"") }
+        assertTrue(lastForD7.contains("device_online"), "la derniere annonce de d7 est celle qui reste : $lastForD7")
+        outbox.close()
+        session.coroutineContext[kotlinx.coroutines.Job]?.cancel()
+        Unit
+    }
+}

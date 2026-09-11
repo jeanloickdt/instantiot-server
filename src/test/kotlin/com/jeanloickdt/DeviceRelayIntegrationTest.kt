@@ -474,11 +474,13 @@ class DeviceRelayIntegrationTest {
                 val out = esp.getOutputStream()
                 out.write(handshake(deviceToken))
                 out.flush()
-                // A loop() without delay(): 300 valid frames as fast as the
-                // socket accepts them. The fuse is 10/s with a burst of 20
-                // since the fair-use review — a runaway sketch is caught just
-                // as surely, and legitimate traffic no longer brushes it.
-                repeat(300) {
+                // A loop() without delay(): more valid frames than the whole
+                // burst, as fast as the socket accepts them. The burst is ten
+                // seconds of the rate (so a board the relay reads late loses
+                // nothing); a runaway sketch is still capped at the rate once
+                // those tokens are gone. Sending fewer frames than the burst
+                // would measure nothing.
+                repeat(FLOT) {
                     out.write(signalFrame(it.toFloat()))
                 }
                 out.flush()
@@ -496,15 +498,49 @@ class DeviceRelayIntegrationTest {
 
         val stored = mergedSamples()
         // Les bornes se derivent du fusible, jamais d'un nombre ecrit ici :
-        // ce serveur laisse passer 50 trames/s et une rafale du double, la ou
-        // le nuage serre a 10 par sa grille de prix. Un test qui codait 20 en
-        // dur mesurait l'autre edition.
-        val rafale = com.jeanloickdt.relay.FrameRateLimiter.DEFAULT_RATE_PER_SECOND * 2
-        assertTrue(stored >= rafale / 2, "la rafale elle-meme doit passer — seulement $stored stockees")
+        // ce serveur laisse passer 50 trames/s et une rafale de dix secondes
+        // du debit, la ou le nuage serre a 10 par sa grille de prix. Un test
+        // qui codait 20 en dur mesurait l'autre edition.
+        assertTrue(stored >= RAFALE / 2, "la rafale elle-meme doit passer — seulement $stored stockees")
         assertTrue(
-            stored <= rafale + com.jeanloickdt.relay.FrameRateLimiter.DEFAULT_RATE_PER_SECOND,
-            "le flot doit etre coupe pres de la rafale — $stored stockees sur 300"
+            stored <= RAFALE + com.jeanloickdt.relay.FrameRateLimiter.DEFAULT_RATE_PER_SECOND,
+            "le flot doit etre coupe pres de la rafale — $stored stockees sur $FLOT"
         )
+    }
+
+    private companion object {
+        val RAFALE = com.jeanloickdt.relay.FrameRateLimiter.DEFAULT_RATE_PER_SECOND *
+            com.jeanloickdt.relay.FrameRateLimiter.BURST_SECONDS
+        /** Plus que la rafale : c'est la coupure qu'on mesure, pas le passage. */
+        val FLOT = RAFALE + 200
+    }
+
+    // ── un octet parasite ne coute pas une reconnexion ────────────────────
+
+    @Test
+    fun `a stray byte before a frame is skipped, and the session survives`() = testApplication {
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort)
+        val ws = createClient { install(WebSockets) }
+
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $jwt") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-bruit"))
+            awaitSubscribed(projectId)
+
+            val frame = signalFrame(7.5f)
+            Socket("localhost", awaitBoundPort(tcpPort)).use { esp ->
+                esp.getOutputStream().apply {
+                    write(handshake(deviceToken))
+                    write(byteArrayOf(0x00, 0x13, 0x37))   // du bruit, puis une vraie trame
+                    write(frame)
+                    flush()
+                }
+                val (texts, binary) = collectUntilOnlineAndBinary()
+                assertTrue(texts.any { it.contains("device_online") }, "la carte est bien en ligne")
+                assertTrue(binary != null, "la trame qui suit le bruit arrive a l'app : la session n'a pas ete coupee")
+            }
+        }
     }
 
     // ── Ce qui vivait ici ─────────────────────────────────────────────────

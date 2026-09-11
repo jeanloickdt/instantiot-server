@@ -114,7 +114,21 @@ fun Application.startDeviceRelay(
      * que de la traiter a moitie.
      */
     signals: com.jeanloickdt.signal.domain.SignalRepository? = null,
-    tcpPort: Int = 9001
+    tcpPort: Int = 9001,
+    /**
+     * La porte des cartes : combien peuvent etre connectees a la fois. Elle
+     * existait dans ce depot sans etre cablee ; sans elle, la panne a
+     * saturation est un OutOfMemoryError qui emporte toutes les cartes,
+     * la ou un refus n'en coute qu'une, qui reessaie.
+     */
+    connectionGate: ConnectionGate = ConnectionGate(ConnectionGate.DEFAULT_LIMIT),
+    /**
+     * Une seule adresse publique ne remplit pas la porte a elle seule. Les
+     * adresses du LAN, du lien local et de la boucle sont exemptees : sur
+     * un serveur de salon, c'est la vie normale ; la porte ne vise que le
+     * jumeau expose sur Internet par un renvoi de port.
+     */
+    handshakeGate: HandshakeGate = HandshakeGate(HandshakeGate.DEFAULT_PER_ADDRESS)
 ) {
     // SupervisorJob: device↔device isolation (a crashing connection does not
     // cancel its siblings or the accept loop). Dispatchers.Default — reads are
@@ -126,7 +140,8 @@ fun Application.startDeviceRelay(
     // faulty board, and a loop() without delay() does not care who hosts you.
     // (The cloud edition lets its plan file TIGHTEN this; never create it.)
     val frameRate = FrameRateLimiter.DEFAULT_RATE_PER_SECOND
-    logger.info("Device frame fuse: $frameRate frames/s per board (burst ${frameRate * 2})")
+    logger.info("Device frame fuse: $frameRate frames/s per board (burst ${frameRate * FrameRateLimiter.BURST_SECONDS})")
+    logger.info("Device connection cap: ${connectionGate.limit}, ${handshakeGate.perAddress} handshakes at once per public address")
 
     relayScope.launch {
         val serverSocket = aSocket(selectorManager).tcp().bind(port = tcpPort)
@@ -143,10 +158,47 @@ fun Application.startDeviceRelay(
         while (true) {
             try {
                 val socket = serverSocket.accept()   // suspends until a device connects
+
+                // The ceiling is checked BEFORE anything reads from this
+                // socket: a refused connection must not allocate the buffers
+                // the cap exists to protect. Refusing one board beats losing
+                // every board to an OutOfMemoryError.
+                if (!connectionGate.tryAcquire()) {
+                    runCatching { socket.close() }
+                    val n = connectionGate.refusedCount
+                    if (n == 1L || n % 100L == 0L) {
+                        logger.warn(
+                            "Device relay FULL at ${connectionGate.limit} connections — " +
+                                "connection refused ($n so far). Raise the cap, or find why " +
+                                "so many boards are connected."
+                        )
+                    }
+                    continue
+                }
+
+                // One address may not fill the relay on its own. Checked
+                // before any read, for the same reason as the gate above.
+                val remoteHost = HandshakeGate.hostOf(socket.remoteAddress.toString())
+                if (!handshakeGate.tryAcquire(remoteHost)) {
+                    runCatching { socket.close() }
+                    connectionGate.release()
+                    val n = handshakeGate.refusedCount
+                    if (n == 1L || n % 100L == 0L) {
+                        logger.warn(
+                            "Address $remoteHost holds ${handshakeGate.perAddress} handshakes at once — " +
+                                "connection refused ($n so far). A flood, or a NAT larger than expected."
+                        )
+                    }
+                    continue
+                }
+
                 // child of the SupervisorJob → isolated per device
                 relayScope.launch {
                     handleDeviceConnection(
                         socket           = socket,
+                        connectionGate   = connectionGate,
+                        handshakeGate    = handshakeGate,
+                        remoteHost       = remoteHost,
                         deviceRepository = deviceRepository,
                         connections      = connections,
                         buffers          = buffers,
@@ -181,6 +233,9 @@ fun Application.startDeviceRelay(
  */
 private suspend fun handleDeviceConnection(
     socket: Socket,
+    connectionGate: ConnectionGate,
+    handshakeGate: HandshakeGate,
+    remoteHost: String,
     deviceRepository: DeviceRepository,
     connections: ConnectionRegistry,
     buffers: HistoryBuffers,
@@ -195,6 +250,13 @@ private suspend fun handleDeviceConnection(
     scope: CoroutineScope
 ) {
     val deviceAddress = socket.remoteAddress.toString()
+    // L'adresse complete pour les refus (diagnostic d'abus) ; tronquee pour
+    // la vie normale : l'adresse d'un foyer, en INFO, quatorze jours durant,
+    // n'a rien a faire dans un journal.
+    val deviceNetwork = maskAddress(deviceAddress)
+    // La place a la porte des poignees de main est rendue des que la carte
+    // est reconnue ; sinon a la sortie, quel que soit le chemin.
+    var handshakePending = true
     val readCh: ByteReadChannel = socket.openReadChannel()
     val writeCh = socket.openWriteChannel(autoFlush = false)
 
@@ -219,12 +281,14 @@ private suspend fun handleDeviceConnection(
             logger.warn("Unknown device token from $deviceAddress — closing connection")
             return
         }
+        handshakeGate.release(remoteHost)
+        handshakePending = false
 
         // ── Register (after this point the finally always cleans up) ──
         connections.registerDevice(device.id, device, socket, writeCh, scope)
         registered = device
         runCatching { presence.markOnline(device.id, System.currentTimeMillis()) }
-        logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceAddress " +
+        logger.info("Device connected — deviceId=${device.id} name=${device.name} address=$deviceNetwork " +
             "heartbeat=${handshake.heartbeatMs ?: "legacy"}ms timeout=${sessionTimeoutMs}ms")
         events.deviceOnline(device.projectId, device.id, device.name)
 
@@ -257,18 +321,22 @@ private suspend fun handleDeviceConnection(
         // nothing.
         val fuse = FrameRateLimiter(frameRatePerSecond)
         val heartbeatFuse = FrameRateLimiter(FrameRateLimiter.HEARTBEAT_RATE_PER_SECOND)
+        var invalidFrames = 0L
         while (true) {
             val frame = withTimeoutOrNull(sessionTimeoutMs) { readFrame(readCh) } ?: break
-            if (!FrameParser.isValid(frame)) {
-                logger.warn("Invalid frame from device=${device.id} — ignored")
-                continue
-            }
             // Monotonic, not wall-clock: an NTP correction that steps the wall
             // clock backwards would freeze the refill until it caught up, and a
             // perfectly healthy board would burn its burst, open an abuse
             // streak, and be evicted for a problem that is not its own.
             val now = System.nanoTime() / 1_000_000
-            val isHeartbeat = FrameParser.extractType(frame) == TYPE_HEARTBEAT.toInt()
+            // Le fusible compte CHAQUE trame, valide ou non. Il ne comptait
+            // que les valides : une carte pouvait pousser des trames au CRC
+            // faux a la vitesse de la ligne, CRC calcule, trois tableaux
+            // alloues, une ligne de journal chacune, sans jamais le faire
+            // sauter ni etre deconnectee. Une trame invalide passe par le
+            // fusible des trames, jamais par celui des battements.
+            val valid = FrameParser.isValid(frame)
+            val isHeartbeat = valid && FrameParser.extractType(frame) == TYPE_HEARTBEAT.toInt()
             val gate = if (isHeartbeat) heartbeatFuse else fuse
             if (!gate.tryAcquire(now)) {
                 if (gate.dropped == 1L) {
@@ -280,6 +348,15 @@ private suspend fun handleDeviceConnection(
                     break
                 }
                 continue   // frame dropped, socket kept — never a delay
+            }
+            if (!valid) {
+                // Journalisee une fois, puis une fois sur mille : le disque
+                // du journal est celui de la base.
+                invalidFrames++
+                if (invalidFrames == 1L || invalidFrames % 1_000L == 0L) {
+                    logger.warn("Invalid frame from device=${device.id} — ignored ($invalidFrames so far this session)")
+                }
+                continue
             }
             // Accepted data frames feed the messages.perMonth ledger — one
             // RAM bump; heartbeats and dropped frames never count.
@@ -297,6 +374,8 @@ private suspend fun handleDeviceConnection(
         // cleanup is suspending (presence DB write, offline WS broadcast), so it
         // runs under NonCancellable to survive shutdown cancellation.
         runCatching { socket.close() }
+        if (handshakePending) handshakeGate.release(remoteHost)
+        connectionGate.release()
         registered?.let { dev ->
             withContext(NonCancellable) {
                 // EVERY offline effect is gated on still owning the slot — not
@@ -485,10 +564,34 @@ private suspend fun readDeviceHandshake(channel: ByteReadChannel): HandshakeResu
  * handled transparently. Returns null on timeout (withTimeoutOrNull cancels the
  * read) / EOF / malformed → caller breaks the loop and the device goes offline.
  */
+/** Combien d'octets parasites on tolere avant de conclure que ce n'est pas une trame. */
+private const val RESYNC_WINDOW_BYTES = 64
+
+/** `1.2.3.4:5678` devient `1.2.3.0/24`, `[2001:db8:1:2::3]:5678` devient `2001:db8:1::/48` : le reseau, pas le foyer. */
+internal fun maskAddress(remote: String): String {
+    val hostPart = remote.trimStart('/')
+    val v6 = Regex("""^\[([0-9a-fA-F:]+)\]""").find(hostPart)?.groupValues?.get(1)
+    if (v6 != null) {
+        val groups = v6.split(":").filter { it.isNotEmpty() }
+        return groups.take(3).joinToString(":") + "::/48"
+    }
+    val v4 = Regex("""^(\d+)\.(\d+)\.(\d+)\.\d+""").find(hostPart) ?: return "?"
+    return "${v4.groupValues[1]}.${v4.groupValues[2]}.${v4.groupValues[3]}.0/24"
+}
+
 private suspend fun readFrame(channel: ByteReadChannel): ByteArray? {
     return try {
-        val sync = channel.readByte().toInt() and 0xFF
-        if (sync != 0xAA) return null
+        // Resynchronisation : un octet parasite entre deux trames (bruit de
+        // ligne, reprise apres une coupure au milieu d'une trame) fermait la
+        // session, quand un CRC faux ne fait que jeter la trame. Une carte
+        // payait une reconnexion pour un octet. On cherche le prochain 0xAA
+        // sur une fenetre bornee ; au-dela, ce n'est plus du bruit.
+        var sync = channel.readByte().toInt() and 0xFF
+        var skipped = 0
+        while (sync != 0xAA) {
+            if (++skipped > RESYNC_WINDOW_BYTES) return null
+            sync = channel.readByte().toInt() and 0xFF
+        }
 
         val version = channel.readByte()
 

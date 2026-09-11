@@ -62,16 +62,29 @@ package com.jeanloickdt.relay
 class FrameRateLimiter(
     ratePerSecond: Int = DEFAULT_RATE_PER_SECOND,
     /** Refusals must last this long, uninterrupted, before we give up on the board. */
-    private val disconnectAfterMs: Long = SUSTAINED_ABUSE_MS
+    private val disconnectAfterMs: Long = SUSTAINED_ABUSE_MS,
+    /**
+     * What may pass in one instant before the gate closes. Default: ten
+     * seconds of the rate. See [BURST_SECONDS] for why it is not two.
+     */
+    burst: Int = ratePerSecond.coerceAtLeast(1) * BURST_SECONDS
 ) {
     private val rate = ratePerSecond.coerceAtLeast(1)
 
     /**
-     * Burst = 2× the rate: a healthy board that wakes up and flushes a backlog
-     * (reconnection, sensor burst) must never be mistaken for a flooding one.
-     * The fuse is for *sustained* abuse; one second of slack is not abuse.
+     * The bucket measures frames WHEN THE RELAY READS THEM, not when the
+     * board sent them (`nanoTime` after `readFrame`). As long as the relay
+     * reads its sockets as they fill, the two are the same. When it falls
+     * behind (a saturated machine, a long flush) a board's frames pile up
+     * in the TCP buffer and are read in one go: a well-behaved board at
+     * 4 frames/s left unread for six seconds shows up as 24 frames in one
+     * millisecond. With a burst of 2x the rate, four were dropped and the
+     * log blamed the sketch. The cloud bench at 16 000 boards blamed 15 492
+     * of them. The burst is therefore sized on a plausible READ LAG, not on
+     * a plausible sensor burst: the sustained rate stays the rule, the
+     * bucket just forgives the relay its own lateness.
      */
-    private val burst = rate * 2
+    private val burst = burst.coerceAtLeast(rate)
 
     private var tokens: Double = burst.toDouble()
     private var lastRefillMs: Long = Long.MIN_VALUE
@@ -114,6 +127,7 @@ class FrameRateLimiter(
         }
 
         dropped++
+        totalDropped.incrementAndGet()
         streakDrops++
         lastDropMs = nowMs
         if (throttledSinceMs == null) throttledSinceMs = nowMs
@@ -159,6 +173,17 @@ class FrameRateLimiter(
          * per board, 50 is the same order of generosity.
          */
         const val DEFAULT_RATE_PER_SECOND = 50
+
+        /**
+         * The burst, in seconds of the rate: how late the relay may read a
+         * socket before a board in its right loses a frame. Ten seconds
+         * covers a slow flush and a restart; a runaway sketch still gets
+         * exactly the rate once its tokens are gone.
+         */
+        const val BURST_SECONDS = 10
+
+        /** All refusals of all fuses, for the admin stats: a fuse lives and dies with its board. */
+        val totalDropped = java.util.concurrent.atomic.AtomicLong()
 
         const val SUSTAINED_ABUSE_MS = 30_000L
 

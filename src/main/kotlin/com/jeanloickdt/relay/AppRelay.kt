@@ -26,11 +26,15 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import org.slf4j.LoggerFactory
 import kotlin.time.Duration.Companion.seconds
+
+/** Les deux messages de presentation, ou la porte se referme. */
+private const val HANDSHAKE_TIMEOUT_MS = 10_000L
 
 private val logger = LoggerFactory.getLogger("AppRelay")
 
@@ -90,8 +94,22 @@ fun Application.configureAppRelay(
                     return@webSocket
                 }
 
-                // handshake — first message = projectId
-                val handshakeFrame = incoming.receive()
+                // La porte du noeud, avant de lire quoi que ce soit : une
+                // session refusee ne doit rien allouer.
+                if (!connections.appGate.tryAcquire()) {
+                    close(CloseReason(CloseReason.Codes.TRY_AGAIN_LATER, "Too many app sessions on this node"))
+                    return@webSocket
+                }
+                try {
+                // handshake — first message = projectId. Dix secondes pour se
+                // presenter : un client authentifie qui repond aux pings sans
+                // jamais se presenter tenait une session pour toujours,
+                // invisible du registre.
+                val handshakeFrame = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { incoming.receive() }
+                if (handshakeFrame == null) {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Handshake timeout"))
+                    return@webSocket
+                }
                 if (handshakeFrame !is Frame.Text) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Expected projectId as first message"))
                     return@webSocket
@@ -108,7 +126,11 @@ fun Application.configureAppRelay(
                 // instead of (userId, projectId) — several devices of the same
                 // user can watch the same project in parallel, only the same
                 // install reconnecting kicks its own zombie.
-                val instanceFrame = incoming.receive()
+                val instanceFrame = withTimeoutOrNull(HANDSHAKE_TIMEOUT_MS) { incoming.receive() }
+                if (instanceFrame == null) {
+                    close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Handshake timeout"))
+                    return@webSocket
+                }
                 if (instanceFrame !is Frame.Text) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Expected connectionInstanceId as second message"))
                     return@webSocket
@@ -156,6 +178,11 @@ fun Application.configureAppRelay(
 
                 // register the app session with the active project
                 val appSession = connections.registerApp(userId, this, connectionInstanceId)
+                if (appSession == null) {
+                    logger.warn("Too many sessions for userId=$userId — refusing another")
+                    close(CloseReason(CloseReason.Codes.TRY_AGAIN_LATER, "Too many sessions for this account"))
+                    return@webSocket
+                }
                 connections.setActiveProject(appSession, projectId)
                 logger.info("App connected — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
 
@@ -210,6 +237,9 @@ fun Application.configureAppRelay(
                     // disconnection — remove this specific session
                     connections.unregisterApp(userId, this@webSocket)
                     logger.info("App disconnected — userId=$userId")
+                }
+                } finally {
+                    connections.appGate.release()
                 }
             }
         }
@@ -364,10 +394,15 @@ private suspend fun relayFrameToDevices(
         // comparaison entre deux identites deja etablies, pas une resolution.
         if (deviceSession.device.ownerId != userId) {
             logger.warn("Ownership violation — userId=$userId tried to relay to device=$targetDeviceId owned by ${deviceSession.device.ownerId}")
+            // La meme reponse qu'une carte absente. FORBIDDEN apres
+            // DEVICE_OFFLINE faisait un oracle : avec l'identifiant d'une
+            // carte etrangere, on savait si elle etait en ligne a cet instant.
+            // Une carte qui n'est pas a vous n'est pas la, c'est tout ce
+            // qu'on dit, dans les deux cas.
             events.commandFailed(
                 session  = session,
                 deviceId = targetDeviceId,
-                reason   = CommandFailedReason.FORBIDDEN
+                reason   = CommandFailedReason.DEVICE_OFFLINE
             )
             return@forEach
         }
@@ -395,8 +430,13 @@ private suspend fun relayFrameToDevices(
             logger.warn("Outbox closed for device=$targetDeviceId — removing session")
             // Pass OUR view of the session: a dead outbox must never evict a
             // session newer than itself — triggered by a button press landing
-            // exactly during a reconnect.
-            connections.unregisterDevice(targetDeviceId, deviceSession.socket)
+            // exactly during a reconnect. And the socket is CLOSED when it
+            // was ours: the reader's `finally` is what broadcasts
+            // device_offline and frees the gate, and it only runs when the
+            // socket dies.
+            if (connections.unregisterDevice(targetDeviceId, deviceSession.socket)) {
+                runCatching { deviceSession.socket.close() }
+            }
             events.commandFailed(
                 session  = session,
                 deviceId = targetDeviceId,
