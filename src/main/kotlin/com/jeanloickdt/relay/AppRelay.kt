@@ -26,6 +26,9 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
 import io.ktor.websocket.*
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
@@ -143,7 +146,13 @@ fun Application.configureAppRelay(
 
                 // L'appartenance est dans la signature : `findById` ne peut
                 // resoudre que ce qui est deja au bon compte.
-                if (projectRepository.findById(userId, projectId) == null) {
+                // Lu sur le dispatcher de stockage : ce n'est pas au thread
+                // du reseau, que toutes les sessions se partagent, de tenir
+                // une requete.
+                val projectKnown = withContext(com.jeanloickdt.common.ServerDispatchers.storage) {
+                    projectRepository.findById(userId, projectId) != null
+                }
+                if (!projectKnown) {
                     close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "Project not found"))
                     return@webSocket
                 }
@@ -174,6 +183,16 @@ fun Application.configureAppRelay(
                 }
                 if (priorSessions.isNotEmpty()) {
                     logger.info("Closed ${priorSessions.size} prior session(s) — userId=$userId projectId=$projectId instanceId=${connectionInstanceId.take(8)}…")
+                }
+
+                // Le JWT n'etait verifie qu'a l'upgrade ; le ping/pong entretenait
+                // ensuite la socket sans limite. A l'expiration du jeton, le
+                // relais ferme la session lui-meme.
+                call.principal<JWTPrincipal>()?.expiresAt?.time?.let { expiresAt ->
+                    launch {
+                        delay((expiresAt - System.currentTimeMillis()).coerceAtLeast(0))
+                        close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "token expired"))
+                    }
                 }
 
                 // register the app session with the active project
@@ -213,7 +232,20 @@ fun Application.configureAppRelay(
                     // Two types of frames accepted after the handshake :
                     //   - Frame.Binary : iWidgets v1 frames (app → device commands)
                     //   - Frame.Text   : control messages (hello, write_signal)
+                    // Un fusible par session : /ws/app n'etait sous aucun
+                    // limiteur (celui de l'API ne couvre que le HTTP), et un
+                    // curseur glisse a 20 Hz faisait autant d'ecritures. Au-dela,
+                    // refuse et compte, jamais deconnecte : la position finale
+                    // d'un curseur arrive toujours, le seau se remplit a 30/s.
+                    val fuse = AppInboundFuse()
                     for (incomingFrame in incoming) {
+                        if (incomingFrame is Frame.Binary || incomingFrame is Frame.Text) {
+                            val now = System.currentTimeMillis()
+                            if (!fuse.admit(now)) {
+                                fuse.logIfDue(now, "userId=$userId")
+                                continue
+                            }
+                        }
 
                         when (incomingFrame) {
                             is Frame.Binary -> {
@@ -307,15 +339,24 @@ private suspend fun handleAppTextMessage(
             // d'abord, envoye ensuite, pour qu'une carte endormie le retrouve
             // en se reconnectant. `SignalSetpoint.write` s'en charge : si
             // l'envoi echoue, la consigne est deja ecrite.
+            if (address !in 0..255) {
+                logger.warn("write_signal hors espace d'adresses — userId=$userId device=$deviceId address=$address")
+                return
+            }
             val projectId = connections.deviceSessions[deviceId]?.device?.projectId
-            val issue = com.jeanloickdt.signal.SignalSetpoint.write(
-                signals, userId, deviceId, address, msg.value, msg.text,
-                System.currentTimeMillis(),
-                send = { target, frame ->
-                    connections.deviceOutboxes[target]?.send(frame, isStreaming = true) ?: false
-                },
-                broadcast = { frame -> projectId?.let { broadcastToApps(connections, it, frame) } }
-            )
+            // L'ecriture reste synchrone (un relais qui tombe ne doit pas
+            // avoir dit « range » sans l'avoir fait), mais sur le dispatcher
+            // de stockage, pas sur le thread du reseau.
+            val issue = withContext(com.jeanloickdt.common.ServerDispatchers.storage) {
+                com.jeanloickdt.signal.SignalSetpoint.write(
+                    signals, userId, deviceId, address, msg.value, msg.text,
+                    System.currentTimeMillis(),
+                    send = { target, frame ->
+                        connections.deviceOutboxes[target]?.send(frame, isStreaming = true) ?: false
+                    },
+                    broadcast = { frame -> projectId?.let { broadcastToApps(connections, it, frame) } }
+                )
+            }
             when (issue) {
                 is com.jeanloickdt.signal.SignalSetpoint.Outcome.Refused ->
                     logger.info("write_signal refuse — userId=$userId device=$deviceId I$address : ${issue.reason}")

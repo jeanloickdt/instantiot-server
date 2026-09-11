@@ -25,6 +25,7 @@ import io.ktor.network.sockets.Socket
 import io.ktor.utils.io.ByteWriteChannel
 import io.ktor.websocket.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -143,6 +144,29 @@ class ConnectionRegistry {
         if (sessions.isEmpty()) {
             appSessions.remove(userId)
         }
+    }
+
+    /**
+     * Ferme toutes les sessions app d'un compte, avec la raison.
+     *
+     * Le plancher de version tue le jeton vole a la requete suivante, mais il
+     * ne fermait aucune session deja ouverte : « changer mon mot de passe »
+     * laissait le voleur connecte tant que sa socket tenait, avec
+     * write_signal vers les cartes. La fermeture est LANCEE, jamais attendue :
+     * `close` suspend, et l'appelant est une route HTTP.
+     *
+     * @return combien de sessions ont ete fermees.
+     */
+    fun closeAppSessions(userId: UserId, reason: String): Int {
+        val sessions = appSessions[userId] ?: return 0
+        var closed = 0
+        for (s in sessions) {
+            closed++
+            s.session.launch {
+                runCatching { s.session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, reason)) }
+            }
+        }
+        return closed
     }
 
     /**

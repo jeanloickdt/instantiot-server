@@ -543,6 +543,25 @@ class DeviceRelayIntegrationTest {
         }
     }
 
+    // ── une session ne vit pas plus longtemps que son jeton ───────────────
+
+    @Test
+    fun `an expiring token closes the app session by itself`() = testApplication {
+        val tcpPort = reserveFreePort()
+        wireRelay(tcpPort)
+        val ws = createClient { install(WebSockets) }
+        val shortLived = com.jeanloickdt.auth.LocalTestAuth.shortLived(ownerId, expiresInSeconds = 2)
+
+        ws.webSocket("/ws/app", request = { header(HttpHeaders.Authorization, "Bearer $shortLived") }) {
+            send(Frame.Text(projectId))
+            send(Frame.Text("install-exp"))
+            awaitSubscribed(projectId)
+            val reason = withTimeoutOrNull(8_000) { closeReason.await() }
+            assertTrue(reason != null, "la session doit etre fermee par le relais a l'expiration du jeton")
+            assertEquals("token expired", reason!!.message)
+        }
+    }
+
     // ── Ce qui vivait ici ─────────────────────────────────────────────────
     //
     // Deux tests du palier brut vendu : « a paid plan stores the raw sample »

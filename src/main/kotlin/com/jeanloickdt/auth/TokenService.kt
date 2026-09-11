@@ -74,8 +74,13 @@ class HmacTokenService(
 
     private val algorithm = Algorithm.HMAC256(secret)
 
+    // `exp` est EXIGE : un jeton frappe sans (une cle de test qui fuit, un
+    // vieux bogue) valait pour toujours. Trente secondes de marge d'horloge.
     override val verifier: JWTVerifier =
-        JWT.require(algorithm).withIssuer(issuer).withAudience(audience).build()
+        JWT.require(algorithm).withIssuer(issuer).withAudience(audience)
+            .withClaimPresence("exp")
+            .acceptLeeway(30)
+            .build()
 
     override fun issue(userId: String, tokenVersion: Int): String =
         JWT.create()
@@ -87,10 +92,10 @@ class HmacTokenService(
             .sign(algorithm)
 
     override fun isValid(payload: Payload, user: UserRow): Boolean {
-        // Backward-compatible: a token minted before this feature has no `ver`
-        // claim → treated as version 0. It stays valid until the first
-        // revocation bumps the user past 0.
-        val tokenVersion = payload.getClaim(CLAIM_VERSION).asInt() ?: 0
+        // Un jeton sans version passait le plancher sans le regarder et
+        // echappait a toute revocation. Il n'y a plus de jeton d'avant : la
+        // 2.0 est une rupture assumee, et sans `ver` le jeton est refuse.
+        val tokenVersion = payload.getClaim(CLAIM_VERSION).asInt() ?: return false
         return tokenVersion >= user.tokenVersion
     }
 

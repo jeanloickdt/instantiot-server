@@ -43,4 +43,9 @@ object LocalTestAuth {
      *        partout » ferme.
      */
     fun token(sub: String, tokenVersion: Int = 0): String = service.issue(sub, tokenVersion)
+
+    /** Un jeton qui expire vite, pour prouver que la session tombe avec lui. */
+    fun shortLived(sub: String, expiresInSeconds: Long): String =
+        HmacTokenService("test-secret", "instantiot-server", "instantiot-app", expiryMs = expiresInSeconds * 1000)
+            .issue(sub, 0)
 }
