@@ -79,7 +79,7 @@ dependencies {
 
     // mDNS / Bonjour — annonce le service "_instantiot._tcp" sur le LAN
     // pour que l'app le découvre automatiquement (cf. MdnsPublisher).
-    implementation("org.jmdns:jmdns:3.6.1")
+    implementation("org.jmdns:jmdns:3.6.3")
 }
 
 // ════════════════════════════════════════════════════════════
