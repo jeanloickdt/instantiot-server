@@ -115,6 +115,13 @@ object DatabaseFactory {
             runCatching { exec("ALTER TABLE devices ADD COLUMN device_type TEXT") }
             runCatching { exec("ALTER TABLE devices ADD COLUMN connectivity TEXT") }
 
+            // ── Les cartes ──
+            // La poignee de main cherche son jeton par son empreinte : sans
+            // index, chaque carte qui se connecte balaie la table entiere, et
+            // une tempete de reconnexion en fait N balayages. Unique : deux
+            // cartes flashees avec le meme jeton s'evinceraient l'une l'autre.
+            exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_devices_token_hash ON devices (token_hash)")
+
             // ── Le modele signal ──
             // L'adresse et l'instant : c'est la lecture de toute courbe.
             exec("CREATE INDEX IF NOT EXISTS idx_signal_raw_signal  ON signal_raw  (signal_id, ts)")

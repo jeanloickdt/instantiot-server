@@ -19,6 +19,10 @@
 
 package com.jeanloickdt
 
+import io.ktor.server.plugins.origin
+import com.jeanloickdt.common.installBrowserHeaders
+import com.jeanloickdt.common.installErrorPages
+import com.jeanloickdt.common.limitRequestBodies
 import com.jeanloickdt.auth.authRoutes
 import com.jeanloickdt.automation.automationHealthRoutes
 import com.jeanloickdt.automation.emailConfigRoutes
@@ -222,15 +226,13 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // Global plugins
     // ============================================================
     install(ContentNegotiation) { json() }
-    install(StatusPages) {
-        exception<Throwable> { call, cause ->
-            logger.error("Unhandled exception on ${call.request.local.uri}", cause)
-            call.respond(
-                HttpStatusCode.InternalServerError,
-                com.jeanloickdt.common.ApiError("Internal Server Error")
-            )
-        }
-    }
+    // 400 pour une faute du client, sans le corps dans le journal ; 500 avec
+    // la trace pour une vraie panne ; un plafond sur tout corps declare ; et
+    // les en-tetes que le navigateur attend, puisqu'aucun Caddy ne les pose
+    // ici. Voir common/ErrorPages.kt.
+    installErrorPages()
+    limitRequestBodies()
+    installBrowserHeaders()
 
     install(CORS) {
         anyHost()  // permissive for the beta — the client restricts via reverse proxy
@@ -240,11 +242,19 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         allowMethod(HttpMethod.Delete)
     }
 
+    // Derriere un mandataire inverse, l'adresse vue est celle du mandataire,
+    // et le limiteur ne fait plus qu'un seul seau pour tout le monde. Mais
+    // croire X-Forwarded-For sans mandataire laisse n'importe qui choisir son
+    // adresse. On ne le croit donc que si l'exploitant le dit : TRUST_PROXY=1.
+    if (System.getenv("TRUST_PROXY") == "1") {
+        install(io.ktor.server.plugins.forwardedheaders.XForwardedHeaders) { useLastProxy() }
+        logger.info("Rate limiter: client address read from the last X-Forwarded-For hop (TRUST_PROXY=1)")
+    }
     install(RateLimit) {
         register(RateLimitName("auth")) {
             rateLimiter(limit = 10, refillPeriod = 1.minutes)
             requestKey { call ->
-                call.request.local.remoteAddress
+                call.request.origin.remoteAddress
             }
         }
     }

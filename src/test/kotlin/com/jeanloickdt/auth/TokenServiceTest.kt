@@ -72,15 +72,28 @@ class TokenServiceTest {
     }
 
     @Test
-    fun `a legacy token without the ver claim counts as version 0`() {
-        // backward compatibility: tokens minted before this feature have no `ver`
-        val legacy = JWT.create()
+    fun `a token without the ver claim is refused, whatever the user's version`() {
+        // Il comptait comme version 0 « par compatibilite » : un jeton sans
+        // version passait le plancher sans le regarder et echappait a toute
+        // revocation. La 2.0 n'a pas de jeton d'avant.
+        val sansVersion = JWT.create()
             .withSubject("u").withIssuer(issuer).withAudience(audience)
             .withExpiresAt(Date(System.currentTimeMillis() + 60_000))
             .sign(Algorithm.HMAC256(secret))
-        val decoded = svc.verifier.verify(legacy)
-        assertTrue(svc.isValid(decoded, user(0)), "legacy token valid while user still at v0")
-        assertFalse(svc.isValid(decoded, user(1)), "legacy token revoked once the user is bumped")
+        val decoded = svc.verifier.verify(sansVersion)
+        assertFalse(svc.isValid(decoded, user(0)), "sans version, refuse meme a v0")
+        assertFalse(svc.isValid(decoded, user(1)))
+    }
+
+    @Test
+    fun `a token without exp is refused by the verifier itself`() {
+        // Un jeton frappe sans `exp` (une cle de test qui fuit, un vieux bogue)
+        // valait pour toujours.
+        val eternel = JWT.create()
+            .withSubject("u").withIssuer(issuer).withAudience(audience)
+            .withClaim(HmacTokenService.CLAIM_VERSION, 0)
+            .sign(Algorithm.HMAC256(secret))
+        assertFailsWith<JWTVerificationException> { svc.verifier.verify(eternel) }
     }
 
     // ════════════════════════════════════════════════════════════

@@ -166,7 +166,12 @@ fun Route.registerRoute(userRepository: UserRepository, tokenService: TokenServi
 // ============================================================
 // 🔑 CHANGE PASSWORD — any authenticated user
 // ============================================================
-fun Route.changePasswordRoute(userRepository: UserRepository, tokenService: TokenService) {
+fun Route.changePasswordRoute(
+    userRepository: UserRepository,
+    tokenService: TokenService,
+    /** Ce qui ferme les sessions ouvertes du compte : le plancher monte, elles tombent. */
+    closeSessions: (userId: String, reason: String) -> Int = { _, _ -> 0 }
+) {
     patch("/api/users/me/password") {
         val userId = call.principal<JWTPrincipal>()?.subject
             ?: return@patch call.respond(HttpStatusCode.Unauthorized)
@@ -199,6 +204,11 @@ fun Route.changePasswordRoute(userRepository: UserRepository, tokenService: Toke
         userRepository.updatePassword(userId, newHash)
         val updated = userRepository.findById(userId)!!
         val newToken = tokenService.issue(userId, updated.tokenVersion)
+        // Les sessions deja ouvertes tombent avec l'ancien jeton : sans ca,
+        // « changer mon mot de passe » laissait un jeton vole connecte tant
+        // que sa socket tenait. L'app se reconnectera avec le jeton neuf.
+        val closed = closeSessions(userId, "token revoked")
+        if (closed > 0) LoggerFactory.getLogger("InstantIoT").info("Password changed — $closed app session(s) closed for user id prefix=${userId.take(8)}")
 
         call.respond(HttpStatusCode.OK, AuthResponse(
             token = newToken,
@@ -451,7 +461,11 @@ private fun currentHistoryConfig(): HistoryConfigResponse = HistoryConfigRespons
 // No email in V1 — the admin communicates the new password to
 // the user out-of-band (SMS, IRL, etc.).
 // ============================================================
-fun Route.adminUsersRoute(userRepository: UserRepository, purge: AccountPurge) {
+fun Route.adminUsersRoute(
+    userRepository: UserRepository,
+    purge: AccountPurge,
+    closeSessions: (userId: String, reason: String) -> Int = { _, _ -> 0 }
+) {
 
     // ── List (read-only) ──────────────────────────────────
     get("/api/admin/users") {
@@ -582,6 +596,7 @@ fun Route.adminUsersRoute(userRepository: UserRepository, purge: AccountPurge) {
 
         val newHash = BCrypt.hashpw(newPassword, BCrypt.gensalt())
         userRepository.updatePassword(targetId, newHash)
+        closeSessions(targetId, "token revoked")
         LoggerFactory.getLogger("InstantIoT").info(
             "Admin reset password for user '{}' (id prefix={})",
             target.username, targetId.take(8)
@@ -757,14 +772,14 @@ fun Route.authRoutes(
     }
 
     authenticate("jwt") {
-        changePasswordRoute(userRepository, tokenService)
+        changePasswordRoute(userRepository, tokenService, closeSessions = connections::closeAppSessions)
         adminStatsRoute(userRepository, projectRepository, deviceRepository, connections)
         adminDevicesRoute(userRepository, deviceRepository)
         adminServerInfoRoute(userRepository)
         adminConfigRoute(userRepository)
         adminHistoryConfigRoute(userRepository)
         adminBackupRoute(userRepository)
-        adminUsersRoute(userRepository, purge)
+        adminUsersRoute(userRepository, purge, closeSessions = connections::closeAppSessions)
         adminRestartRoute(userRepository)
     }
 }
