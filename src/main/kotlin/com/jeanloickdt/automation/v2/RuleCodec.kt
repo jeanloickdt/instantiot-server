@@ -77,6 +77,19 @@ object RuleCodec {
     const val E_EMPTY_ACTIONS = "empty-actions"
     const val E_TZ_IN_LEAF = "tz-in-leaf"
     const val E_MALFORMED = "malformed"
+    /** Une définition, une liste d'actions ou un texte au-delà de sa borne. */
+    const val E_TOO_LARGE = "too-large"
+
+    /**
+     * Les bornes d'une règle. Une définition n'en avait aucune : autant
+     * d'actions qu'on voulait, des textes sans limite, et un `POST /api/rules`
+     * lisait le corps entier. Un tir écrivait une ligne `pending_actions` par
+     * action — les refus compris — avec le texte en entier dedans.
+     */
+    const val MAX_DEFINITION_BYTES = 16 * 1024
+    const val MAX_ACTIONS = 20
+    const val MAX_TITLE_CHARS = 200
+    const val MAX_BODY_CHARS = 2_000
 
     /** `unknown-variant:<type>` — une variante que cette version ne connaît pas. */
     fun unknownVariant(type: String) = "unknown-variant:$type"
@@ -95,6 +108,9 @@ object RuleCodec {
     // ── Décodage ─────────────────────────────────────────────────────────
 
     fun decode(raw: String): Outcome {
+        if (raw.toByteArray(Charsets.UTF_8).size > MAX_DEFINITION_BYTES) {
+            return invalid(E_TOO_LARGE, "definition larger than ${MAX_DEFINITION_BYTES / 1024} KB")
+        }
         return try {
             val root = Json.parseToJsonElement(raw).jsonObject
 
@@ -124,6 +140,7 @@ object RuleCodec {
             // amont qu'on refuse d'enregistrer plutot que de laisser tirer dans
             // le vide chaque nuit.
             if (actionsNode.isEmpty()) return invalid(E_EMPTY_ACTIONS, "a rule with no action does nothing")
+            if (actionsNode.size > MAX_ACTIONS) return invalid(E_TOO_LARGE, "more than $MAX_ACTIONS actions")
             val actions = actionsNode.map { el ->
                 when (val a = decodeAction(el.asObj() ?: return invalid(E_MALFORMED, "action is not an object"))) {
                     is Err -> return a.outcome
@@ -146,6 +163,9 @@ object RuleCodec {
 
     private fun invalid(code: String, detail: String) = Outcome.Invalid(code, detail)
     private fun err(code: String, detail: String) = Err(Outcome.Invalid(code, detail))
+
+    private fun tooLong(field: String, value: String, max: Int): Err? =
+        if (value.length > max) err(E_TOO_LARGE, "'$field' longer than $max characters") else null
 
     private fun decodeTrigger(node: JsonObject): Res<Trigger> {
         // Le fuseau appartient a la REGLE, jamais a une feuille : deux fuseaux
@@ -294,10 +314,13 @@ object RuleCodec {
 
     private fun decodeAction(node: JsonObject): Res<Action> {
         return when (val kind = node.str("kind")) {
-            "push" -> Val(Action.Push(
-                node.str("title") ?: return err(E_MALFORMED, "push needs 'title'"),
-                node.str("body") ?: return err(E_MALFORMED, "push needs 'body'")
-            ))
+            "push" -> {
+                val title = node.str("title") ?: return err(E_MALFORMED, "push needs 'title'")
+                val body = node.str("body") ?: return err(E_MALFORMED, "push needs 'body'")
+                tooLong("title", title, MAX_TITLE_CHARS)?.let { return it }
+                tooLong("body", body, MAX_BODY_CHARS)?.let { return it }
+                Val(Action.Push(title, body))
+            }
             "email" -> {
                 // Le destinataire est FACULTATIF — absent, c'est le compte —
                 // mais s'il est la, il doit ressembler a une adresse. Un
@@ -307,11 +330,12 @@ object RuleCodec {
                 if (to != null && !looksLikeEmail(to)) {
                     return err(E_MALFORMED, "email 'to' is not an address")
                 }
-                Val(Action.Email(
-                    node.str("subject") ?: return err(E_MALFORMED, "email needs 'subject'"),
-                    node.str("body") ?: return err(E_MALFORMED, "email needs 'body'"),
-                    to
-                ))
+                val subject = node.str("subject") ?: return err(E_MALFORMED, "email needs 'subject'")
+                val body = node.str("body") ?: return err(E_MALFORMED, "email needs 'body'")
+                tooLong("subject", subject, MAX_TITLE_CHARS)?.let { return it }
+                tooLong("body", body, MAX_BODY_CHARS)?.let { return it }
+                if (to != null) tooLong("to", to, MAX_TITLE_CHARS)?.let { return it }
+                Val(Action.Email(subject, body, to))
             }
             "setSignal" -> signalRef(node.obj("target")).flatMap { ref ->
                 val v = typedValue(node.obj("value")) ?: return err(E_MALFORMED, "setSignal needs 'value'")

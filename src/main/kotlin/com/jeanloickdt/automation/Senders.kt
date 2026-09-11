@@ -117,13 +117,16 @@ class EmailActionSender(
     companion object {
         const val BREVO_URL = "https://api.brevo.com/v3/smtp/email"
 
-        private val http = HttpClient.newHttpClient()
+        private val http: HttpClient = com.jeanloickdt.common.OutboundHttp.client
         fun brevoHttp(url: String, apiKey: String, body: String): Int =
             http.send(
                 HttpRequest.newBuilder(URI(url))
                     .header("api-key", apiKey)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
+                    // Borne : un Brevo qui pend bloquait l'unique boucle de
+                    // livraison, et toutes les alertes avec elle.
+                    .timeout(com.jeanloickdt.common.OutboundHttp.REQUEST)
                     .build(),
                 HttpResponse.BodyHandlers.discarding()
             ).statusCode()
@@ -217,7 +220,7 @@ class NtfyActionSender(
     }
 
     companion object {
-        private val http = HttpClient.newHttpClient()
+        private val http: HttpClient = com.jeanloickdt.common.OutboundHttp.client
 
         /**
          * Le titre voyage en EN-TETE, pas dans le corps.
@@ -231,6 +234,8 @@ class NtfyActionSender(
                 .header("Title", title)
                 .apply { if (token.isNotBlank()) header("Authorization", "Bearer $token") }
                 .POST(HttpRequest.BodyPublishers.ofString(body))
+                // Borne : un ntfy qui pend bloquait la boucle de livraison.
+                .timeout(com.jeanloickdt.common.OutboundHttp.REQUEST)
                 .build()
             return http.send(req, HttpResponse.BodyHandlers.discarding()).statusCode()
         }

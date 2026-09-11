@@ -743,7 +743,8 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
         // connexions vivantes, pas sur une colonne qui peut avoir vieilli.
         isDeviceOnline = { _, deviceId -> connections.deviceOutboxes.containsKey(deviceId) }
     )
-    launch(Dispatchers.Default) { automationEngine.run() }
+    // Le moteur a son propre fil : ni celui des cartes, ni celui du flush.
+    launch(com.jeanloickdt.common.ServerDispatchers.engine) { automationEngine.run() }
 
     /*
      * Le reveil des attentes.
@@ -792,7 +793,9 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // every rule for thirty seconds), stale sweep every 60 s.
     val staleSweeper = com.jeanloickdt.event.SignalStaleSweeper(lastValues, eventSinks)
     val schedulerWorker = com.jeanloickdt.automation.SchedulerWorker(eventSinks)
-    launch(Dispatchers.Default) {
+    // Le tour de dix secondes ecrit en base : sur le dispatcher de stockage,
+    // pas sur celui que toutes les cartes se partagent.
+    launch(com.jeanloickdt.common.ServerDispatchers.storage) {
         var i = 0
         while (true) {
             delay(10_000)
