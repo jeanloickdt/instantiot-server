@@ -109,6 +109,27 @@ Most settings are changed from the **admin panel** (Settings), or by editing
 > weekly incremental vacuum then returns the freed pages to the disk — it never
 > deletes data.
 
+### Relay limits (environment variables)
+
+These protect the **machine**, not an account: only whoever runs the machine
+knows what it holds, so they are read from the environment, never from the
+panel. On a systemd install, put them in a drop-in
+(`systemctl edit instantiot-server`, then `[Service]` / `Environment=...`).
+
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `RELAY_MAX_DEVICES` | `10000` | How many boards may be connected at once. Past it, a new board is refused (the socket is closed before anything is read) and counted; the others keep running. Without a ceiling the failure at saturation is an `OutOfMemoryError` that takes every board down. |
+| `RELAY_MAX_HANDSHAKES_PER_IP` | `50` | How many boards may be in the middle of their handshake **from the same public address** at once. Addresses on the LAN, link-local and loopback are exempt, so a home server never sees this; it only matters when the relay is exposed to the Internet through a port forward, where one address must not be able to fill the whole gate. |
+| `TRUST_PROXY` | _(unset)_ | Set to `1` **only** when the relay sits behind a reverse proxy (Caddy, nginx, Traefik). The login rate limiter then reads the client address from the last `X-Forwarded-For` hop instead of the proxy's address, so it keeps one bucket per client rather than one for everyone. Never set it without a proxy: anyone could then choose their own address. |
+
+Two more are fixed in the code and only listed so you know they exist: the
+per-board frame fuse (50 frames/s per board, with a burst of ten seconds of
+that rate so a board the relay reads late loses nothing) and the per-session
+app fuse (30 messages/s over the WebSocket, refused and counted, never
+disconnected). The service file also raises `LimitNOFILE` to 65536: one file
+descriptor per board, and the systemd default of 1024 would stop the relay
+near a thousand boards.
+
 ---
 
 ## 6. Backup & restore
