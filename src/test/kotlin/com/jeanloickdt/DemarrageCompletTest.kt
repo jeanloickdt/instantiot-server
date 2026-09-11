@@ -171,4 +171,29 @@ class DemarrageCompletTest {
         assertEquals(HttpStatusCode.OK, liste.status)
         assertEquals("[]", liste.bodyAsText(), "aucune regle sur un serveur neuf")
     }
+
+    /**
+     * L'app envoie ce que le NUAGE comprend, et le jumeau doit le prendre.
+     *
+     * Le 11 septembre, creer un projet depuis l'app repondait 400 « Malformed
+     * request » : l'app envoyait `icon` et `color` (l'apparence, que le nuage
+     * pose des la creation), et le JSON de ce serveur refusait toute cle
+     * inconnue. Une app plus recente que son serveur ne doit jamais etre
+     * refusee pour un champ qu'il ne connait pas encore ; et l'apparence,
+     * elle, est desormais connue et relue.
+     */
+    @Test
+    fun `un projet se cree avec ce que l'app envoie, meme un champ de demain`() = testApplication {
+        monterLeVraiModule(baseJetable("demarrage-projet").also { bases += it })
+        val jeton = jetonDeLAdmin()
+
+        val cree = client.post("/api/projects") {
+            header(HttpHeaders.Authorization, "Bearer $jeton")
+            contentType(ContentType.Application.Json)
+            setBody("""{"name":"Serre","icon":"leaf","color":"green","champDeDemain":true}""")
+        }
+        assertEquals(HttpStatusCode.Created, cree.status, "recu : ${cree.bodyAsText()}")
+        val corps = cree.bodyAsText()
+        assertTrue("\"icon\":\"leaf\"" in corps && "\"color\":\"green\"" in corps, "l'apparence est posee et relue : $corps")
+    }
 }

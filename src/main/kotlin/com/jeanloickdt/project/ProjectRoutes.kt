@@ -20,6 +20,8 @@
 // project/ProjectRoutes.kt
 package com.jeanloickdt.project
 
+import com.jeanloickdt.project.domain.UpdateProjectAppearanceRequest
+import com.jeanloickdt.common.Appearance
 import com.jeanloickdt.common.ApiError
 
 import com.jeanloickdt.device.domain.DeviceRepository
@@ -61,7 +63,9 @@ private fun ProjectRow.toResponse() = ProjectResponse(
     layoutJson = layoutJson,
     version    = version,
     createdAt  = createdAt,
-    updatedAt  = updatedAt
+    updatedAt  = updatedAt,
+    icon       = icon,
+    color      = color
 )
 
 private fun ProjectSummary.toResponse() = ProjectSummaryResponse(
@@ -69,7 +73,9 @@ private fun ProjectSummary.toResponse() = ProjectSummaryResponse(
     name      = name,
     version   = version,
     createdAt = createdAt,
-    updatedAt = updatedAt
+    updatedAt = updatedAt,
+    icon      = icon,
+    color     = color
 )
 
 /**
@@ -132,7 +138,12 @@ fun Route.projectRoutes(
                     ApiError("Name must be 2-64 characters")
                 )
             }
-            val project = projectRepository.create(ownerId, name)
+            if (!Appearance.isKey(body.icon) || !Appearance.isKey(body.color)) {
+                return@post call.respond(HttpStatusCode.BadRequest, ApiError(Appearance.BAD_REQUEST))
+            }
+            val project = projectRepository.create(
+                ownerId, name, Appearance.key(body.icon), Appearance.key(body.color)
+            )
 
             call.respond(HttpStatusCode.Created, project.toResponse())
         }
@@ -178,6 +189,24 @@ fun Route.projectRoutes(
             val updated = projectRepository.updateName(ownerId, projectId, name)
                 ?: return@patch call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
 
+            call.respond(HttpStatusCode.OK, updated.toResponse())
+        }
+
+        // ============================================================
+        // PATCH /api/projects/{id}/appearance — l'icone et la couleur
+        // ============================================================
+        patch("/api/projects/{id}/appearance") {
+            val ownerId = call.principal<JWTPrincipal>()?.subject
+                ?: return@patch call.respond(HttpStatusCode.Unauthorized)
+            val projectId = call.parameters["id"]
+                ?: return@patch call.respond(HttpStatusCode.BadRequest, ApiError("Missing id"))
+            val body = call.receive<UpdateProjectAppearanceRequest>()
+            if (!Appearance.isKey(body.icon) || !Appearance.isKey(body.color)) {
+                return@patch call.respond(HttpStatusCode.BadRequest, ApiError(Appearance.BAD_REQUEST))
+            }
+            val updated = projectRepository.updateAppearance(
+                ownerId, projectId, Appearance.key(body.icon), Appearance.key(body.color)
+            ) ?: return@patch call.respond(HttpStatusCode.NotFound, ApiError("Project not found"))
             call.respond(HttpStatusCode.OK, updated.toResponse())
         }
 

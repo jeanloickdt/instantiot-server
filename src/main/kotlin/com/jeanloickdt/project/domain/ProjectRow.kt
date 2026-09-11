@@ -27,7 +27,9 @@ data class ProjectRow(
     val layoutJson: String, // full ProjectLayout — opaque blob
     val version: Int,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val icon: String? = null,
+    val color: String? = null
 )
 /**
  * Un projet SANS son layout — ce qu'une liste a besoin de savoir.
@@ -46,5 +48,7 @@ data class ProjectSummary(
     val name: String,
     val version: Int,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val icon: String? = null,
+    val color: String? = null
 )

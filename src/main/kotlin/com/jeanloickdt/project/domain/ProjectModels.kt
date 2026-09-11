@@ -29,7 +29,23 @@ import kotlinx.serialization.Serializable
 // Create a new project
 @Serializable
 data class CreateProjectRequest(
-    val name: String
+    val name: String,
+    /** L'apparence, si on la connait deja : l'import la porte dans son fichier. */
+    val icon: String? = null,
+    val color: String? = null
+)
+
+/**
+ * L'apparence de la carte, ecrite d'un bloc.
+ *
+ * Les deux champs ENSEMBLE, et une absence vaut un retrait : c'est une
+ * ecriture complete, pas une fusion. « Je ne veux plus d'icone » se dit en
+ * envoyant `null`, et « ne touche a rien » en n'appelant pas.
+ */
+@Serializable
+data class UpdateProjectAppearanceRequest(
+    val icon: String? = null,
+    val color: String? = null
 )
 
 // Rename a project
@@ -90,7 +106,9 @@ data class ProjectSummaryResponse(
     val name: String,
     val version: Int,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val icon: String? = null,
+    val color: String? = null
 )
 
 // Full project response
@@ -105,5 +123,7 @@ data class ProjectResponse(
      */
     val version: Int,
     val createdAt: Long,
-    val updatedAt: Long
+    val updatedAt: Long,
+    val icon: String? = null,
+    val color: String? = null
 )
