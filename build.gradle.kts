@@ -75,7 +75,7 @@ dependencies {
 
     implementation("org.jetbrains.exposed:exposed-core:0.61.0")
     implementation("org.jetbrains.exposed:exposed-jdbc:0.61.0")
-    implementation("org.xerial:sqlite-jdbc:3.47.1.0")
+    implementation("org.xerial:sqlite-jdbc:3.53.4.0")
 
     // mDNS / Bonjour — annonce le service "_instantiot._tcp" sur le LAN
     // pour que l'app le découvre automatiquement (cf. MdnsPublisher).
