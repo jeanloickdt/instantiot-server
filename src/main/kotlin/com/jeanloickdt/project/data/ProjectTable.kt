@@ -27,6 +27,9 @@ object ProjectTable : Table("projects") {
     val ownerId    = text("owner_id")
     val name       = text("name")
     val layoutJson = text("layout_json").default("{}") // full ProjectLayout — opaque blob
+    /** L'apparence de la carte du projet, choisie dans l'app. Absente = par defaut. */
+    val icon       = text("icon").nullable()
+    val color      = text("color").nullable()
     /**
      * Bumped on every layout write. It is the concurrency token: two apps
      * editing the same dashboard both hold a version, and the second to save

@@ -47,7 +47,7 @@ class ExposedProjectRepository : ProjectRepository {
     // ============================================================
     // Créer — layout vide, l'app l'initialise
     // ============================================================
-    override fun create(ownerId: String, name: String): ProjectRow {
+    override fun create(ownerId: String, name: String, icon: String?, color: String?): ProjectRow {
         val id  = UUID.randomUUID().toString()
         val now = System.currentTimeMillis()
         return transaction {
@@ -56,6 +56,8 @@ class ExposedProjectRepository : ProjectRepository {
                 it[ProjectTable.ownerId]    = ownerId
                 it[ProjectTable.name]       = name
                 it[ProjectTable.layoutJson] = "{}"
+                it[ProjectTable.icon]       = icon
+                it[ProjectTable.color]      = color
                 it[ProjectTable.createdAt]  = now
                 it[ProjectTable.updatedAt]  = now
             }
@@ -68,6 +70,16 @@ class ExposedProjectRepository : ProjectRepository {
     // ============================================================
     // Lire — toujours cadré par le compte
     // ============================================================
+    override fun updateAppearance(ownerId: String, id: String, icon: String?, color: String?): ProjectRow? = transaction {
+        val touched = ProjectTable.update({ mine(ownerId, id) }) {
+            it[ProjectTable.icon]      = icon
+            it[ProjectTable.color]     = color
+            it[ProjectTable.updatedAt] = System.currentTimeMillis()
+        }
+        if (touched == 0) null
+        else ProjectTable.selectAll().where { mine(ownerId, id) }.single().toProjectRow()
+    }
+
     override fun findById(ownerId: String, id: String): ProjectRow? = transaction {
         ProjectTable.selectAll().where { mine(ownerId, id) }.singleOrNull()?.toProjectRow()
     }
@@ -89,7 +101,8 @@ class ExposedProjectRepository : ProjectRepository {
         ProjectTable
             .select(
                 ProjectTable.id, ProjectTable.name, ProjectTable.version,
-                ProjectTable.createdAt, ProjectTable.updatedAt
+                ProjectTable.createdAt, ProjectTable.updatedAt,
+                ProjectTable.icon, ProjectTable.color
             )
             .where { ProjectTable.ownerId eq ownerId }
             .map {
@@ -99,6 +112,8 @@ class ExposedProjectRepository : ProjectRepository {
                     version   = it[ProjectTable.version],
                     createdAt = it[ProjectTable.createdAt],
                     updatedAt = it[ProjectTable.updatedAt],
+                    icon      = it[ProjectTable.icon],
+                    color     = it[ProjectTable.color],
                 )
             }
     }
@@ -189,6 +204,8 @@ class ExposedProjectRepository : ProjectRepository {
         layoutJson = this[ProjectTable.layoutJson],
         version    = this[ProjectTable.version],
         createdAt  = this[ProjectTable.createdAt],
-        updatedAt  = this[ProjectTable.updatedAt]
+        updatedAt  = this[ProjectTable.updatedAt],
+        icon       = this[ProjectTable.icon],
+        color      = this[ProjectTable.color]
     )
 }

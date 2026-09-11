@@ -19,6 +19,7 @@
 
 package com.jeanloickdt
 
+import kotlinx.serialization.json.Json
 import io.ktor.server.plugins.origin
 import com.jeanloickdt.common.installBrowserHeaders
 import com.jeanloickdt.common.installErrorPages
@@ -225,7 +226,15 @@ fun Application.module(dbFile: File = com.jeanloickdt.common.ServerConfig.dbFile
     // ============================================================
     // Global plugins
     // ============================================================
-    install(ContentNegotiation) { json() }
+    // Le JSON de Ktor, plus la tolerance aux cles inconnues. Une app plus
+    // recente que ce serveur envoie des champs qu'il ne connait pas encore
+    // (l'apparence d'un projet, hier), et elle etait refusee (400) pour ca.
+    // On garde le reste des reglages de Ktor (les valeurs par defaut sont
+    // ecrites) : un champ absent et un champ a sa valeur par defaut ne se
+    // lisent pas pareil de l'autre cote.
+    install(ContentNegotiation) {
+        json(Json(io.ktor.serialization.kotlinx.json.DefaultJson) { ignoreUnknownKeys = true })
+    }
     // 400 pour une faute du client, sans le corps dans le journal ; 500 avec
     // la trace pour une vraie panne ; un plafond sur tout corps declare ; et
     // les en-tetes que le navigateur attend, puisqu'aucun Caddy ne les pose

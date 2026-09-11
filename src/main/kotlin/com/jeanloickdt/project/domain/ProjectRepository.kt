@@ -42,7 +42,10 @@ package com.jeanloickdt.project.domain
 interface ProjectRepository {
 
     /** @return la ligne créée — l'appelant n'a pas à la relire. */
-    fun create(ownerId: String, name: String): ProjectRow
+    fun create(ownerId: String, name: String, icon: String? = null, color: String? = null): ProjectRow
+
+    /** L'apparence, ecrite d'un bloc ; `null` si le projet n'est pas a ce compte. */
+    fun updateAppearance(ownerId: String, id: String, icon: String?, color: String?): ProjectRow?
 
     fun findById(ownerId: String, id: String): ProjectRow?
 
