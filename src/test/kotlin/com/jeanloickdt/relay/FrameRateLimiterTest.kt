@@ -46,19 +46,51 @@ class FrameRateLimiterTest {
     }
 
     @Test
-    fun `the burst is twice the rate, then the gate closes`() {
+    fun `the burst is ten seconds of the rate by default, then the gate closes`() {
         val fuse = FrameRateLimiter(ratePerSecond = 50)
-        // A board flushing a backlog in one instant: 100 pass, the 101st does not.
+        // A board flushing a backlog in one instant: 500 pass, the 501st does not.
         var accepted = 0
-        repeat(150) { if (fuse.tryAcquire(T0)) accepted++ }
+        repeat(550) { if (fuse.tryAcquire(T0)) accepted++ }
 
-        assertEquals(100, accepted)
+        assertEquals(500, accepted)
         assertEquals(50, fuse.dropped)
     }
 
     @Test
+    fun `a board in its right that the relay reads late loses nothing`() {
+        // 10 frames/s allowed, a board at 4 frames/s — the relay stalls for
+        // six seconds (a long flush, a saturated box), then reads the 24
+        // buffered frames in the same millisecond. With the old burst of 20,
+        // four were dropped and the sketch was blamed.
+        val fuse = FrameRateLimiter(ratePerSecond = 10)
+        repeat(4) { fuse.tryAcquire(T0) }
+        var accepted = 0
+        repeat(24) { if (fuse.tryAcquire(T0 + 6_000)) accepted++ }
+        assertEquals(24, accepted, "six seconds of read lag must cost a well-behaved board nothing")
+        assertEquals(0, fuse.dropped)
+    }
+
+    @Test
+    fun `a runaway sketch still gets exactly the rate once the burst is spent`() {
+        val fuse = FrameRateLimiter(ratePerSecond = 10)
+        repeat(100) { assertTrue(fuse.tryAcquire(T0)) }      // the whole burst
+        assertFalse(fuse.tryAcquire(T0))
+        var accepted = 0
+        repeat(1_000) { if (fuse.tryAcquire(T0 + 1_000)) accepted++ }
+        assertEquals(10, accepted, "one second later: the rate, not the burst again")
+    }
+
+    @Test
+    fun `the burst can be narrowed explicitly`() {
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
+        var accepted = 0
+        repeat(150) { if (fuse.tryAcquire(T0)) accepted++ }
+        assertEquals(100, accepted)
+    }
+
+    @Test
     fun `tokens refill at the configured rate`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         repeat(100) { fuse.tryAcquire(T0) }          // bucket emptied
         assertFalse(fuse.tryAcquire(T0))
 
@@ -70,17 +102,17 @@ class FrameRateLimiterTest {
 
     @Test
     fun `the bucket never grows past the burst`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         // An hour of silence must not bank an hour of credit.
         fuse.tryAcquire(T0)
         var accepted = 0
         repeat(10_000) { if (fuse.tryAcquire(T0 + 3600_000L)) accepted++ }
-        assertTrue(accepted <= 100, "silence banked $accepted frames of credit")
+        assertTrue(accepted <= 500, "silence banked $accepted frames of credit")
     }
 
     @Test
     fun `a clock going backwards does not mint tokens`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         repeat(100) { fuse.tryAcquire(T0) }
         assertFalse(fuse.tryAcquire(T0 - 60_000L), "a backwards clock must not refill")
     }
@@ -89,7 +121,7 @@ class FrameRateLimiterTest {
 
     @Test
     fun `thirty seconds of uninterrupted refusal disconnects`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         // A loop() without delay(): far past the refill rate, continuously.
         var t = T0
         while (t < T0 + 31_000L) {
@@ -121,7 +153,7 @@ class FrameRateLimiterTest {
         // near-free dropped frames into a TLS handshake generator every 30 s,
         // the most expensive CPU item the server has. It stays connected and
         // simply never exceeds 50/s of accepted frames.
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         var t = T0
         while (t < T0 + 120_000L) {          // two full minutes of mild overflow
             fuse.tryAcquire(t)
@@ -133,7 +165,7 @@ class FrameRateLimiterTest {
 
     @Test
     fun `severity is measured on the streak average, not the total`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         // 500/s for 31 s: drops ≈ 450/s, way past the (5-1)x50 = 200/s bar.
         var t = T0
         while (t < T0 + 31_000L) {
@@ -157,14 +189,14 @@ class FrameRateLimiterTest {
 
     @Test
     fun `a healthy board never disconnects, whatever the uptime`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         repeat(4_000) { i -> fuse.tryAcquire(T0 + i * 25L) }
         assertFalse(fuse.shouldDisconnect(T0 + 100_000L))
     }
 
     @Test
     fun `the drop counter is the observability hook`() {
-        val fuse = FrameRateLimiter(ratePerSecond = 50)
+        val fuse = FrameRateLimiter(ratePerSecond = 50, burst = 100)
         repeat(250) { fuse.tryAcquire(T0) }
         assertEquals(150, fuse.dropped)
     }

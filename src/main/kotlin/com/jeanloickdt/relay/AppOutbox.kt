@@ -97,9 +97,29 @@ class AppOutbox(
         consume(telemetry) { session.send(Frame.Binary(true, it)) }
     }
 
+    /**
+     * La case par carte pour les evenements de PRESENCE, et le reveil qui va
+     * avec.
+     *
+     * Une presence est un ETAT, pas un message : la derniere annonce d'une
+     * carte vaut toutes les precedentes. Elles ne passent donc pas par la
+     * file de controle : chacune entre dans la case de sa carte, la derniere
+     * gagne, et le consommateur les sert des que la file est vide. Mille
+     * cartes qui tombent ensemble coutent au plus mille cases, jamais une
+     * session : avec la file seule (64 places, puis eviction), un projet de
+     * plus de 64 cartes voyait son app deconnectee pendant l'incident meme
+     * qu'il voulait regarder. Les autres evenements de controle gardent
+     * leur file et leur eviction.
+     */
+    private val overflowPresence = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val overflowWake = Channel<Unit>(Channel.CONFLATED)
+
     private val controlConsumer: Job = session.launch(Dispatchers.IO) {
-        consume(control) { session.send(Frame.Text(it)) }
+        consumeControl()
     }
+
+    /** Ce qui attend dans les cases de presence, pour les epreuves et le panneau. */
+    val coalescedPresence: Int get() = overflowPresence.size
 
     /**
      * Queues a binary telemetry frame. Never suspends, never fails: under
@@ -115,7 +135,12 @@ class AppOutbox(
      * @return `false` when the session was evicted — the caller may then drop
      *         it from the registry.
      */
-    fun trySendControl(jsonText: String): Boolean {
+    fun trySendControl(jsonText: String, coalesceKey: String? = null): Boolean {
+        if (coalesceKey != null) {
+            overflowPresence[coalesceKey] = jsonText
+            overflowWake.trySend(Unit)
+            return true
+        }
         if (control.trySend(jsonText).isSuccess) return true
         evict()
         return false
@@ -125,6 +150,7 @@ class AppOutbox(
     fun close() {
         telemetry.close()
         control.close()
+        overflowWake.close()
         val dropped = droppedFrames.get()
         if (dropped > 0) {
             logger.info("App outbox closed — userId=$userId droppedFrames=$dropped")
@@ -134,6 +160,36 @@ class AppOutbox(
     // ────────────────────────────────────────────────────────────
     // Internals
     // ────────────────────────────────────────────────────────────
+
+    /**
+     * La file de controle d'abord, puis les cases de presence, puis on
+     * attend l'un ou l'autre. Un evenement discret (commande refusee, regle)
+     * ne fait donc jamais la queue derriere une tempete de presences, et une
+     * presence n'attend que la file.
+     */
+    private suspend fun consumeControl() {
+        try {
+            while (true) {
+                val next = control.tryReceive()
+                if (next.isSuccess) { session.send(Frame.Text(next.getOrThrow())); continue }
+                if (next.isClosed) break
+                val keys = overflowPresence.keys.toList()
+                if (keys.isNotEmpty()) {
+                    for (k in keys) overflowPresence.remove(k)?.let { session.send(Frame.Text(it)) }
+                    continue
+                }
+                kotlinx.coroutines.selects.select<Unit> {
+                    control.onReceiveCatching { r -> r.getOrNull()?.let { session.send(Frame.Text(it)) } }
+                    overflowWake.onReceiveCatching { }
+                }
+                if (control.isClosedForReceive && control.isEmpty) break
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.debug("App outbox control consumer ended — userId=$userId reason=${e.message}")
+        }
+    }
 
     private suspend fun <T> consume(channel: Channel<T>, send: suspend (T) -> Unit) {
         try {

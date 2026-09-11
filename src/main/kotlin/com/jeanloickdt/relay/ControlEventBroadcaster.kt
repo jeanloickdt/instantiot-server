@@ -117,11 +117,18 @@ class ControlEventBroadcaster(
         val jsonText = json.encodeToString(event)
         val appSessions = connections.getAppSessionsForProject(projectId)
 
+        // Une presence est un etat : la derniere annonce d'une carte vaut
+        // toutes les precedentes. Elle entre dans la case de sa carte au lieu
+        // de la file, et une deconnexion massive ne ferme plus la session.
+        val coalesceKey = when (event.type) {
+            ControlEventType.DEVICE_ONLINE, ControlEventType.DEVICE_OFFLINE -> "presence:${event.deviceId}"
+            else -> null
+        }
         appSessions.forEach { appSession ->
             // The outbox never throws and never suspends. A `false` means the
             // session could not even absorb a discrete control event — it has
             // been closed, so drop it from the registry.
-            if (!appSession.outbox.trySendControl(jsonText)) {
+            if (!appSession.outbox.trySendControl(jsonText, coalesceKey)) {
                 connections.unregisterApp(appSession.userId, appSession.session)
             }
         }
