@@ -126,11 +126,14 @@ class RuleCodecFixturesTest {
         val outcome = RuleCodec.decode(sb.toString())
         assertTrue(outcome is RuleCodec.Outcome.Invalid, "dix mille niveaux doivent etre refuses")
         // Le code exact importe peu — `depth-exceeded` si notre compteur gagne,
-        // `malformed` si l'analyseur JSON abandonne le premier. Ce qui compte
-        // est qu'AUCUNE des deux voies ne laisse passer, et qu'on rende un
-        // refus plutot qu'une pile explosee.
+        // `malformed` si l'analyseur JSON abandonne le premier, `too-large`
+        // depuis que la definition a une borne de taille (dix mille niveaux
+        // font bien plus de seize kilo-octets). Ce qui compte est qu'AUCUNE
+        // des voies ne laisse passer, et qu'on rende un refus plutot qu'une
+        // pile explosee.
         assertTrue(
-            outcome.code == RuleCodec.E_DEPTH || outcome.code == RuleCodec.E_MALFORMED,
+            (outcome as RuleCodec.Outcome.Invalid).code in
+                setOf(RuleCodec.E_DEPTH, RuleCodec.E_MALFORMED, RuleCodec.E_TOO_LARGE),
             "code inattendu : ${outcome.code}"
         )
     }

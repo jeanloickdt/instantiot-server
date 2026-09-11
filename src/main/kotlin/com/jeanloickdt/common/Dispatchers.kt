@@ -92,6 +92,21 @@ object ServerDispatchers {
         Executors.newFixedThreadPool(DB_POOL_SIZE, named("iot-db")).asCoroutineDispatcher()
 
     /**
+     * Le moteur de regles : un thread, le sien.
+     *
+     * Sur `Dispatchers.Default` il faisait du JDBC bloquant sur les threads
+     * que toutes les cartes se partagent ; sur le dispatcher de stockage il
+     * attendait derriere le flush et les chauffes d'une transition, son
+     * tampon DISCRETE debordait (« the engine was stuck ») et une regle
+     * ratait un front a chaque redemarrage. Un seul thread : le moteur est
+     * sequentiel par conception, l'ordre des evenements est sa semantique.
+     * Ses ecritures font la file sur le pool comme les autres ; son travail
+     * en RAM n'attend plus la requete de quelqu'un d'autre.
+     */
+    val engine: CoroutineDispatcher =
+        Executors.newSingleThreadExecutor(named("iot-engine")).asCoroutineDispatcher()
+
+    /**
      * The JDBC pool width, and the write dispatcher's with it.
      *
      * Deliberately narrow. PostgreSQL does not reward wide pools — each
@@ -102,5 +117,5 @@ object ServerDispatchers {
 
     /** For the boot log — the one place someone will look to check the shape. */
     fun describe(): String =
-        "dispatchers: network=$cores threads · storage=$DB_POOL_SIZE threads (= JDBC pool)"
+        "dispatchers: network=$cores threads · storage=$DB_POOL_SIZE threads (= JDBC pool) · engine=1 thread"
 }

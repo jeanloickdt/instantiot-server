@@ -347,11 +347,7 @@ class AutomationEngine(
             // « valeur absente » ne disent pas la meme chose a quelqu'un qui
             // cherche pourquoi sa serre s'est tue.
             if (truth == Truth.FALSE) rule.state.conditionFalse++ else rule.state.conditionUnknown++
-            runs.record(
-                rule.ownerId, rule.id, nowMs, RunOutcome.SKIPPED,
-                if (truth == Truth.FALSE) "Condition was false" else "No value for a referenced signal"
-            )
-            cache.save(rule.id, rule.state, nowMs)
+            noteSkip(rule, nowMs, if (truth == Truth.FALSE) "Condition was false" else "No value for a referenced signal")
             return
         }
 
@@ -723,7 +719,28 @@ class AutomationEngine(
         return a is TypedValue.Text && b is TypedValue.Text && a.value == b.value
     }
 
+    /**
+     * Un passage sans tir n'est trace et persiste qu'une fois par periode et
+     * par regle. Chaque evaluation a FAUX ecrivait trois requetes (la trace
+     * et l'etat) : une regle « a chaque trame » dont la condition est fausse,
+     * c'est dix trames par seconde et quarante requetes par seconde, pour
+     * une ligne qui repete « la condition etait fausse ». Un tir, lui,
+     * persiste toujours tout de suite.
+     */
+    private val skipNotedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun noteSkip(rule: LoadedRule, nowMs: Long, reason: String) {
+        val last = skipNotedAt[rule.id] ?: 0L
+        if (nowMs - last < SKIP_NOTE_PERIOD_MS) return
+        skipNotedAt[rule.id] = nowMs
+        runs.record(rule.ownerId, rule.id, nowMs, RunOutcome.SKIPPED, reason)
+        cache.save(rule.id, rule.state, nowMs)
+    }
+
     companion object {
+        /** Un passage sans tir n'est trace qu'une fois par periode, par regle. */
+        const val SKIP_NOTE_PERIOD_MS = 5_000L
+
         /** Le seul gabarit du systeme — voir `render`. */
         const val TEMPLATE_VALUE = "{{value}}"
 

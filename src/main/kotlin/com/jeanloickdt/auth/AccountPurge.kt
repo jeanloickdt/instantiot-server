@@ -22,7 +22,9 @@ package com.jeanloickdt.auth
 import com.jeanloickdt.auth.domain.UserRepository
 import com.jeanloickdt.automation.data.AutomationRuleTable
 import com.jeanloickdt.automation.data.AutomationStateTable
+import com.jeanloickdt.automation.data.AutomationRunTable
 import com.jeanloickdt.automation.data.MessageUsageTable
+import com.jeanloickdt.automation.data.RuleContinuationTable
 import com.jeanloickdt.automation.data.PendingActionTable
 import com.jeanloickdt.automation.data.PushTokenTable
 import com.jeanloickdt.automation.data.ScheduledJobTable
@@ -158,6 +160,11 @@ class AccountPurge(
             PendingActionTable.deleteWhere { PendingActionTable.ownerId eq ownerId }
             PushTokenTable.deleteWhere { PushTokenTable.ownerId eq ownerId }
             MessageUsageTable.deleteWhere { MessageUsageTable.ownerId eq ownerId }
+            // Les deux tables du moteur v2 restaient derriere : la trace des
+            // tirs et les regles en attente d'une reprise. Une purge qui
+            // laisse des lignes n'en est pas une.
+            AutomationRunTable.deleteWhere { AutomationRunTable.ownerId eq ownerId }
+            RuleContinuationTable.deleteWhere { RuleContinuationTable.ownerId eq ownerId }
 
             // The users row LAST — as long as it exists, the deletion is
             // retryable by its owner.

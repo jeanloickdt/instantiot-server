@@ -53,10 +53,14 @@ class AccountDeletionTest {
 
 
     /** Every table that carries an owner_id, and the users table itself. */
-    private val OWNED_TABLES = listOf(
+    // TOUTES les tables du moteur qui portent `owner_id` : la liste est
+    // derivee du schema, pas recopiee. Une table ajoutee demain avec une
+    // colonne `owner_id` entre ici toute seule, et la purge doit la connaitre.
+    private val OWNED_TABLES = com.jeanloickdt.automation.data.AutomationTables.ALL
+        .filter { t -> t.columns.any { it.name == "owner_id" } }
+        .map { it.tableName } + listOf(
         "projects", "devices", "signals",
-        "signal_raw", "signal_min", "signal_hour", "signal_day",
-        "automation_rules", "pending_actions", "push_tokens", "message_usage"
+        "signal_raw", "signal_min", "signal_hour", "signal_day"
     )
 
     @BeforeTest
@@ -127,6 +131,10 @@ class AccountDeletionTest {
                 VALUES ('k-$ownerId','$ownerId','PUSH','{}','PENDING',0,0,0,0)""")
         exec("INSERT INTO push_tokens (token, owner_id, platform, updated_at) VALUES ('t-$ownerId','$ownerId','android',1)")
         exec("INSERT INTO message_usage (owner_id, period, count) VALUES ('$ownerId','2026-08',42)")
+        exec("""INSERT INTO automation_runs (owner_id, rule_id, at, outcome, reason)
+                VALUES ('$ownerId','r-$ownerId',1,'FIRED','seuil franchi a 31.2')""")
+        exec("""INSERT INTO rule_continuations (owner_id, rule_id, due_at, remaining, offset_index, fact_time, created_at)
+                VALUES ('$ownerId','r-$ownerId',9,'[]',1,1,1)""")
     }
 
     private fun exec(sql: String) = transaction {

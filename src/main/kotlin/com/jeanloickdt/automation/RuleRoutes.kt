@@ -376,6 +376,17 @@ fun Route.ruleRoutes(
                     )
                 )
             }
+            // ── La chaine : deux regles qui se relaient, meme avertissement ──
+            val chain = com.jeanloickdt.automation.v2.RuleChains.chainsThrough(logic, ownerLogics(ownerId, excluding = null))
+            if (chain.isNotEmpty() && !body.acknowledgeLoop) {
+                return@post call.respond(
+                    HttpStatusCode.Conflict,
+                    ApiError(
+                        "chained: this rule and « ${chain.joinToString(" » → « ")} » write what each other " +
+                            "watches — together they can loop. Resend with acknowledgeLoop=true to proceed."
+                    )
+                )
+            }
 
             val isAutomation = logic.actions.any { it is Action.SetSignal }
             val allowed = policies.quotaGate(call, ownerId, isAutomation) {
@@ -561,6 +572,16 @@ fun Route.ruleRoutes(
                     ApiError(
                         "self-triggering: this rule writes ${loops.joinToString()} which it also " +
                             "watches — it can trigger itself. Resend with acknowledgeLoop=true to proceed."
+                    )
+                )
+            }
+            val chain = com.jeanloickdt.automation.v2.RuleChains.chainsThrough(logic, ownerLogics(ownerId, excluding = ruleId))
+            if (chain.isNotEmpty() && !body.acknowledgeLoop) {
+                return@put call.respond(
+                    HttpStatusCode.Conflict,
+                    ApiError(
+                        "chained: this rule and « ${chain.joinToString(" » → « ")} » write what each other " +
+                            "watches — together they can loop. Resend with acknowledgeLoop=true to proceed."
                     )
                 )
             }
@@ -1075,4 +1096,21 @@ private fun listRules(
                 )
             }
     }
+}
+
+/**
+ * Les autres regles du compte, decodees, avec leur nom, pour l'avertissement
+ * de chaine. Une definition qui ne se decode plus est ignoree : elle ne tire
+ * pas non plus.
+ */
+internal fun ownerLogics(ownerId: String, excluding: String?): List<Pair<String, RuleLogic>> = transaction {
+    AutomationRuleTable
+        .select(AutomationRuleTable.id, AutomationRuleTable.name, AutomationRuleTable.definition)
+        .where { AutomationRuleTable.ownerId eq ownerId }
+        .mapNotNull { row ->
+            if (row[AutomationRuleTable.id] == excluding) return@mapNotNull null
+            val logic = (RuleCodec.decode(row[AutomationRuleTable.definition]) as? RuleCodec.Outcome.Ok)?.logic
+                ?: return@mapNotNull null
+            row[AutomationRuleTable.name] to logic
+        }
 }
