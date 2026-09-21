@@ -132,6 +132,11 @@ Runtime data, all under `~/.instantiot/`:
 
 ## Device protocol — quick reference
 
+The full wire specification — frame layout, the value frame and its four
+tags, the restore bit, the heartbeat, the handshake, the direct links, worked
+examples with their CRC — is [`PROTOCOL-2.0.md`](PROTOCOL-2.0.md). Below, what
+you need to operate the relay.
+
 ### TCP handshake (port `tcp.port`, default 9001)
 
 ```
